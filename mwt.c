@@ -859,8 +859,21 @@ static void buffer_release(void *d, struct wl_buffer *wb)
 }
 static const struct wl_buffer_listener buffer_listener = { buffer_release };
 
+/* wl_shm pool sizes are int32 */
+static bool buffer_fits(int w, int h)
+{
+	return (size_t)w * h * 4 <= INT32_MAX;
+}
+
 static bool buffer_init(struct buffer *b, int w, int h)
 {
+	if (!buffer_fits(w, h)) {
+		static bool told;
+		if (!told)
+			fprintf(stderr, "mwt: a %dx%d window needs a buffer over 2 GiB, not drawing\n", w, h);
+		told = true;
+		return false;
+	}
 	if (b->wb) {
 		wl_buffer_destroy(b->wb);
 		munmap(b->data, b->size);
@@ -1763,17 +1776,17 @@ static int64_t now_ms(void)
 	return (int64_t)ts.tv_sec * 1000 + ts.tv_nsec / 1000000;
 }
 
-/* true once the child is reaped, waiting at most ms */
-static bool wait_child(int ms)
+/* reap the child if it ends within ms */
+static void wait_child(int ms)
 {
 	int64_t end = now_ms() + ms;
 	for (;;) {
 		pid_t r = waitpid(t.child, NULL, WNOHANG);
 		if (r == t.child || (r < 0 && errno == ECHILD))
-			return true;
+			return;
 		int64_t left = end - now_ms();
 		if (left <= 0)
-			return false;
+			return;
 		/* without a pidfd (kernel < 5.3) this polls every 20 ms */
 		struct pollfd p = { t.child_fd, POLLIN, 0 };
 		poll(&p, 1, t.child_fd >= 0 ? (int)left : (int)MIN(left, 20));
@@ -1782,9 +1795,8 @@ static bool wait_child(int ms)
 
 /*
  * Closing the master hangs up the session, SIGHUP goes to the shell as well.
- * A shell that ignores both gets two seconds and then SIGKILL; its jobs are
- * not touched. Should even that not reap it (stuck in the kernel), mwt goes
- * anyway and leaves it to init rather than hang on with no window.
+ * mwt waits two seconds for it and then goes, leaving it to init. It sends no
+ * SIGKILL: what ignores SIGHUP (nohup) or takes longer to clean up has a reason.
  */
 static void reap_child(void)
 {
@@ -1795,11 +1807,7 @@ static void reap_child(void)
 		t.pty = -1;
 	}
 	kill(t.child, SIGHUP);
-	if (wait_child(2000))
-		return;
-	fprintf(stderr, "mwt: shell ignores SIGHUP, sending SIGKILL\n");
-	kill(t.child, SIGKILL);
-	wait_child(1000);
+	wait_child(2000);
 }
 
 /* COLSxROWS within 1..VT_MAX_COLS and 1..VT_MAX_ROWS */
@@ -1865,6 +1873,13 @@ done:;
 	t.font_pt = t.font_pt0 = font_size_pt(t.font);
 	font_metrics(t.font, &t.cw, &t.ch, &t.ascent);
 	t.pad = padding;
+	int init_w, init_h;
+	snap_size(t.init_cols, t.init_rows, &init_w, &init_h);
+	if (!buffer_fits(init_w, init_h)) {
+		fprintf(stderr, "mwt: -g %dx%d with this font needs a buffer over 2 GiB\n",
+			t.init_cols, t.init_rows);
+		exit(2);
+	}
 
 	struct vt_callbacks cb = { .write = vt_reply, .title = vt_title };
 	t.vt = vt_new(t.init_cols, t.init_rows, histsize, &cb);

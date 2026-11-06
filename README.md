@@ -25,7 +25,7 @@ mwt [-f font] [-a app-id] [-T titel] [-g SPALTENxZEILEN] [-e] [befehl [args...]]
 
 * `-f "JetBrains Mono:size=12"` übernimmt ein fontconfig-Pattern.
 * `-a` setzt die app_id, Standard ist `mwt`. Darüber ordnet die mwmrc Farben und Position zu.
-* `-g` nimmt 1x1 bis 4096x2048. Größer wird das Raster auch im größten Fenster nicht.
+* `-g` nimmt 1x1 bis 4096x2048, solange der Fensterpuffer unter 2 GiB bleibt. Bei einer Schrift mit 9x18 Pixeln reicht das bis etwa 1800x1800, darüber lehnt mwt mit Code 2 ab. Größer als 4096x2048 wird das Raster auch im größten Fenster nicht.
 * Ohne Befehl startet mwt `$SHELL`.
 
 Alles Weitere, also Farben, Schrift, Padding und Scrollback, steht in `config.h` und wird beim Neubauen übernommen.

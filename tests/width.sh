@@ -137,5 +137,9 @@ fi
 stop_mwt
 tmux -L width kill-server 2>/dev/null
 
+if grep -qE 'AddressSanitizer|runtime error' "$DIR/log" 2>/dev/null; then
+	echo "CRASH sanitizer report from mwt: $(grep -m1 -E 'AddressSanitizer|runtime error' "$DIR/log")"
+	GAPS=$((GAPS + 1))
+fi
 echo "=== $GAPS gaps"
 [ "$GAPS" = 0 ]

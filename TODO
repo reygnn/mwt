@@ -10,4 +10,5 @@ TODO
   schalten per CSI ? 2027 h um. Dazu gehört: Cluster in einer Zelle
   speichern, als ein Glyph zeichnen, beim Kopieren erhalten, und die
   DECRQM-Antwort in vt.c (private_mode_state) auf 1/2 umstellen.
-  Abnahme: make width ohne GAP bei eingeschaltetem Modus.
+  Abnahme: tests/width.sh schaltet den Modus ein, und die tmux-Fälle laufen
+  ohne GAP. Die vim-Fälle (Flaggen, Jamo) zählen nicht: vim zählt selbst.

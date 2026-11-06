@@ -5,8 +5,9 @@ steht im README unter "Bewusst weggelassen".
 
 * mwt -e gibt immer 0 zurück, auch wenn der Befehl fehlschlägt oder nicht
   startet. Die Fehlermeldung landet im Fenster, das sich sofort schließt.
-* Beim Schließen des Fensters bekommt die Shell SIGHUP. Ignoriert sie das, folgt
-  nach zwei Sekunden SIGKILL. Ihre Hintergrundjobs bleiben unberührt.
+* Beim Schließen des Fensters bekommt die Shell SIGHUP. mwt wartet zwei Sekunden
+  auf sie und beendet sich dann. Ignoriert sie das Signal (nohup) oder räumt sie
+  länger auf, läuft sie ohne Terminal weiter, mwt tötet sie nicht.
 * Ist $SHELL nicht ausführbar oder kein absoluter Pfad (SHELL=bash), schließt
   sich das Fenster sofort. Nur ein leeres $SHELL fällt auf den passwd-Eintrag
   zurück.
@@ -24,7 +25,7 @@ steht im README unter "Bewusst weggelassen".
   Zweitlayout gilt die QWERTY-Position der Taste.
 * Zeichenbreiten: mwt zählt wie glibc und bash, also Codepoint für Codepoint
   mit wcwidth(). Zeichen ohne Breite (ZWJ, VS16, kombinierende Akzente)
-  werden verworfen, auch beim Kopieren. Programme, die Emoji-Folgen als ein
-  Zeichen zählen (gemessen mit tmux 3.4), sehen 👍🏽 als 2 Zellen, mwt als 4.
-  Dort läuft der Cursor weg. make width zeigt, wo. Auf die Abfrage nach
-  Mode 2027 (CSI ? 2027 $ p) antwortet mwt mit "unbekannt"; siehe TODO.
+  werden verworfen, auch beim Kopieren. tmux 3.6 zählt ❤️ (mit VS16) und
+  ZWJ-Folgen wie 👨‍👩‍👧 anders, vim 9.1 Flaggen und Hangul-Jamo. Dort läuft der
+  Cursor weg. make width zeigt, wo. Auf die Abfrage nach Mode 2027
+  (CSI ? 2027 $ p) antwortet mwt mit "unbekannt"; siehe TODO.

@@ -9,7 +9,8 @@ Behoben:
 * -g 2147483647x2147483647 stürzte ab: vt_new forderte 16 GB an, und weder
   alloc_screen noch vt_resize prüften ihre Allokationen. Das Raster ist jetzt
   auf 4096x2048 begrenzt (VT_MAX_COLS/ROWS in vt.h), -g lehnt mehr mit Code 2
-  ab. vt_new gibt bei Speichermangel NULL zurück, vt_resize false, und dann
+  ab, ebenso ein Raster, dessen Puffer mit der gewählten Schrift über 2 GiB käme
+  (vorher beendete der Compositor mwt, Exit-Code 0). vt_new gibt bei Speichermangel NULL zurück, vt_resize false, und dann
   bleibt das Terminal, wie es war. Test: test_vt.c lässt per --wrap jede
   Allokation in vt_new und vt_resize einmal fehlschlagen.
 
@@ -21,6 +22,6 @@ Behoben:
   liest (wl-paste puffert selbst und konnte den Fall nicht auslösen).
 * Am Ende von main wartete waitpid ohne Zeitlimit auf das Kind. Ignorierte es
   SIGHUP, blieb das Fenster stehen und mwt lief weiter. Jetzt geht das Fenster
-  zuerst, der Master wird geschlossen, die Shell bekommt SIGHUP, nach zwei
-  Sekunden SIGKILL, und nach einer weiteren Sekunde geht mwt in jedem Fall.
-  Jobs der Shell werden nicht angefasst. Test: tests/evil.sh close_ignores_hup.
+  zuerst, der Master wird geschlossen, die Shell bekommt SIGHUP, und nach zwei
+  Sekunden geht mwt in jedem Fall. Die Shell wird nicht getötet, nohup und
+  langes Aufräumen laufen zu Ende. Test: tests/evil.sh close_ignores_hup.

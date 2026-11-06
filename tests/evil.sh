@@ -638,6 +638,10 @@ args() {
 	LOG=$DIR/log.args
 	local rc f
 	: >"$LOG"
+	timeout 3 "$MWT" -g 4096x2048 -e sleep 30 >>"$LOG" 2>&1
+	rc=$?
+	if [ "$rc" = 2 ]; then ok "-g with a buffer over 2 GiB is refused"; else gap "-g 4096x2048 ends with code $rc instead of 2"; fi
+	: >"$LOG"
 	for f in 'monospace:size=100000' 'monospace:size=0.01' 'monospace:size=-3' 'Nichtda:size=11' 'a:b' 'monospace:bold:italic:size=1e9' "$(printf 'x%.0s' {1..5000})"; do
 		timeout 3 "$MWT" -f "$f" -e sleep 30 >>"$LOG" 2>&1
 		rc=$?
@@ -714,7 +718,7 @@ close_ignores_hup() {
 	swaymsg -t get_tree | grep -q '"app_id": "mwt"' && gap "the window stays up while mwt waits for the shell"
 	sleep 3.5
 	if kill -0 "$pid" 2>/dev/null; then gap "mwt runs on without a window: its shell ignores SIGHUP"; else ok "a shell that ignores SIGHUP does not keep mwt after the window is closed"; fi
-	pgrep -f "trap '' HUP" >/dev/null && info "the shell outlives mwt"
+	if pgrep -f "trap '' HUP" >/dev/null; then ok "the shell that ignores SIGHUP is not killed"; else gap "mwt killed a shell that ignores SIGHUP"; fi
 	pkill -9 -f "trap '' HUP" 2>/dev/null
 	return 0
 }

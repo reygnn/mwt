@@ -39,8 +39,11 @@ echo "=== evil under sway, sanitizers ==="
 tests/evil.sh || fail=1
 echo "=== evil under mwc, sanitizers ==="
 tests/evil-mwc.sh || fail=1
-# Known gaps in character widths: reported, they do not fail the run (yet).
-echo "=== width, sanitizers (report only) ==="
-tests/width.sh 2>&1 | grep -E '^(GAP|===)'
+# Known gaps in character widths are only reported. A crash or a width.sh that
+# could not run (its messages start with "width:") fails the run.
+echo "=== width, sanitizers (GAPs report only) ==="
+tests/width.sh >"$HOME/width.log" 2>&1
+grep -E '^(GAP|CRASH|width:|===)' "$HOME/width.log"
+grep -qE '^(CRASH|width:)' "$HOME/width.log" && fail=1
 [ "$fail" = 0 ] && echo "ALL PASS" || echo "SOMETHING FAILED"
 exit "$fail"
