@@ -14,6 +14,7 @@ make terminfo   # jede Fähigkeit aus mwt.info gegen den VT-Kern (braucht python
 make keys       # was mwt für Tasten und Maus sendet, gegen mwt.info (unter headless sway, wie make test)
 make pixel      # was mwt zeichnet, per Screenshot (unter headless sway, wie make test)
 make mouse      # was mwt in jedem Mausmodus meldet (unter headless sway, wie make test)
+make keyboard   # Dead Keys, Compose und Key-Repeat (unter headless sway, wie make test)
 make test       # Black-Box-Tests unter headless sway (braucht sway, wtype, wl-clipboard, grim und vinput aus mwc)
 make width      # wo mwt und bash, vim oder tmux Zeichenbreiten verschieden zählen (braucht zusätzlich vim und tmux)
 make evil       # alle Tests plus Härtefälle in einem Podman-Container, auch mit Sanitizern

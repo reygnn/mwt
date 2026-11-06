@@ -6,6 +6,10 @@ Offen, noch nicht bestätigt:
 
 Behoben:
 
+* Nach einem Dead Key ging ein Ctrl+C verloren, und Return, Pfeile, Tab oder ein
+  Fokuswechsel beendeten den Dead Key nicht: Das nächste a wurde auch viel später
+  noch zu á. Jetzt beendet jede Taste, die nicht durch Compose geht, das Begonnene,
+  und Ctrl und Alt gehen nie durch Compose. Test: tests/keyboard.py.
 * Das Mausrad lief 1,5-mal zu schnell und ungleichmäßig: Sechs Rastungen gaben
   neun Schritte. mwt zählte nur die Strecke, 15 pro Rastung gegen eine Schwelle von
   10, und übersah axis_discrete. Jetzt zählen die Rastungen, die Strecke nur noch

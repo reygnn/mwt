@@ -66,6 +66,9 @@ pixel: mwt
 mouse: mwt
 	tests/headless.sh tests/mouse.py
 
+keyboard: mwt
+	tests/headless.sh tests/keyboard.py
+
 # Runs mwt under a headless sway with wtype, wl-clipboard, grim and mwc's vinput.
 test: mwt
 	tests/run.sh
@@ -95,4 +98,4 @@ uninstall:
 clean:
 	rm -f mwt test_vt vtdump test_replay *.o $(PROTO_H) $(PROTO_C)
 
-.PHONY: all check replay terminfo keys pixel mouse test evil width install uninstall clean
+.PHONY: all check replay terminfo keys pixel mouse keyboard test evil width install uninstall clean

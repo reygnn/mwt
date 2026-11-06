@@ -119,6 +119,7 @@ static struct {
 	struct xkb_keymap *keymap;
 	struct xkb_state *xkb_state;
 	struct xkb_compose_state *compose;
+	bool compose_fed; /* the key being handled went through compose */
 	int repeat_fd, repeat_rate, repeat_delay;
 	xkb_keycode_t repeat_key;
 	uint32_t serial;
@@ -1417,7 +1418,7 @@ static xkb_keysym_t ctrl_latin(xkb_keycode_t code, xkb_keysym_t sym)
 	return sym;
 }
 
-static void handle_key(xkb_keycode_t code)
+static void key_action(xkb_keycode_t code)
 {
 	if (!t.xkb_state)
 		return;
@@ -1513,7 +1514,8 @@ static void handle_key(xkb_keycode_t code)
 
 	char buf[64];
 	int n = 0;
-	if (t.compose) {
+	if (t.compose && !ctrl && !alt) {
+		t.compose_fed = true;
 		xkb_compose_state_feed(t.compose, sym);
 		switch (xkb_compose_state_get_status(t.compose)) {
 		case XKB_COMPOSE_COMPOSING:
@@ -1537,6 +1539,16 @@ static void handle_key(xkb_keycode_t code)
 		return;
 	}
 	send_alt(alt, buf, MIN((size_t)n, sizeof buf - 1));
+}
+
+/* A key that does not go through compose ends what a dead key began, or that dead
+ * key would still change a letter typed much later, and would swallow a Ctrl+C. */
+static void handle_key(xkb_keycode_t code)
+{
+	t.compose_fed = false;
+	key_action(code);
+	if (t.compose && !t.compose_fed)
+		xkb_compose_state_reset(t.compose);
 }
 
 static void kb_keymap(void *d, struct wl_keyboard *kb, uint32_t fmt, int fd, uint32_t size)
@@ -1586,6 +1598,8 @@ static void kb_leave(void *d, struct wl_keyboard *kb, uint32_t serial, struct wl
 {
 	(void)d; (void)kb; (void)serial;
 	stop_repeat();
+	if (t.compose)
+		xkb_compose_state_reset(t.compose);
 	/* the menu going away reports a leave too, without a surface */
 	if ((s && s == t.menu.surface) || !t.focused)
 		return;

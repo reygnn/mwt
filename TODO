@@ -15,7 +15,6 @@ Tests, die noch fehlen, nach Nutzen sortiert:
 * Weitere feindliche Fälle: Eine Paste-Quelle, die nichts schreibt und nie schließt. Wenig
   Dateideskriptoren (ulimit -n) und Speicher (ulimit -v). Die Tastatur verschwindet
   zur Laufzeit.
-* Tastatur: Compose und Dead Keys, Key-Repeat, Ende des Repeats bei Fokusverlust.
 * Lecks und Dauerlast: tests/evil.sh und tests/container-run.sh schalten die
   Leckerkennung ab, flood_rss gibt nur Zahlen aus und schlägt nie fehl. Ein Lauf
   mit LSan und ein Dauertest mit RSS-Grenze.
