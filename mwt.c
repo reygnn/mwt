@@ -132,6 +132,7 @@ static struct {
 	int mcol, mrow;
 	unsigned buttons;
 	double axis_acc;
+	bool axis_discrete; /* this frame's wheel notches are already counted */
 	uint32_t click_time;
 	int click_count, click_col;
 	int64_t click_abs;
@@ -1829,7 +1830,7 @@ static void wheel(bool down)
 static void ptr_axis(void *d, struct wl_pointer *p, uint32_t time, uint32_t axis, wl_fixed_t v)
 {
 	(void)d; (void)p; (void)time;
-	if (axis != WL_POINTER_AXIS_VERTICAL_SCROLL || t.menu.popup)
+	if (axis != WL_POINTER_AXIS_VERTICAL_SCROLL || t.menu.popup || t.axis_discrete)
 		return;
 	t.axis_acc += wl_fixed_to_double(v);
 	while (t.axis_acc >= 10) {
@@ -1842,16 +1843,30 @@ static void ptr_axis(void *d, struct wl_pointer *p, uint32_t time, uint32_t axis
 	}
 }
 
-static void ptr_frame(void *d, struct wl_pointer *p) { (void)d; (void)p; }
+static void ptr_frame(void *d, struct wl_pointer *p)
+{
+	(void)d; (void)p;
+	t.axis_discrete = false;
+}
 static void ptr_axis_source(void *d, struct wl_pointer *p, uint32_t s) { (void)d; (void)p; (void)s; }
 static void ptr_axis_stop(void *d, struct wl_pointer *p, uint32_t tm, uint32_t a)
 {
 	(void)d; (void)p; (void)tm; (void)a;
 	t.axis_acc = 0;
 }
+/* A wheel counts its notches here, before the axis event with the same move in
+ * pixels: 15 a notch, which a threshold of 10 would turn into 1.5 steps. So only
+ * what has no notches, a touchpad, goes by the distance. */
 static void ptr_axis_discrete(void *d, struct wl_pointer *p, uint32_t a, int32_t n)
 {
-	(void)d; (void)p; (void)a; (void)n;
+	(void)d; (void)p;
+	if (a != WL_POINTER_AXIS_VERTICAL_SCROLL)
+		return;
+	t.axis_discrete = true;
+	if (t.menu.popup)
+		return;
+	for (int i = n < 0 ? -n : n; i > 0; i--)
+		wheel(n > 0);
 }
 
 /* bound at version 5, so the newer events are never sent */

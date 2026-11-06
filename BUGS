@@ -6,6 +6,10 @@ Offen, noch nicht bestätigt:
 
 Behoben:
 
+* Das Mausrad lief 1,5-mal zu schnell und ungleichmäßig: Sechs Rastungen gaben
+  neun Schritte. mwt zählte nur die Strecke, 15 pro Rastung gegen eine Schwelle von
+  10, und übersah axis_discrete. Jetzt zählen die Rastungen, die Strecke nur noch
+  bei einem Touchpad. Test: tests/mouse.py.
 * Ein Programm im Raw-Modus, das Anfragen schickt und die Antworten nie liest,
   ließ mwt um etwa 10 MB pro Sekunde wachsen, solange es lief: Die Antworten
   stauten sich ohne Grenze in t.out. Ab 1 MiB wartender Bytes verwirft mwt weitere
