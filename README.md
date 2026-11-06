@@ -39,8 +39,11 @@ Alles Weitere, also Farben, Schrift, Padding und Scrollback, steht in `config.h`
 | Doppel-/Dreifachklick | Wort/Zeile auswählen |
 | Rechtsklick | Auswahl erweitern |
 | Mittelklick, Shift+Insert | Primary Selection einfügen |
+| Ctrl+Shift+A | alles markieren: Scrollback und Bildschirm, im Alternate Screen nur den Bildschirm |
 | Ctrl+Shift+C / V | Zwischenablage kopieren / einfügen |
 | Shift+PgUp / PgDn, Mausrad | Scrollback |
+| Shift+Mausrad | Scrollback seitenweise |
+| Shift+Pos1 / Ende | an den Anfang / das Ende des Scrollbacks (nicht, wenn ein Programm Alternate Screen oder Maus nutzt) |
 | Ctrl+Shift+Plus / Minus / 0 | Schrift größer / kleiner / zurücksetzen |
 | Shift + Maus | Auswahl auch dann, wenn ein Programm die Maus übernommen hat |
 

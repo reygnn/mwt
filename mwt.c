@@ -505,6 +505,32 @@ static void copy_primary(void)
 	zwp_primary_selection_device_v1_set_selection(t.pdev, t.prim_src, t.serial);
 }
 
+/* Everything down to the last row with text: the scrollback and the screen, on
+ * the alternate screen only that. Goes to the primary selection like a drag. */
+static void select_all(void)
+{
+	struct vt *vt = t.vt;
+	int64_t first = vt->mode & MODE_ALTSCREEN ? (int64_t)vt->scrolled : vt_abs_first(vt);
+	for (int64_t a = (int64_t)vt->scrolled + vt->rows - 1; a >= first; a--) {
+		int n;
+		const struct cell *l = vt_abs_line(vt, a, &n);
+		for (int c = 0; l && c < n; c++) {
+			if (l[c].cp == ' ' || l[c].cp == 0)
+				continue;
+			t.sel.mode = SEL_LINE;
+			t.sel.aa = first;
+			t.sel.ea = a;
+			t.sel.ac = t.sel.ec = 0;
+			t.sel.dragging = false;
+			t.sel.active = true;
+			vt_mark_all(vt);
+			t.need_redraw = true;
+			copy_primary();
+			return;
+		}
+	}
+}
+
 static void paste_text(const char *s, size_t n)
 {
 	bool br = t.vt->mode & MODE_BRACKETED;
@@ -1165,6 +1191,7 @@ static void handle_key(xkb_keycode_t code)
 
 	if (ctrl && shift) {
 		switch (ctrl_latin(code, base_sym(code))) {
+		case XKB_KEY_a: select_all(); return;
 		case XKB_KEY_c: copy_clipboard(); return;
 		case XKB_KEY_v: paste(false); return;
 		case XKB_KEY_plus: case XKB_KEY_equal: zoom(1); return;
@@ -1185,6 +1212,20 @@ static void handle_key(xkb_keycode_t code)
 			vt_scroll_view(t.vt, -(t.vt->rows - 1));
 			t.need_redraw = true;
 			return;
+		}
+		/* Not MODE_MOUSE via mouse_mode(): Shift always turns that off. Programs
+		 * that take the screen or the mouse keep these keys. */
+		if (!(t.vt->mode & (MODE_ALTSCREEN | MODE_MOUSE))) {
+			switch (sym) {
+			case XKB_KEY_Home: case XKB_KEY_KP_Home:
+				vt_scroll_view(t.vt, t.vt->hist_count);
+				t.need_redraw = true;
+				return;
+			case XKB_KEY_End: case XKB_KEY_KP_End:
+				vt_scroll_view(t.vt, -t.vt->view);
+				t.need_redraw = true;
+				return;
+			}
 		}
 	}
 
@@ -1496,7 +1537,9 @@ static void wheel(bool down)
 		for (int i = 0; i < wheel_lines; i++)
 			cursor_key(down ? 'B' : 'A', 1);
 	} else {
-		vt_scroll_view(t.vt, down ? -wheel_lines : wheel_lines);
+		/* Shift: a page at a time */
+		int n = t.xkb_state && mod_active(XKB_MOD_NAME_SHIFT) ? t.vt->rows - 1 : wheel_lines;
+		vt_scroll_view(t.vt, down ? -n : n);
 		t.need_redraw = true;
 	}
 }

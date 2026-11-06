@@ -384,6 +384,65 @@ sleep 0.3
 T -k Return
 expect "Shift+Insert pastes the primary selection" '~\$ echo alpha beta gamma'
 
+# Shift+Home and Shift+End jump through the scrollback, Shift+wheel goes by pages.
+SH() { wtype -k Shift_L -M shift -k "$1" -m shift; sleep 0.3; }
+T 'clear' -k Return
+T 'seq -f "zeile-%g" 1 300' -k Return
+sleep 0.5
+SH Home
+expect "Shift+Home goes to the top of the scrollback" 'zeile-1'
+SH End
+expect "Shift+End goes back to the end" 'zeile-300'
+at 5 5
+wtype -k Shift_L -M shift -s 1000 -m shift &
+sleep 0.4
+v wheel -1
+wait $!
+expect "Shift+wheel goes up a page" 'zeile-255'
+expect_n "and not further" 'zeile-254' 0
+SH End
+# Programs that take the screen or the mouse keep the keys.
+for m in 1049 1000; do
+	T "printf '\\033[?${m}h'; cat -v" -k Return
+	SH Home
+	T -k Return
+	expect "with mode $m Shift+Home goes to the program" '\^\[\[1;2H'
+	C c
+	T "printf '\\033[?${m}l'" -k Return
+done
+
+# Ctrl+Shift+A selects the scrollback and the screen, without the empty rows below.
+T 'clear' -k Return
+T 'seq -f "zeile-%g" 1 300' -k Return
+sleep 0.5
+K a
+K c
+sleep 0.3
+timeout 3 wl-paste -n >"$DIR/all"
+n=$(grep -c '^zeile-' "$DIR/all")
+if [ "$n" = 300 ] && grep -qx 'zeile-1' "$DIR/all" && [ "$(tail -n 1 "$DIR/all")" = '~$' ]; then
+	echo "ok: Ctrl+Shift+A selects everything"
+else
+	fail "Ctrl+Shift+A: $n of 300 lines, the last is '$(tail -n 1 "$DIR/all")'"
+fi
+timeout 3 wl-paste -p -n | cmp -s - "$DIR/all" && echo "ok: and sets the primary selection" || fail "Ctrl+Shift+A: the primary selection differs"
+T "printf '\\033[?1049hnur-alt\\n'" -k Return
+sleep 0.3
+K a
+K c
+sleep 0.3
+timeout 3 wl-paste -n >"$DIR/all"
+if grep -qx 'nur-alt' "$DIR/all" && ! grep -q '^zeile-' "$DIR/all"; then echo "ok: on the alternate screen only the screen"; else fail "Ctrl+Shift+A on the alternate screen: $(wc -l <"$DIR/all") lines"; fi
+T "printf '\\033[?1049l'" -k Return
+T "seq -f '%078g' 1 6000" -k Return
+sleep 3
+K a
+K c
+sleep 0.5
+timeout 5 wl-paste -n >"$DIR/all"
+n=$(wc -l <"$DIR/all")
+if [ "$n" -ge 5000 ] && grep -q '0006000$' "$DIR/all"; then echo "ok: Ctrl+Shift+A with a full scrollback: $n lines"; else fail "Ctrl+Shift+A with a full scrollback: $n lines"; fi
+
 # Dragging below the window selects what shows, and one row of autoscroll.
 C l
 T 'seq 1 200' -k Return
