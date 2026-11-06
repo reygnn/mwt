@@ -1,0 +1,6 @@
+TODO
+
+* Rechte Maustaste: Popup-Menü zum Markieren, Kopieren und Einfügen.
+  Heute erweitert ein Rechtsklick die Auswahl. Das muss dem Menü weichen oder
+  einen neuen Platz bekommen. README und tests/run.sh ("right click extends")
+  gehen mit.

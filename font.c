@@ -157,6 +157,10 @@ struct font *font_open(const char *spec, double size_pt, int scale)
 		f->cw = (int)lround(r->glyph->advance.x / 64.0);
 	if (f->cw < 1)
 		f->cw = 1;
+	if (f->ch < 1 || f->ascent < 1) { /* FreeType refused the size */
+		fprintf(stderr, "mwt: font size %g is out of range\n", pt);
+		goto fail;
+	}
 
 	f->cache_cap = 1024;
 	f->cache = calloc(f->cache_cap, sizeof *f->cache);

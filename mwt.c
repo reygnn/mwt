@@ -19,8 +19,10 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <termios.h>
 #include <sys/ioctl.h>
 #include <sys/mman.h>
+#include <sys/syscall.h>
 #include <sys/timerfd.h>
 #include <sys/wait.h>
 #include <time.h>
@@ -97,6 +99,7 @@ static struct {
 	struct vt *vt;
 	int pty;
 	pid_t child;
+	int child_fd; /* pidfd: the shell can end while jobs keep the pty open */
 	char *out;
 	size_t out_len, out_cap;
 	bool was_alt;
@@ -140,7 +143,8 @@ static struct {
 	int paste_fd;
 	char *paste_buf;
 	size_t paste_len, paste_cap;
-} t = { .pty = -1, .repeat_fd = -1, .paste_fd = -1, .scale = 1 };
+	bool paste_latin1;
+} t = { .pty = -1, .repeat_fd = -1, .paste_fd = -1, .child_fd = -1, .scale = 1 };
 
 static void die(const char *msg)
 {
@@ -196,6 +200,32 @@ static void send_input(const char *s, size_t n)
 		t.need_redraw = true;
 	}
 	pty_write(s, n);
+}
+
+/*
+ * A key that raises a signal must not wait behind a paste the program does not
+ * read, here or in the kernel, whose line buffer takes no more once it is full.
+ * So the rest of the paste goes first. TCSAFLUSH on the master flushes the
+ * slave's input. A bracket the program has seen open gets closed.
+ */
+static void drop_paste_for_signal(unsigned char c)
+{
+	struct termios tm;
+	if (t.pty < 0 || !c || tcgetattr(t.pty, &tm) < 0 || !(tm.c_lflag & ISIG) ||
+	    (c != tm.c_cc[VINTR] && c != tm.c_cc[VQUIT] && c != tm.c_cc[VSUSP]))
+		return;
+	if (t.paste_fd >= 0) {
+		close(t.paste_fd);
+		t.paste_fd = -1;
+	}
+	if (!t.out_len)
+		return;
+	bool open_bracket = memmem(t.out, t.out_len, "\033[201~", 6) != NULL;
+	t.out_len = 0;
+	tcflush(t.pty, TCOFLUSH);
+	tcsetattr(t.pty, TCSAFLUSH, &tm);
+	if (open_bracket)
+		pty_write("\033[201~", 6);
 }
 
 static void vt_reply(void *ud, const char *s, size_t n)
@@ -312,8 +342,32 @@ static void sel_clear(void)
 
 /* ---- clipboard and primary selection ---------------------------------- */
 
-static void send_text(const char *text, int fd)
+/* UTF-8 as Latin-1, for STRING: what it cannot hold becomes "?" */
+static char *to_latin1(const char *s)
 {
+	char *out = malloc(strlen(s) + 1);
+	if (!out)
+		return NULL;
+	size_t o = 0;
+	for (const unsigned char *p = (const unsigned char *)s; *p;) {
+		uint32_t cp = *p;
+		int more = cp >= 0xf0 ? 3 : cp >= 0xe0 ? 2 : cp >= 0xc0 ? 1 : 0;
+		if (more)
+			cp &= 0x3f >> more;
+		p++;
+		for (; more && (*p & 0xc0) == 0x80; more--)
+			cp = cp << 6 | (*p++ & 0x3f);
+		out[o++] = cp < 0x80 || (cp >= 0xa0 && cp < 0x100) ? (char)cp : '?';
+	}
+	out[o] = 0;
+	return out;
+}
+
+static void send_text(const char *text, const char *mime, int fd)
+{
+	char *latin1 = text && !strcmp(mime, "STRING") ? to_latin1(text) : NULL;
+	if (latin1)
+		text = latin1;
 	size_t len = text ? strlen(text) : 0, off = 0;
 	while (off < len) {
 		ssize_t n = write(fd, text + off, len - off);
@@ -324,6 +378,7 @@ static void send_text(const char *text, int fd)
 		}
 		off += n;
 	}
+	free(latin1);
 	close(fd);
 }
 
@@ -338,8 +393,8 @@ static int mime_rank(const char *mime)
 static void ds_target(void *d, struct wl_data_source *s, const char *m) { (void)d; (void)s; (void)m; }
 static void ds_send(void *d, struct wl_data_source *s, const char *m, int fd)
 {
-	(void)d; (void)s; (void)m;
-	send_text(t.clip_text, fd);
+	(void)d; (void)s;
+	send_text(t.clip_text, m, fd);
 }
 static void ds_cancelled(void *d, struct wl_data_source *s)
 {
@@ -356,8 +411,8 @@ static const struct wl_data_source_listener ds_listener = {
 
 static void ps_send(void *d, struct zwp_primary_selection_source_v1 *s, const char *m, int fd)
 {
-	(void)d; (void)s; (void)m;
-	send_text(t.prim_text, fd);
+	(void)d; (void)s;
+	send_text(t.prim_text, m, fd);
 }
 static void ps_cancelled(void *d, struct zwp_primary_selection_source_v1 *s)
 {
@@ -549,7 +604,24 @@ static void paste(bool primary)
 		close(t.paste_fd);
 	t.paste_fd = fds[0];
 	t.paste_len = 0;
+	t.paste_latin1 = !strcmp(mimes[*rank], "STRING");
 	wl_display_flush(t.display);
+}
+
+/* Length of the valid UTF-8 sequence at s, or 0 */
+static int utf8_seq(const unsigned char *s, size_t n)
+{
+	int k = s[0] < 0x80 ? 1 : s[0] >= 0xc2 && s[0] < 0xe0 ? 2 :
+		s[0] >= 0xe0 && s[0] < 0xf0 ? 3 : s[0] >= 0xf0 && s[0] < 0xf5 ? 4 : 0;
+	if (!k || (size_t)k > n)
+		return 0;
+	for (int i = 1; i < k; i++)
+		if ((s[i] & 0xc0) != 0x80)
+			return 0;
+	if ((s[0] == 0xe0 && s[1] < 0xa0) || (s[0] == 0xed && s[1] >= 0xa0) ||
+	    (s[0] == 0xf0 && s[1] < 0x90) || (s[0] == 0xf4 && s[1] >= 0x90))
+		return 0;
+	return k;
 }
 
 static void read_paste(void)
@@ -570,7 +642,30 @@ static void read_paste(void)
 	}
 	close(t.paste_fd);
 	t.paste_fd = -1;
-	paste_text(t.paste_buf, t.paste_len);
+	/* STRING is Latin-1, and so is what is not UTF-8 whatever its label says:
+	 * sources offer one text under every name. C1 controls go. */
+	char *buf = NULL;
+	size_t len = 0, cap = 0;
+	for (size_t i = 0; i < t.paste_len;) {
+		const unsigned char *p = (const unsigned char *)t.paste_buf + i;
+		int k = t.paste_latin1 ? 0 : utf8_seq(p, t.paste_len - i);
+		if (k) {
+			uint32_t cp = *p;
+			if (k > 1) {
+				cp &= 0x3f >> (k - 1);
+				for (int j = 1; j < k; j++)
+					cp = cp << 6 | (p[j] & 0x3f);
+			}
+			put_utf8(&buf, &len, &cap, cp);
+			i += k;
+			continue;
+		}
+		if (*p < 0x80 || *p >= 0xa0)
+			put_utf8(&buf, &len, &cap, *p);
+		i++;
+	}
+	paste_text(buf ? buf : "", len);
+	free(buf);
 }
 
 /* ---- rendering -------------------------------------------------------- */
@@ -950,6 +1045,8 @@ static void send_alt(bool alt, const char *s, size_t n)
 	char buf[80];
 	if (n + 1 > sizeof buf)
 		return;
+	if (!alt && n == 1)
+		drop_paste_for_signal((unsigned char)s[0]);
 	size_t o = 0;
 	if (alt)
 		buf[o++] = '\033';
@@ -966,6 +1063,35 @@ static xkb_keysym_t base_sym(xkb_keycode_t code)
 	return XKB_KEY_NoSymbol;
 }
 
+/*
+ * With Ctrl, a letter that is not Latin (a Russian or Greek layout) still means
+ * its Latin letter, or Ctrl+C would not interrupt anything: the one in another
+ * layout of the keymap, else the one at that place on a QWERTY keyboard. Keys
+ * without a Latin place keep what they are, like the German umlauts.
+ */
+static xkb_keysym_t ctrl_latin(xkb_keycode_t code, xkb_keysym_t sym)
+{
+	if (xkb_keysym_to_utf32(sym) < 0x80) /* ASCII, or no text at all */
+		return sym;
+	xkb_layout_index_t layouts = xkb_keymap_num_layouts_for_key(t.keymap, code);
+	for (xkb_layout_index_t l = 0; l < layouts; l++) {
+		const xkb_keysym_t *syms;
+		if (xkb_keymap_key_get_syms_by_level(t.keymap, code, l, 0, &syms) == 1 &&
+		    syms[0] >= XKB_KEY_a && syms[0] <= XKB_KEY_z)
+			return syms[0];
+	}
+	static const struct { int first; const char *row; } rows[] = {
+		{ KEY_Q, "qwertyuiop" }, { KEY_A, "asdfghjkl" }, { KEY_Z, "zxcvbnm" },
+	};
+	int key = (int)code - 8;
+	for (size_t i = 0; i < LEN(rows); i++) {
+		int k = key - rows[i].first;
+		if (k >= 0 && k < (int)strlen(rows[i].row))
+			return (xkb_keysym_t)rows[i].row[k];
+	}
+	return sym;
+}
+
 static void handle_key(xkb_keycode_t code)
 {
 	if (!t.xkb_state)
@@ -977,7 +1103,7 @@ static void handle_key(xkb_keycode_t code)
 	int m = 1 + shift + 2 * alt + 4 * ctrl;
 
 	if (ctrl && shift) {
-		switch (base_sym(code)) {
+		switch (ctrl_latin(code, base_sym(code))) {
 		case XKB_KEY_c: copy_clipboard(); return;
 		case XKB_KEY_v: paste(false); return;
 		case XKB_KEY_plus: case XKB_KEY_equal: zoom(1); return;
@@ -1029,6 +1155,15 @@ static void handle_key(xkb_keycode_t code)
 	case XKB_KEY_ISO_Left_Tab: send_input("\033[Z", 3); return;
 	case XKB_KEY_Tab: send_alt(alt, shift ? "\033[Z" : "\t", shift ? 3 : 1); return;
 	case XKB_KEY_Escape: send_alt(alt, "\033", 1); return;
+	}
+
+	if (ctrl) {
+		xkb_keysym_t latin = ctrl_latin(code, sym);
+		if (latin != sym && latin >= XKB_KEY_a && latin <= XKB_KEY_z) {
+			char c = (char)(latin & 0x1f);
+			send_alt(alt, &c, 1);
+			return;
+		}
 	}
 
 	char buf[64];
@@ -1522,8 +1657,10 @@ static void spawn(char **argv)
 		setenv("COLORTERM", "truecolor", 1);
 		unsetenv("LINES");
 		unsetenv("COLUMNS");
-		signal(SIGPIPE, SIG_DFL);
-		signal(SIGCHLD, SIG_DFL);
+		/* what mwt ignores or was started ignoring is not for the shell:
+		 * `mwt &` from sh ignores SIGINT and SIGQUIT */
+		for (int sig = 1; sig < NSIG; sig++)
+			signal(sig, SIG_DFL);
 		if (argv && argv[0]) {
 			execvp(argv[0], argv);
 			perror(argv[0]);
@@ -1539,6 +1676,7 @@ static void spawn(char **argv)
 	}
 	fcntl(t.pty, F_SETFL, fcntl(t.pty, F_GETFL) | O_NONBLOCK);
 	fcntl(t.pty, F_SETFD, FD_CLOEXEC);
+	t.child_fd = (int)syscall(SYS_pidfd_open, t.child, 0);
 }
 
 static void read_pty(void)
@@ -1679,13 +1817,14 @@ done:;
 			wl_display_dispatch_pending(t.display);
 		bool wl_out = wl_display_flush(t.display) < 0 && errno == EAGAIN;
 
-		struct pollfd fds[4] = {
+		struct pollfd fds[5] = {
 			{ wlfd, POLLIN | (wl_out ? POLLOUT : 0), 0 },
 			{ t.pty, POLLIN | (t.out_len ? POLLOUT : 0), 0 },
 			{ t.repeat_fd, POLLIN, 0 },
 			{ t.paste_fd, POLLIN, 0 },
+			{ t.child_fd, POLLIN, 0 },
 		};
-		if (poll(fds, 4, -1) < 0) {
+		if (poll(fds, 5, -1) < 0) {
 			wl_display_cancel_read(t.display);
 			if (errno == EINTR)
 				continue;
@@ -1712,6 +1851,8 @@ done:;
 		}
 		if (t.paste_fd >= 0 && (fds[3].revents & (POLLIN | POLLHUP | POLLERR)))
 			read_paste();
+		if (fds[4].revents & POLLIN)
+			t.running = false; /* the pty may stay open, held by jobs */
 	}
 
 	if (t.child > 0) {

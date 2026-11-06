@@ -1,0 +1,22 @@
+CAVEATS
+
+Verhalten, das so gewollt ist oder das mwt nicht ändern kann. Was bewusst fehlt,
+steht im README unter "Bewusst weggelassen".
+
+* mwt -e gibt immer 0 zurück, auch wenn der Befehl fehlschlägt oder nicht
+  startet. Die Fehlermeldung landet im Fenster, das sich sofort schließt.
+* Ist $SHELL nicht ausführbar oder kein absoluter Pfad (SHELL=bash), schließt
+  sich das Fenster sofort. Nur ein leeres $SHELL fällt auf den passwd-Eintrag
+  zurück.
+* Ohne Reflow wird beim Verkleinern abgeschnitten, was nicht mehr passt.
+* Der Selektionstext reicht nur so weit, wie die Scrollback-Historie reicht
+  (5000 Zeilen, siehe config.h).
+* Ein unterbrochenes DCS oder OSC (ESC P oder ESC ] ohne Abschluss) verschluckt
+  die Ausgabe bis zum nächsten ESC, CAN oder SUB. bash beendet das meist mit der
+  Sequenz seines nächsten Prompts.
+* Programme können Terminal-Antworten auslösen (DA, DSR). Beendet sich das
+  Programm vorher, stehen die Antworten in der Eingabezeile der Shell.
+* Ein Programm, das die Ausgabe mit tcflow(TCOOFF) anhält, kann nur selbst wieder
+  starten. Das ist ein Stopp im Kernel, keine Taste hilft.
+* Mit Ctrl+Shift+Buchstabe auf nicht-lateinischen Layouts ohne lateinisches
+  Zweitlayout gilt die QWERTY-Position der Taste.

@@ -224,7 +224,7 @@ fuzz() {
 		T "python3 ~/fuzz.py $s 1500000; echo fuzz-$s-ende" -k Return
 		local i
 		for i in 1 2 3 4 5 6; do
-			swaymsg -q "[app_id=\"mwt\"] resize set $((200 + RANDOM % 700)) $((100 + RANDOM % 500))" 2>/dev/null
+			swaymsg -q "[app_id=\"mwt\"] resize set $((200 + RANDOM % 700)) $((100 + RANDOM % 500)), move position 20 20" 2>/dev/null
 			sel_screen; K c
 			sleep 0.4
 			alive || break 2
@@ -233,6 +233,8 @@ fuzz() {
 		alive || break
 	done
 	if alive; then
+		# the terminal's answers to queries in the noise wait in the input line
+		C u
 		T 'echo fuzz-alive' -k Return
 		if try 12 'fuzz-alive'; then ok "4 x 1.5 MB fuzz with resizes"; else gap "alive after fuzz, but output does not come back: $(tail -3 "$DIR/shown" | cut -c1-70 | tr '\n' '|')"; fi
 	else
@@ -708,7 +710,9 @@ tiny() {
 	sel_screen; K c
 	v move 40 40; v click left; v click left; v click left
 	C u
-	swaymsg -q '[app_id="mwt"] resize set 800 500'
+	C k
+	# sway keeps the middle of a window it resizes, here far past the left edge
+	swaymsg -q '[app_id="mwt"] resize set 800 500, move position 20 20'
 	sleep 0.4
 	T 'stty size' -k Return
 	if alive && try 6 '[0-9]* [0-9]*'; then ok "smallest window with wide characters and a 4000 byte line"; else gap "tiny window: alive=$(alive && echo y || echo n), tail: $(tail -3 "$DIR/shown" | cut -c1-70 | tr '\n' '|')"; fi

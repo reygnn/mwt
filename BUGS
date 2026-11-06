@@ -1,0 +1,11 @@
+BUGS
+
+Offen, noch nicht bestätigt:
+
+* send_text schreibt blockierend in die Pipe des Lesers. Liest ein Client eine
+  große Auswahl nicht ab, könnte mwt stehen bleiben. Nur aus dem Code gelesen:
+  tests/evil.sh (stalled_readers) ist grün, aber wl-paste puffert vermutlich
+  selbst und löst den Fall dann nicht aus.
+* Am Ende von main wartet waitpid ohne Zeitlimit auf das Kind. Ignoriert es
+  SIGHUP, könnte mwt nach dem Schließen des Fensters unsichtbar weiterlaufen.
+  Nur aus dem Code gelesen.
