@@ -8,18 +8,8 @@ TODO
   Abnahme: tests/width.sh schaltet den Modus ein, und die tmux-Fälle laufen
   ohne GAP. Die vim-Fälle (Flaggen, Jamo) zählen nicht: vim zählt selbst.
 
-Bugs:
-
-* Einfügen an einem Wide-Character zerreißt das Zeichen: ICH und der Insert-Modus
-  hinterlassen linke Hälften ohne rechte und umgekehrt, und beim Einfügen auf der
-  linken Hälfte geht das Zeichen verloren. fix_wide geht von Überschreiben aus,
-  der Bereich wird aber verschoben (vt.c, Fall '@' und put).
-
 Tests, die noch fehlen, nach Nutzen sortiert:
 
-* Fuzzer mit Invarianten in make check: Cursor und Scroll-Region im Raster, keine
-  halben Wide-Characters, gleiches Ergebnis bei beliebiger Stückelung der Eingabe.
-  Der Fuzz in tests/evil.sh merkt nur Abstürze und tote Ausgabe.
 * Pixeltests mit grim, der Screenshot in tests/run.sh prüft nur den Exit-Code:
   Farben, Reverse, Unterstreichung, Cursorformen, Auswahl; veraltete Pixel beim
   Teilneuzeichnen (inkrementell gegen vollständig gezeichnet); HiDPI mit

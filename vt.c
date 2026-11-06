@@ -107,6 +107,17 @@ static void fix_wide(struct vt *vt, struct cell *l, int x0, int x1)
 		l[x1 + 1] = blank(vt);
 }
 
+/* Before cells shift right from x: a glyph with x as its right half is split, so
+ * both halves go. One with x as its left half moves as a whole, nothing to do. */
+static void split_wide(struct vt *vt, struct cell *l, int x)
+{
+	if (!(l[x].attr & ATTR_WDUMMY))
+		return;
+	if (x > 0)
+		l[x - 1] = blank(vt);
+	l[x] = blank(vt);
+}
+
 static void clear_line(struct vt *vt, int y, int x0, int x1)
 {
 	x0 = CLAMP(x0, 0, vt->cols - 1);
@@ -507,12 +518,13 @@ static void put(struct vt *vt, uint32_t cp)
 
 	struct cell *l = vt->line[c->y];
 	if (vt->mode & MODE_INSERT) {
-		fix_wide(vt, l, c->x, c->x);
+		split_wide(vt, l, c->x);
 		memmove(&l[c->x + w], &l[c->x], (vt->cols - c->x - w) * sizeof *l);
 		if (l[vt->cols - 1].attr & ATTR_WIDE)
 			l[vt->cols - 1] = blank(vt);
+	} else {
+		fix_wide(vt, l, c->x, c->x + w - 1);
 	}
-	fix_wide(vt, l, c->x, c->x + w - 1);
 	uint16_t base = c->tmpl.attr & ~(ATTR_WIDE | ATTR_WDUMMY | ATTR_WRAP);
 	l[c->x] = c->tmpl;
 	l[c->x].cp = cp;
@@ -842,7 +854,7 @@ static void csi_dispatch(struct vt *vt, uint32_t f)
 	switch (f) {
 	case '@': /* ICH */
 		n = MIN(n, vt->cols - c->x);
-		fix_wide(vt, l, c->x, c->x);
+		split_wide(vt, l, c->x);
 		memmove(&l[c->x + n], &l[c->x], (vt->cols - c->x - n) * sizeof *l);
 		fill(l, c->x, c->x + n, blank(vt));
 		if (l[vt->cols - 1].attr & ATTR_WIDE)

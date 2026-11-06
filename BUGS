@@ -6,6 +6,16 @@ Offen, noch nicht bestätigt:
 
 Behoben:
 
+* Einfügen an einem Wide-Character zerriss das Zeichen: ICH und der Insert-Modus
+  ließen eine linke Hälfte ohne rechte oder eine rechte ohne linke zurück, und auf
+  der linken Hälfte ging das Zeichen sogar verloren. Das zeigte sich als halb
+  gezeichnetes Zeichen und als fehlende Spalte beim Kopieren. fix_wide geht von
+  Überschreiben aus, der Bereich wird aber verschoben. Jetzt rückt ein Zeichen als
+  Ganzes weiter, und nur auf der rechten Hälfte wird es zerlegt. Tests: test_vt.c
+  test_wide_insert und test_fuzz, der nach beliebiger Eingabe und Resizes prüft,
+  ob Cursor, Scroll-Region und Hälften stimmen und ob die Stückelung der Eingabe
+  etwas ändert. VT_FUZZ_SEEDS=40000 ./test_vt für einen langen Lauf.
+
 * Strg+L löschte nach make install nicht, und tput kannte das Terminal nicht: die
   terminfo lag unter /usr/local/share/terminfo, wo ncurses nicht sucht, mwt setzte
   aber TERM=mwt, weil es dort nachsah. Sie kommt jetzt nach /usr/share/terminfo,

@@ -225,6 +225,215 @@ static void test_wide(void)
 	vt_free(vt);
 }
 
+/* row 0 with W and d for the halves of a wide character */
+static const char *shape(struct vt *vt)
+{
+	static char buf[64];
+	int x = 0;
+	for (; x < vt->cols && x < (int)sizeof buf - 1; x++) {
+		const struct cell *l = &vt->line[0][x];
+		buf[x] = l->attr & ATTR_WIDE ? 'W' : l->attr & ATTR_WDUMMY ? 'd' : (char)l->cp;
+	}
+	buf[x] = 0;
+	return buf;
+}
+
+static void test_wide_insert(void)
+{
+#define KANJI "\xe6\xbc\xa2"
+	static const struct { const char *seq, *want; } cases[] = {
+		/* ICH: on the left half the glyph moves, on the right half it is split */
+		{ KANJI KANJI "\033[1;1H\033[@", " WdWd     " },
+		{ KANJI KANJI "\033[1;1H\033[2@", "  WdWd    " },
+		{ KANJI KANJI "\033[1;2H\033[@", "   Wd     " },
+		{ KANJI KANJI "\033[1;3H\033[@", "Wd Wd     " },
+		/* ICH: a glyph that no longer fits goes as a whole */
+		{ "abcdefg" KANJI "\033[1;1H\033[@", " abcdefgWd" },
+		{ "abcdefg" KANJI "\033[1;1H\033[2@", "  abcdefg " },
+		{ "abcdefg" KANJI "\033[1;1H\033[3@", "   abcdefg" },
+		{ KANJI KANJI "\033[1;1H\033[99@", "          " },
+		{ KANJI KANJI "\033[1;2H\033[99@", "          " },
+		/* IRM: the same for a narrow and a wide character */
+		{ "\033[4h" KANJI KANJI "\033[1;1Hx", "xWdWd     " },
+		{ "\033[4h" KANJI KANJI "\033[1;2Hx", " x Wd     " },
+		{ "\033[4h" KANJI KANJI "\033[1;1H" KANJI, "WdWdWd    " },
+		{ "\033[4h" KANJI KANJI "\033[1;2H" KANJI, " Wd Wd    " },
+		{ "\033[4habcdefg" KANJI "\033[1;1Hx", "xabcdefgWd" },
+		{ "\033[4habcdefgh" KANJI "\033[1;1Hx", "xabcdefgh " },
+		{ "\033[4habcdefgh" KANJI "\033[1;1H" KANJI, "Wdabcdefgh" },
+		/* DCH still breaks up what it cuts */
+		{ KANJI KANJI "\033[1;1H\033[P", " Wd       " },
+		{ KANJI KANJI "\033[1;2H\033[P", " Wd       " },
+		{ KANJI KANJI "\033[1;1H\033[3P", "          " },
+	};
+	for (size_t i = 0; i < sizeof cases / sizeof *cases; i++) {
+		struct vt *vt = mk(10, 2, 0);
+		w(vt, cases[i].seq);
+		CHECK_STR(shape(vt), cases[i].want);
+		vt_free(vt);
+	}
+#undef KANJI
+}
+
+/* ---- fuzz: random streams, and what must hold whatever comes in ---------- */
+
+static unsigned long long fuzz_state;
+static unsigned fuzz_rand(void)
+{
+	fuzz_state ^= fuzz_state << 13;
+	fuzz_state ^= fuzz_state >> 7;
+	fuzz_state ^= fuzz_state << 17;
+	return (unsigned)(fuzz_state >> 11);
+}
+
+static void fuzz_write(void *ud, const char *b, size_t n) { (void)ud; (void)b; (void)n; }
+static void fuzz_title(void *ud, const char *t) { (void)ud; (void)t; }
+
+static const char *const fuzz_frags[] = {
+	"\033", "\033[", "\033]", "\033P", "\a", "\033\\", "\030", "\032", "\r", "\n",
+	"\b", "\t", "\v", "\f", "\x7f", "\016", "\017",
+	"\033[K", "\033[1K", "\033[2K", "\033[J", "\033[1J", "\033[2J", "\033[3J",
+	"\033[99999C", "\033[99999D", "\033[99999A", "\033[99999B", "\033[0G", "\033[40G",
+	"\033[;;;K", "\033[H", "\033[2;3H", "\033[1;2H", "\033[3G", "\033[4G", "\033[D", "\033[C",
+	"\033[?1049h", "\033[?1049l", "\033[?47h", "\033[?47l", "\033[?1047h", "\033[?1047l",
+	"\033[?6h", "\033[?6l", "\033[?7l", "\033[?7h", "\033[4h", "\033[4l", "\033[20h", "\033[20l",
+	"\033[3;5r", "\033[r", "\033[1;1r", "\033[999;999r", "\033[5;2r",
+	"\033[L", "\033[M", "\033[99L", "\033[99M", "\033[S", "\033[T", "\033[99S", "\033[99T",
+	"\033[P", "\033[@", "\033[X", "\033[2P", "\033[2@", "\033[2X", "\033[99P", "\033[99@", "\033[99X",
+	"\033[9b", "\033[Z", "\033[9Z", "\033[9I", "\033[I", "\033[g", "\033[3g",
+	"\033H", "\033M", "\033D", "\033E", "\0337", "\0338", "\033c", "\033[!p", "\033#8",
+	"\033(0", "\033(B", "\033)0", "\033[6n", "\033[c", "\033[18t", "\033[?2004$p",
+	"\033[1;31m", "\033[38;2;1;2;3m", "\033[38:2::1:2:3m", "\033[38;5m", "\033[38;2m",
+	"\033[0m", "\033[7m", "\033[2 q", "\033]0;x\a", "\033]2;\xff\a",
+	"\xc3", "\xe2\x82", "\xf0\x9f\x98", "\xff", "\xc0\x80", "\xed\xa0\x80", "\xf4\x90\x80\x80",
+	"\xc3\xa4", "\xe2\x82\xac", "\xcc\x80", "\xe2\x80\x8d",
+	/* wide characters often enough for every operation to meet one */
+	"\xe6\xbc\xa2", "\xe6\xbc\xa2", "\xe6\xbc\xa2\xe5\xad\x97", "\xe6\xbc\xa2\xe5\xad\x97\xe6\xbc\xa2",
+	"\xf0\x9f\x99\x82", "\xf0\x9f\x99\x82",
+	"abc", " ", "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+};
+
+static size_t fuzz_gen(char *o, size_t cap)
+{
+	size_t n = 0, nf = sizeof fuzz_frags / sizeof *fuzz_frags;
+	while (n + 64 < cap) {
+		if (fuzz_rand() % 20 == 0) {
+			for (int k = fuzz_rand() % 32; k > 0; k--)
+				o[n++] = (char)fuzz_rand();
+		} else {
+			const char *f = fuzz_frags[fuzz_rand() % nf];
+			size_t l = strlen(f);
+			memcpy(o + n, f, l);
+			n += l;
+		}
+	}
+	return n;
+}
+
+/* NULL when all is well, otherwise what is not */
+static const char *fuzz_broken_grid(struct cell **s, int cols, int rows)
+{
+	for (int r = 0; r < rows; r++)
+		for (int x = 0; x < cols; x++) {
+			unsigned a = s[r][x].attr;
+			if ((a & ATTR_WIDE) && (x + 1 >= cols || !(s[r][x + 1].attr & ATTR_WDUMMY)))
+				return "left half of a wide character without its right half";
+			if ((a & ATTR_WDUMMY) && (x == 0 || !(s[r][x - 1].attr & ATTR_WIDE)))
+				return "right half of a wide character without its left half";
+		}
+	return NULL;
+}
+
+static const char *fuzz_broken(const struct vt *vt)
+{
+	if (vt->c.x < 0 || vt->c.x >= vt->cols || vt->c.y < 0 || vt->c.y >= vt->rows)
+		return "cursor outside the grid";
+	if (vt->top < 0 || vt->bot >= vt->rows || vt->top > vt->bot)
+		return "scroll region outside the grid";
+	const char *why = fuzz_broken_grid(vt->pri, vt->cols, vt->rows);
+	return why ? why : fuzz_broken_grid(vt->alt, vt->cols, vt->rows);
+}
+
+static bool fuzz_same(const struct vt *a, const struct vt *b)
+{
+	if (a->c.x != b->c.x || a->c.y != b->c.y || a->c.wrapnext != b->c.wrapnext ||
+	    a->mode != b->mode || a->state != b->state || a->hist_count != b->hist_count)
+		return false;
+	for (int r = 0; r < a->rows; r++)
+		for (int x = 0; x < a->cols; x++) {
+			const struct cell *p = &a->line[r][x], *q = &b->line[r][x];
+			if (p->cp != q->cp || p->fg != q->fg || p->bg != q->bg || p->attr != q->attr)
+				return false;
+		}
+	return true;
+}
+
+static void fuzz_report(long seed, const char *what, const char *why)
+{
+	failures++;
+	fprintf(stderr, "fuzz seed %ld: %s: %s\n", seed, what, why);
+}
+
+/* VT_FUZZ_SEEDS=100000 ./test_vt for a long run */
+static void test_fuzz(void)
+{
+	const char *env = getenv("VT_FUZZ_SEEDS");
+	long seeds = env ? atol(env) : 300;
+	struct vt_callbacks cb = { .write = fuzz_write, .title = fuzz_title };
+	static char buf[4000];
+	for (long seed = 1; seed <= seeds; seed++) {
+		fuzz_state = (unsigned long long)seed * 0x9E3779B97F4A7C15ULL + 1;
+		for (int i = 0; i < 5; i++)
+			fuzz_rand();
+		int cols = 1 + fuzz_rand() % 40, rows = 1 + fuzz_rand() % 12;
+		size_t n = fuzz_gen(buf, sizeof buf);
+		checks++;
+		int before = failures;
+
+		/* the same bytes in one piece and in small ones */
+		struct vt *whole = vt_new(cols, rows, 50, &cb), *split = vt_new(cols, rows, 50, &cb);
+		vt_write(whole, buf, n);
+		for (size_t i = 0; i < n;) {
+			size_t k = 1 + fuzz_rand() % 7;
+			k = k > n - i ? n - i : k;
+			vt_write(split, buf + i, k);
+			i += k;
+		}
+		if (!fuzz_same(whole, split))
+			fuzz_report(seed, "chunks", "the result depends on how the input is cut");
+		vt_free(whole);
+		vt_free(split);
+
+		/* in pieces, with what a window does in between */
+		struct vt *vt = vt_new(cols, rows, 50, &cb);
+		for (size_t i = 0; i < n && failures == before;) {
+			size_t k = 1 + fuzz_rand() % 600;
+			k = k > n - i ? n - i : k;
+			vt_write(vt, buf + i, k);
+			i += k;
+			const char *why = fuzz_broken(vt);
+			if (why) {
+				fuzz_report(seed, "after output", why);
+				break;
+			}
+			vt_resize(vt, 1 + fuzz_rand() % 60, 1 + fuzz_rand() % 16);
+			why = fuzz_broken(vt);
+			if (why) {
+				fuzz_report(seed, "after a resize", why);
+				break;
+			}
+			vt_scroll_view(vt, (int)(fuzz_rand() % 100) - 50);
+			for (int r = 0; r < vt->rows; r++) {
+				int len;
+				vt_view_line(vt, r, &len);
+			}
+			if (fuzz_rand() % 8 == 0)
+				vt_reset(vt);
+		}
+		vt_free(vt);
+	}
+}
+
 static void test_altscreen(void)
 {
 	struct vt *vt = mk(10, 3, 10);
@@ -392,12 +601,14 @@ int main(void)
 	test_scroll_region_ops();
 	test_sgr();
 	test_wide();
+	test_wide_insert();
 	test_altscreen();
 	test_replies();
 	test_charset_and_misc();
 	test_resize();
 	test_origin();
 	test_alloc_failures();
+	test_fuzz();
 	printf("%d/%d checks passed\n", checks - failures, checks);
 	return failures != 0;
 }
