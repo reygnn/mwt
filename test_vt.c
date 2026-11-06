@@ -529,6 +529,17 @@ static void test_resize(void)
 	vt_free(vt);
 }
 
+/* the display draws dirty rows, and a new cursor shape must reach the screen */
+static void test_cursor_style_redraw(void)
+{
+	struct vt *vt = mk(10, 3, 0);
+	w(vt, "\033[2;4H");
+	vt->dirty[1] = false;
+	w(vt, "\033[4 q");
+	CHECK(vt->cursor_style == CURSOR_UNDERLINE && vt->dirty[1]);
+	vt_free(vt);
+}
+
 static void test_origin(void)
 {
 	struct vt *vt = mk(10, 6, 0);
@@ -607,6 +618,7 @@ int main(void)
 	test_charset_and_misc();
 	test_resize();
 	test_origin();
+	test_cursor_style_redraw();
 	test_alloc_failures();
 	test_fuzz();
 	printf("%d/%d checks passed\n", checks - failures, checks);

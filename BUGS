@@ -2,10 +2,18 @@ BUGS
 
 Offen, noch nicht bestätigt:
 
-* Zur Zeit nichts.
+* mwt.info verspricht kIC, kPRV und kNXT, aber Shift+Insert, Shift+PgUp und
+  Shift+PgDn kommen bei keinem Programm an, auch nicht im Alternate Screen, wo
+  mwt nichts zu scrollen hat. Shift+Pos1 und Shift+Ende gehen dort durch. Gewollt?
+  tests/keys.py hält den Stand in TAKEN_BY_MWT fest.
 
 Behoben:
 
+* Ein Wechsel der Cursorform (CSI n SP q) zeigte sich erst, wenn die Zeile aus
+  anderem Grund neu gezeichnet wurde. Das Zeichnen achtete nur auf Sichtbarkeit und
+  Position des Cursors. Tests: test_vt.c test_cursor_style_redraw, tests/pixel.py.
+* xm in mwt.info hatte ein Semikolon zu viel gegenüber dem, was mwt sendet
+  (ESC[<0;8;4;M statt ESC[<0;8;4M). Test: tests/keys.py.
 * Einfügen an einem Wide-Character zerriss das Zeichen: ICH und der Insert-Modus
   ließen eine linke Hälfte ohne rechte oder eine rechte ohne linke zurück, und auf
   der linken Hälfte ging das Zeichen sogar verloren. Das zeigte sich als halb

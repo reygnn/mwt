@@ -840,6 +840,7 @@ static void csi_dispatch(struct vt *vt, uint32_t f)
 			int s = arg(vt, 0, 0);
 			vt->cursor_style = s <= 2 ? CURSOR_BLOCK :
 					   s <= 4 ? CURSOR_UNDERLINE : CURSOR_BAR;
+			vt->dirty[c->y] = true;
 		} else if (vt->inter[0] == '!' && f == 'p') {
 			soft_reset(vt);
 		} else if (vt->inter[0] == '$' && f == 'p') { /* DECRQM, ANSI modes */
