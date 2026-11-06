@@ -1,0 +1,48 @@
+PREFIX ?= /usr/local
+CC ?= cc
+PKGS = wayland-client wayland-cursor xkbcommon fontconfig freetype2
+WP != pkg-config --variable=pkgdatadir wayland-protocols
+SCANNER != pkg-config --variable=wayland_scanner wayland-scanner
+
+CFLAGS ?= -O2 -g
+CFLAGS += -std=c11 -Wall -Wextra $(shell pkg-config --cflags $(PKGS)) -I.
+LDLIBS += $(shell pkg-config --libs $(PKGS)) -lutil -lm
+
+PROTOS = xdg-shell xdg-decoration-unstable-v1 primary-selection-unstable-v1
+xdg-shell_XML = $(WP)/stable/xdg-shell/xdg-shell.xml
+xdg-decoration-unstable-v1_XML = $(WP)/unstable/xdg-decoration/xdg-decoration-unstable-v1.xml
+primary-selection-unstable-v1_XML = $(WP)/unstable/primary-selection/primary-selection-unstable-v1.xml
+
+PROTO_H = $(PROTOS:=-client-protocol.h)
+PROTO_C = $(PROTOS:=-protocol.c)
+OBJ = mwt.o vt.o font.o $(PROTO_C:.c=.o)
+
+all: mwt
+
+mwt: $(OBJ)
+	$(CC) $(LDFLAGS) -o $@ $(OBJ) $(LDLIBS)
+
+mwt.o: mwt.c config.h vt.h font.h $(PROTO_H)
+vt.o: vt.c vt.h
+font.o: font.c font.h
+
+%-client-protocol.h:
+	$(SCANNER) client-header $($*_XML) $@
+
+%-protocol.c:
+	$(SCANNER) private-code $($*_XML) $@
+
+test_vt: test_vt.c vt.c vt.h
+	$(CC) -std=c11 -Wall -Wextra -g -fsanitize=address,undefined -o $@ test_vt.c vt.c
+
+check: test_vt
+	./test_vt
+
+install: mwt
+	install -Dm755 mwt $(DESTDIR)$(PREFIX)/bin/mwt
+	tic -x -o $(DESTDIR)$(PREFIX)/share/terminfo mwt.info
+
+clean:
+	rm -f mwt test_vt *.o $(PROTO_H) $(PROTO_C)
+
+.PHONY: all check install clean
