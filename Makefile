@@ -39,6 +39,20 @@ test_vt: test_vt.c vt.c vt.h
 check: test_vt
 	./test_vt
 
+# Each capability of mwt.info against the VT core. Needs python3 and ncurses.
+vtdump: tests/vtdump.c vt.c vt.h
+	$(CC) -std=c11 -Wall -Wextra -g -fsanitize=address,undefined -I. -o $@ tests/vtdump.c vt.c
+
+terminfo: vtdump
+	tests/terminfo.py
+
+# What mwt sends for keys and the mouse, and what it draws, under a headless sway.
+keys: mwt
+	tests/headless.sh tests/keys.py
+
+pixel: mwt
+	tests/headless.sh tests/pixel.py
+
 # Runs mwt under a headless sway with wtype, wl-clipboard, grim and mwc's vinput.
 test: mwt
 	tests/run.sh
@@ -66,6 +80,6 @@ uninstall:
 	rm -f $(DESTDIR)$(PREFIX)/share/terminfo/m/mwt $(DESTDIR)$(PREFIX)/share/terminfo/6d/mwt
 
 clean:
-	rm -f mwt test_vt *.o $(PROTO_H) $(PROTO_C)
+	rm -f mwt test_vt vtdump *.o $(PROTO_H) $(PROTO_C)
 
-.PHONY: all check test evil width install uninstall clean
+.PHONY: all check terminfo keys pixel test evil width install uninstall clean

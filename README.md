@@ -8,7 +8,10 @@ Abhängigkeiten: wayland-client, wayland-cursor, wayland-protocols, wayland-scan
 
 ```sh
 make            # baut ./mwt
-make check      # Tests für den VT-Kern (headless, mit ASan/UBSan)
+make check      # Tests für den VT-Kern (headless, mit ASan/UBSan), auch ein Fuzzer
+make terminfo   # jede Fähigkeit aus mwt.info gegen den VT-Kern (braucht python3 und ncurses)
+make keys       # was mwt für Tasten und Maus sendet, gegen mwt.info (unter headless sway, wie make test)
+make pixel      # was mwt zeichnet, per Screenshot (unter headless sway, wie make test)
 make test       # Black-Box-Tests unter headless sway (braucht sway, wtype, wl-clipboard, grim und vinput aus mwc)
 make width      # wo mwt und bash, vim oder tmux Zeichenbreiten verschieden zählen (braucht zusätzlich vim und tmux)
 make evil       # alle Tests plus Härtefälle in einem Podman-Container, auch mit Sanitizern

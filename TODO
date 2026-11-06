@@ -10,12 +10,6 @@ TODO
 
 Tests, die noch fehlen, nach Nutzen sortiert:
 
-* Pixeltests mit grim, der Screenshot in tests/run.sh prüft nur den Exit-Code:
-  Farben, Reverse, Unterstreichung, Cursorformen, Auswahl; veraltete Pixel beim
-  Teilneuzeichnen (inkrementell gegen vollständig gezeichnet); HiDPI mit
-  output scale 2; ob Zoom die Größe ändert und Ctrl+Shift+0 sie zurückholt.
-* mwt.info gegen das echte Verhalten: jede Fähigkeit gegen vt.c, jede Taste mit
-  Modifiern und DECCKM gegen das, was mwt sendet.
 * Rest des VT-Kerns (test_vt deckt 79 % der Zeilen von vt.c ab): ESC 7/8, IND,
   NEL, HTS, RIS, DECSTR, DECALN, SO/SI, G1, SGR Dim, Reverse, Blink, Invisible und
   Strike, BEL.
