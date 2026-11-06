@@ -6,6 +6,10 @@ Offen, noch nicht bestätigt:
 
 Behoben:
 
+* Ein Programm im Raw-Modus, das Anfragen schickt und die Antworten nie liest,
+  ließ mwt um etwa 10 MB pro Sekunde wachsen, solange es lief: Die Antworten
+  stauten sich ohne Grenze in t.out. Ab 1 MiB wartender Bytes verwirft mwt weitere
+  Antworten. Test: tests/evil.sh reply_flood_raw.
 * mwt.info versprach kIC, kPRV und kNXT, aber Shift+Insert, Shift+PgUp und
   Shift+PgDn kamen bei keinem Programm an. Im Alternate Screen, wo es nichts zu
   scrollen gibt, gingen die beiden letzten verloren. Dort gehen sie jetzt ans

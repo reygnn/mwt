@@ -177,6 +177,8 @@ static void die(const char *msg)
 
 /* ---- pty output ------------------------------------------------------- */
 
+#define REPLY_BACKLOG_MAX (1024 * 1024) /* bytes waiting for the pty */
+
 static void flush_out(void)
 {
 	while (t.out_len) {
@@ -254,6 +256,10 @@ static void drop_paste_for_signal(unsigned char c)
 static void vt_reply(void *ud, const char *s, size_t n)
 {
 	(void)ud;
+	/* A program that asks and does not read would make this grow without limit.
+	 * With that much waiting it is not waiting for the answer either. */
+	if (t.out_len > REPLY_BACKLOG_MAX)
+		return;
 	pty_write(s, n);
 }
 

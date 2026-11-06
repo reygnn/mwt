@@ -10,13 +10,11 @@ TODO
 
 Tests, die noch fehlen, nach Nutzen sortiert:
 
-* Rest des VT-Kerns (test_vt deckt 79 % der Zeilen von vt.c ab): ESC 7/8, IND,
-  NEL, HTS, RIS, DECSTR, DECALN, SO/SI, G1, SGR Dim, Reverse, Blink, Invisible und
-  Strike, BEL.
+* Rest des VT-Kerns, ein kleiner Test in test_vt.c genügt: IND, NEL, SO/SI, G1.
+  Der Rest ist durch make terminfo und make pixel abgedeckt, DECALN braucht keiner.
 * Mausprotokoll, bisher nur ein Rechtsklick mit 1006: 1002, 1003, Mausrad,
   Loslassen, Modifier, X10-Format mit Koordinaten über 223, Focus Events (1004).
-* Weitere feindliche Fälle: Ein Programm flutet ESC[6n und liest nie (Festfahren
-  am pty?). Eine Paste-Quelle, die nichts schreibt und nie schließt. Wenig
+* Weitere feindliche Fälle: Eine Paste-Quelle, die nichts schreibt und nie schließt. Wenig
   Dateideskriptoren (ulimit -n) und Speicher (ulimit -v). Die Tastatur verschwindet
   zur Laufzeit.
 * Tastatur: Compose und Dead Keys, Key-Repeat, Ende des Repeats bei Fokusverlust.

@@ -622,6 +622,44 @@ flood_ctrl_c() {
 	T 'echo flood-ende' -k Return
 	try 10 'flood-ende' || gap "no prompt after the flood"
 }
+# Queries answered faster than the program reads: the answers wait in mwt.
+reply_flood() {
+	start_mwt
+	local pid r0 r1
+	pid=$(mwtpid)
+	T 'stty -echo; yes $'"'"'\033[c'"'"'' -k Return
+	sleep 8
+	r0=$(awk '/VmRSS/{print $2}' /proc/$pid/status)
+	sleep 20
+	r1=$(awk '/VmRSS/{print $2}' /proc/$pid/status)
+	info "RSS while answers pile up: $r0 kB at 8 s, $r1 kB at 28 s"
+	[ "$((r1 - r0))" -gt 51200 ] && gap "answers to a program that does not read pile up without limit: $r0 kB to $r1 kB in 20 s"
+	C c
+	local i
+	for ((i = 0; i < 60; i++)); do pgrep -x yes >/dev/null || break; sleep 0.05; done
+	if pgrep -x yes >/dev/null; then gap "Ctrl+C does not stop a query flood"; else ok "Ctrl+C stops a query flood"; fi
+	sleep 0.5
+	T 'stty echo; echo flood-weg' -k Return
+	try 10 'flood-weg' && ok "a prompt after the query flood" || gap "no prompt after the query flood: $(tail -2 "$DIR/shown" | cut -c1-70 | tr '\n' '|')"
+}
+# The same without signals: Ctrl+C is a plain byte that waits with the rest.
+reply_flood_raw() {
+	start_mwt
+	local pid r0 r1
+	pid=$(mwtpid)
+	T 'python3 -c "import os,tty;tty.setraw(0);b=b\"\\033[c\"*4096;exec(\"while 1: os.write(1,b)\")"' -k Return
+	sleep 8
+	r0=$(awk '/VmRSS/{print $2}' /proc/$pid/status)
+	sleep 20
+	r1=$(awk '/VmRSS/{print $2}' /proc/$pid/status)
+	info "RSS with a raw program: $r0 kB at 8 s, $r1 kB at 28 s"
+	[ "$((r1 - r0))" -gt 51200 ] && gap "answers to a raw program that does not read pile up without limit: $r0 kB to $r1 kB in 20 s"
+	swaymsg -q '[app_id="mwt"] kill'
+	sleep 3
+	if alive; then gap "the window cannot be closed during a query flood"; else ok "the window closes during a query flood"; fi
+	pkill -f 'os.write' 2>/dev/null
+	return 0
+}
 flood_rss() {
 	start_mwt
 	local pid r0 r1
@@ -855,7 +893,7 @@ for c in dcs_swallow osc_swallow_cat fuzz noncharacters \
 	mid_char_selection drag_during_flood select_history click_clusters \
 	paste_integrity paste_bidi paste_escape ctrl_c_behind_paste paste_holds_until_return line_limits paste_over_16mb \
 	snippet_typed snippet_paste snippet_paste_no_newline \
-	stty_raw_read_in_shell inlcr tcoff cyrillic_ctrl_c cyrillic_raw copy_on_ru raw_paste_ctrl_c python_repl flood_ctrl_c flood_rss \
+	stty_raw_read_in_shell inlcr tcoff cyrillic_ctrl_c cyrillic_raw copy_on_ru raw_paste_ctrl_c python_repl flood_ctrl_c flood_rss reply_flood reply_flood_raw \
 	args shells closed_stdio cwd_tricks exit_with_jobs close_ignores_hup \
 	tiny resize_storm fd_leak stalled_readers stalled_pipes menu_abuse compositor_dies; do
 	run "$c"
