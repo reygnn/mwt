@@ -622,9 +622,11 @@ flood_ctrl_c() {
 	T 'echo flood-ende' -k Return
 	try 10 'flood-ende' || gap "no prompt after the flood"
 }
-# Queries answered faster than the program reads: the answers wait in mwt.
+# Queries answered faster than the program reads: the answers wait in mwt. These
+# two measure memory, which ASan's quarantine of freed blocks would otherwise fill.
+SMALL_QUARANTINE=ASAN_OPTIONS=detect_leaks=0:quarantine_size_mb=1
 reply_flood() {
-	start_mwt
+	start_mwt "$SMALL_QUARANTINE"
 	local pid r0 r1
 	pid=$(mwtpid)
 	T 'stty -echo; yes $'"'"'\033[c'"'"'' -k Return
@@ -644,7 +646,7 @@ reply_flood() {
 }
 # The same without signals: Ctrl+C is a plain byte that waits with the rest.
 reply_flood_raw() {
-	start_mwt
+	start_mwt "$SMALL_QUARANTINE"
 	local pid r0 r1
 	pid=$(mwtpid)
 	T 'python3 -c "import os,tty;tty.setraw(0);b=b\"\\033[c\"*4096;exec(\"while 1: os.write(1,b)\")"' -k Return
