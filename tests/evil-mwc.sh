@@ -58,6 +58,7 @@ info() { echo "INFO  [$CASE] $*"; }
 waitfile() { local i; for ((i = 0; i < $2 * 5; i++)); do [ -s "$1" ] && return 0; sleep 0.2; done; return 1; }
 run() {
 	CASE=$1
+	if [ -n "${ONLY:-}" ] && ! [[ " $ONLY " == *" $1 "* ]]; then return; fi
 	local t0=$SECONDS
 	"$1"
 	if grep -q 'AddressSanitizer\|runtime error' "$LOG" 2>/dev/null; then CRASHES=$((CRASHES + 1)); echo "CRASH [$CASE]"; grep -m1 -A14 'AddressSanitizer\|runtime error' "$LOG"; fi
@@ -139,6 +140,20 @@ mwc_spawns() {
 	T 'exit' -k Return; sleep 1.5
 	[ "$(count)" = 1 ] && ok "that window closes on exit" || gap "window did not close on exit: $(count)"
 }
+# mwc has to hand on the notches: six of them, six reports.
+wheel_notches() {
+	start_mwt
+	T "printf '\\033[?1000;1006h'; cat -v >~/res" -k Return; sleep 0.3
+	local x y i n
+	x=$(get x); y=$(get y)
+	v move $((x + 200)) $((y + 100))
+	for i in 1 2 3 4 5 6; do v wheel 1; sleep 0.1; done
+	sleep 0.3
+	T -k Return; sleep 0.2
+	C d; sleep 0.5
+	n=$(grep -o '\[<65;' "$HOME/res" 2>/dev/null | wc -l)
+	if [ "$n" = 6 ]; then ok "six wheel notches under mwc are six reports"; else gap "six wheel notches under mwc gave $n reports"; fi
+}
 tiling() {
 	start_mwt; start_mwt; start_mwt
 	v key super+t 2>/dev/null; sleep 0.8
@@ -154,6 +169,6 @@ compositor_dies() {
 	if pgrep -f 'sleep 778' >/dev/null; then gap "program stays after mwc died"; else ok "program ended with it"; fi
 	start_mwc
 }
-for c in basic states minimized_flood flood_states close_keys copy_between primary_between mwc_spawns tiling compositor_dies; do run "$c"; done
+for c in basic states minimized_flood flood_states close_keys copy_between primary_between mwc_spawns wheel_notches tiling compositor_dies; do run "$c"; done
 echo "=== $GAPS gaps, $CRASHES crashes ==="
 [ "$GAPS" = 0 ] && [ "$CRASHES" = 0 ]

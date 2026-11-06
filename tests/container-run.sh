@@ -39,12 +39,14 @@ echo "=== evil under sway, sanitizers ==="
 tests/evil.sh || fail=1
 echo "=== evil under mwc, sanitizers ==="
 tests/evil-mwc.sh || fail=1
-echo "=== terminfo, keys, pixel, sanitizers ==="
+echo "=== terminfo, keys, pixel, mouse, sanitizers ==="
 make terminfo 2>&1 | grep -E '^(FAIL|PASS|=== )'
 [ "${PIPESTATUS[0]}" = 0 ] || fail=1
 tests/headless.sh tests/keys.py 2>&1 | grep -E '^(FAIL|PASS|info|=== )'
 [ "${PIPESTATUS[0]}" = 0 ] || fail=1
 tests/headless.sh tests/pixel.py 2>&1 | grep -E '^(FAIL|PASS|info|=== )'
+[ "${PIPESTATUS[0]}" = 0 ] || fail=1
+tests/headless.sh tests/mouse.py 2>&1 | grep -E '^(FAIL|PASS|info|=== )'
 [ "${PIPESTATUS[0]}" = 0 ] || fail=1
 # Known gaps in character widths are only reported. A crash or a width.sh that
 # could not run (its messages start with "width:") fails the run.
