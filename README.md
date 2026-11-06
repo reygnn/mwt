@@ -9,6 +9,8 @@ Abhängigkeiten: wayland-client, wayland-cursor, wayland-protocols, wayland-scan
 ```sh
 make            # baut ./mwt
 make check      # Tests für den VT-Kern (headless, mit ASan/UBSan)
+make test       # Black-Box-Tests unter headless sway (braucht sway, wtype, wl-clipboard, grim und vinput aus mwc)
+make evil       # alle Tests plus Härtefälle in einem Podman-Container, auch mit Sanitizern
 sudo make install   # installiert nach /usr/local und kompiliert die terminfo
 ```
 
@@ -48,6 +50,7 @@ Alles Weitere, also Farben, Schrift, Padding und Scrollback, steht in `config.h`
 | `mwt.c` | Wayland (xdg-shell, xdg-decoration, wl_shm, wl_data_device, primary selection), Tastatur über xkbcommon inklusive Compose/Dead Keys, Maus, pty, Event-Loop |
 | `mwt.info` | terminfo: deklariert nur, was `vt.c` wirklich kann |
 | `test_vt.c` | Tests für den VT-Kern |
+| `tests/` | Black-Box-Tests und Härtefälle, aus dem mt-Projekt übernommen. `MWC_DIR` nennt den mwc-Quellbaum, Standard ist `../../mwc`. |
 
 Gezeichnet werden nur geänderte Zeilen. Bei Doppelpufferung wird vorher der zuletzt gezeigte Puffer kopiert. Die Ausgabe ist an Frame-Callbacks gekoppelt.
 

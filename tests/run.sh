@@ -1,0 +1,444 @@
+#!/bin/bash
+# Black-box test of mwt under a headless sway: keys from wtype, the mouse from
+# mwc's tests/vinput, and what mwt shows read back the way a user gets at it:
+# a drag over the window, then the primary selection through wl-paste. That only
+# sees the screen, not the scrollback.
+#
+# Needs sway, wtype, wl-clipboard (wl-copy, wl-paste), grim, tic and vinput. Its
+# own runtime directory and socket, so a running session is not touched. Goes on
+# after a failed check and fails at the end.
+set -u
+cd "$(dirname "$0")/.." || exit 1
+MWT=${MWT:-$PWD/mwt}
+VINPUT=${VINPUT:-${MWC_DIR:-../../mwc}/build/vinput}
+INFO=$PWD/mwt.info
+TIMEOUT=10
+FAILS=0
+
+for t in sway wtype wl-copy wl-paste grim tic python3; do
+	command -v "$t" >/dev/null || { echo "FAIL: $t not installed"; exit 1; }
+done
+[ -x "$MWT" ] || { echo "FAIL: $MWT not built"; exit 1; }
+[ -x "$VINPUT" ] || { echo "FAIL: $VINPUT not built (make build/vinput in mwc)"; exit 1; }
+
+DIR=$(mktemp -d /tmp/mwt-test.XXXXXX) || exit 1
+LOG=$DIR/log
+mkdir -p "$DIR/home"
+export XDG_RUNTIME_DIR=$DIR HOME=$DIR/home SHELL=/bin/bash
+export XDG_CONFIG_HOME=$DIR/config
+export WLR_BACKENDS=headless WLR_LIBINPUT_NO_DEVICES=1 WLR_RENDERER=pixman
+export LANG=C.UTF-8 LC_ALL=C.UTF-8
+unset WAYLAND_DISPLAY DISPLAY TERMINFO TERMINFO_DIRS
+# Programs that take the terminal raw and put it back: bash keeps what they leave.
+cat >"$HOME/.bashrc" <<'RC'
+PS1="\w\$ "
+unset PROMPT_COMMAND
+RAW='import termios,tty,sys; a=termios.tcgetattr(0); tty.setraw(0); c=sys.stdin.read(%d); termios.tcsetattr(0,termios.TCSANOW,a); %s'
+RAW3=$(printf "$RAW" 3 'sys.stdout.write(repr(c)+chr(10))')
+RAW1=$(printf "$RAW" 1 'sys.stdout.write(c)')
+RC
+tic -x -o "$HOME/.terminfo" "$INFO" || { echo "FAIL: mwt.info does not compile"; exit 1; }
+cat >"$DIR/sway.conf" <<'CONF'
+output HEADLESS-1 resolution 1000x700 position 0 0
+default_border none
+default_floating_border none
+for_window [app_id="mwt"] floating enable, move position 20 20
+CONF
+
+SWAY=
+VIN_PID=
+cleanup() {
+	[ -n "$VIN_PID" ] && kill "$VIN_PID" 2>/dev/null
+	pkill -f "^$MWT" 2>/dev/null
+	[ -n "$SWAY" ] && kill "$SWAY" 2>/dev/null
+	wait 2>/dev/null
+	rm -rf "$DIR"
+}
+trap cleanup EXIT
+
+die() {
+	echo "FAIL: $1"
+	sed 's/^/log: /' "$LOG" 2>/dev/null
+	exit 1
+}
+fail() {
+	FAILS=$((FAILS + 1))
+	echo "FAIL: $1"
+	tail -4 "$DIR/shown" 2>/dev/null | cut -c1-100 | sed 's/^/  shown: /'
+}
+
+sway -c "$DIR/sway.conf" >"$DIR/sway.log" 2>&1 &
+SWAY=$!
+for ((i = 0; i < 50; i++)); do
+	[ -S "$DIR/wayland-1" ] && break
+	sleep 0.1
+done
+[ -S "$DIR/wayland-1" ] || die "sway did not start"
+export WAYLAND_DISPLAY=wayland-1
+sleep 0.3
+export SWAYSOCK=$(ls "$DIR"/sway-ipc.*.sock 2>/dev/null | head -1)
+
+coproc VIN { "$VINPUT" 1000 700; }
+VIN_PID=$VIN_PID
+# Bash closes a coproc's descriptors in subshells, and `shown | grep` is one.
+exec 7>&"${VIN[1]}" 8<&"${VIN[0]}"
+v() { echo "$*" >&7; read -r -t 3 _ <&8; }
+
+# A new virtual keyboard per wtype call: sway hands its first key over in
+# wl_keyboard.enter, which a client must not take as a press. So each call
+# starts with a key mwt ignores.
+T() { wtype -k Shift_L "$@"; sleep 0.3; }
+K() { wtype -k Shift_L -M ctrl -M shift -k "$1" -m shift -m ctrl; sleep 0.3; }
+C() { wtype -k Shift_L -M ctrl -k "$1" -m ctrl; sleep 0.3; }
+
+# What mwt shows, without the blank rows at the end. The pause keeps two drags
+# from counting as a double click.
+shown() {
+	sleep 0.45
+	v move 21 21
+	v down left
+	v move 999 699
+	v up left
+	sleep 0.1
+	printf '%s' "$(timeout 3 wl-paste -p -n 2>/dev/null)" >"$DIR/shown"
+	cat "$DIR/shown"
+}
+
+# expect <description> <grep -x pattern>: a line like that shows up
+expect() {
+	local i
+	for ((i = 0; i < TIMEOUT; i++)); do
+		shown | grep -qx -- "$2" && { echo "ok: $1"; return 0; }
+		sleep 0.2
+	done
+	fail "$1: no line \"$2\""
+}
+
+# expect_n <description> <grep -x pattern> <n>: n lines like that
+expect_n() {
+	local i
+	for ((i = 0; i < TIMEOUT; i++)); do
+		[ "$(shown | grep -cx -- "$2")" = "$3" ] &&
+			{ echo "ok: $1"; return 0; }
+		sleep 0.2
+	done
+	fail "$1: not $3 lines \"$2\""
+}
+
+# Started the way an autostart script does it: `mwt &` from sh, which makes
+# mwt ignore SIGINT and SIGQUIT. The shell in it must not.
+start_mwt() {
+	(cd "$HOME" && sh -c '"$0" >>"$1" 2>&1 &' "$MWT" "$LOG")
+	sleep 1.5
+	pgrep -f "^$MWT" >/dev/null || die "mwt did not start"
+}
+start_mwt
+
+# The grid in pixels, from the window; px gives the middle of a cell in X and Y.
+read -r W H < <(swaymsg -t get_tree | python3 -c '
+import json, sys
+def walk(n):
+    yield n
+    for k in ("nodes", "floating_nodes"):
+        for c in n.get(k, []):
+            yield from walk(c)
+for n in walk(json.load(sys.stdin)):
+    if n.get("app_id") == "mwt":
+        print(n["rect"]["width"], n["rect"]["height"])
+        break')
+[ -n "${W:-}" ] || die "no mwt window in sway's tree"
+CW=$(((W - 4) / 80))
+CH=$(((H - 4) / 24))
+px() { X=$((22 + $1 * CW + CW / 2)); Y=$((22 + $2 * CH + CH / 2)); }
+at() { px "$1" "$2"; v move "$X" "$Y"; }
+
+T 'echo $TERM' -k Return
+expect "the terminfo entry is used" 'mwt'
+
+T 'echo hallo-$((6*7)) äöü' -k Return
+expect "a command runs, UTF-8 in and out" 'hallo-42 äöü'
+
+T 'printf "abc\bX\n12345\r9\n"' -k Return
+expect "backspace overwrites" 'abX'
+expect "carriage return overwrites" '92345'
+
+T 'printf "\033[1;31mrot\033[0m \033]0;t\007ok\n"' -k Return
+expect "escape sequences are dropped" 'rot ok'
+
+T 'printf "a\033[Kb\rxyz\033[2Gq\033[K\n"' -k Return
+expect "erase in line and cursor column" 'xq'
+
+T 'stty size' -k Return
+expect "the pty knows the size" '24 80'
+
+T 'printf "%0200d\n" 0 | tr 0 x' -k Return
+expect "a wrapped line copies as one" "$(printf '%0200d' 0 | tr 0 x)"
+
+printf 'echo eins\necho zwei' | wl-copy
+sleep 0.3
+K v
+T -k Return
+expect "paste, first line sent" 'eins'
+expect "paste, second line sent on Return" 'zwei'
+
+T 'read -s -p "pw: " x; echo; echo "got:$x"' -k Return
+T 'geheim'
+if shown | grep -q geheim; then fail "the password shows while typed"; else echo "ok: a password does not show"; fi
+T -k Return
+expect "the password reaches the program" 'got:geheim'
+
+T 'python3 -c "$RAW3"' -k Return
+sleep 0.8
+T 'xyz'
+expect "raw mode sends keys at once" "'xyz'"
+T 'echo wieder-normal' -k Return
+expect "the shell gets its line discipline back" 'wieder-normal'
+
+T 'sleep 3017' -k Return
+C c
+if pgrep -f '^sleep 3017$' >/dev/null; then
+	fail "Ctrl+C does not interrupt"
+	pkill -f '^sleep 3017$'
+	sleep 0.3
+else
+	T 'echo status $?' -k Return
+	expect "Ctrl+C interrupts" 'status 130'
+fi
+
+T 'read -n 1 -p "key: " k; echo " k=$k"' -k Return
+T 'q'
+expect "read -n 1 keeps its raw mode" 'key: q k=q'
+
+T 'cat' -k Return
+T 'zeile' -k Return
+C d
+T 'echo cat-ende' -k Return
+expect "Ctrl+D ends input" 'cat-ende'
+
+C l
+T 'echo eins-zwei' -k Return
+T 'echo drei' -k Return
+T -k Up -k Up -k Return
+expect_n "history" 'eins-zwei' 2
+
+# ---- regressions from mt's reviews ----------------------------------------
+
+T 'printf "a\033[2147483647Cx\033[99999999999999999999Dy\n"' -k Return
+expect "huge CSI parameters are clamped" 'y *x'
+
+T 'grep SigIgn /proc/self/status' -k Return
+expect "children do not inherit ignored signals" 'SigIgn: *0\{16\}'
+
+T 'sleep 1; read -n 1 -p "key: " k; echo " k=$k"' -k Return
+sleep 1.8
+T 'q'
+expect "read -n 1 after a job keeps its raw mode" 'key: q k=q'
+
+T 'k=$(python3 -c "$RAW1"); echo "k=[$k]"' -k Return
+sleep 2
+T 'q'
+expect "a raw program in \$(...) keeps its raw mode" 'k=\[q\]'
+
+T 's=$(date +%s%N); python3 -c "import sys; sys.stdout.write(\"e\"+\"́\"*300000+\"\n\")"; echo dauer=$(( ($(date +%s%N) - s) / 1000000 ))' -k Return
+expect "combining marks are cheap" 'dauer=[0-9]*'
+ms=$(grep -o 'dauer=[0-9]*' "$DIR/shown" | tail -1 | cut -d= -f2)
+[ "${ms:-99999}" -lt 3000 ] || fail "300000 combining marks took ${ms} ms"
+T 'printf e; python3 -c "import sys; sys.stdout.write(\"⃐\"*3005)"' -k Return
+T 'echo sichtbar'
+expect "the line shows after a row of marks" '.*~\$ echo sichtbar'
+T -k Return
+
+# mwt does not reflow: what no longer fits is cut off and the cursor stays in the
+# last column, so ESC[1K must clear the whole row.
+size="$W $H"
+swaymsg -q '[app_id="mwt"] resize set 1000 460'
+sleep 0.5
+C l
+T 'printf "%0100d" 0; sleep 1.5; printf "\033[1K|\n"' -k Return
+sleep 0.3
+swaymsg -q "[app_id=\"mwt\"] resize set $size, move position 20 20"
+expect "ESC[1K after the window shrank" ' *|'
+C l
+T 'stty size' -k Return
+expect "back to 80 columns" '24 80'
+
+C l
+T 'echo äöü-string' -k Return
+expect "copied" 'äöü-string'
+sleep 0.45
+at 0 1
+v down left
+at 30 1
+v up left
+K c
+if [ "$(timeout 2 wl-paste -n)" = 'äöü-string' ]; then echo "ok: Ctrl+Shift+C copies"; else fail "Ctrl+Shift+C does not copy"; fi
+if timeout 2 wl-paste -t STRING | iconv -f latin1 -t utf-8 | grep -qx 'äöü-string'; then
+	echo "ok: STRING is Latin-1"
+else
+	fail "STRING is not Latin-1"
+fi
+printf 'echo caf\xe9' | wl-copy -t STRING
+sleep 0.3
+K v
+T -k Return
+expect "a Latin-1 paste is converted" 'café'
+
+T 'printf "%080d\bX\n" 0' -k Return
+expect "backspace on a full row" '0\{78\}X0'
+
+T "printf '\\033]0;bad\\xffdir\\007'" -k Return
+sleep 0.5
+if swaymsg -t get_tree 2>/dev/null | python3 -c '
+import json, sys
+def walk(n):
+    yield n
+    for k in ("nodes", "floating_nodes"):
+        for c in n.get(k, []):
+            yield from walk(c)
+t = json.load(sys.stdin.buffer)
+names = [n.get("name") or "" for n in walk(t) if n.get("app_id") == "mwt"]
+sys.exit(0 if any(x.startswith("bad") and x.endswith("dir") for x in names) else 1)'; then
+	echo "ok: the title is valid UTF-8"
+else
+	fail "the title is not cleaned up"
+fi
+
+# ---- unterminated strings: a real terminal waits for the terminator, and the
+# escape sequence bash sends with its next prompt is what ends them.
+
+T 'printf "\033Pverloren\n"' -k Return
+T 'echo nach-dcs' -k Return
+expect "an unterminated DCS ends with the next escape" 'nach-dcs'
+printf 'text\033]0;ohne ende\nzeile2\n' >"$HOME/stray"
+T 'cat ~/stray' -k Return
+T 'echo nach-osc' -k Return
+expect "a stray OSC in a file does not swallow the rest" 'nach-osc'
+
+T 'stty inlcr' -k Return
+sleep 0.3
+T 'stty -inlcr; echo nach-inlcr' -k Return
+expect "Return works after stty inlcr" 'nach-inlcr'
+
+# ---- Tab belongs to the shell and the program -----------------------------
+
+mkdir -p "$HOME/tabs/unterdir"
+T 'cd tabs' -k Return
+T 'ls -d unt' -k Tab -k Return
+expect "Tab reaches the shell's completion" 'unterdir/'
+C l
+T 'cat' -k Return
+T 'ab' -k Tab 'c' -k Return
+expect_n "in a program, Tab moves to the next stop" 'ab *c' 2
+C d
+T 'cd' -k Return
+
+# ---- mouse ----------------------------------------------------------------
+
+C l
+sleep 0.2
+T 'echo alpha beta gamma' -k Return
+sleep 0.6
+at 7 1
+v click left
+v click left
+sleep 0.3
+[ "$(timeout 2 wl-paste -p -n)" = beta ] && echo "ok: double click selects a word" ||
+	fail "double click selects a word: '$(timeout 2 wl-paste -p -n)'"
+sleep 0.45
+at 13 1
+v click right
+sleep 0.3
+[ "$(timeout 2 wl-paste -p -n)" = 'beta gamma' ] && echo "ok: right click extends" ||
+	fail "right click extends: '$(timeout 2 wl-paste -p -n)'"
+sleep 0.45
+C l
+T 'echo alpha beta gamma' -k Return
+sleep 0.6
+at 7 0
+v click left
+v click left
+v click left
+sleep 0.3
+[ "$(timeout 2 wl-paste -p -n)" = '~$ echo alpha beta gamma' ] && echo "ok: triple click selects a line" ||
+	fail "triple click selects a line: '$(timeout 2 wl-paste -p -n)'"
+sleep 0.45
+C l
+T 'echo '
+at 40 10
+v click middle
+T -k Return
+expect "middle click pastes the primary selection" '~\$ echo alpha beta gamma'
+# reading the screen took over the primary selection
+C l
+T 'echo alpha beta gamma' -k Return
+sleep 0.6
+at 7 0
+v click left
+v click left
+v click left
+sleep 0.6
+C l
+T 'echo '
+wtype -k Shift_L -M shift -k Insert -m shift
+sleep 0.3
+T -k Return
+expect "Shift+Insert pastes the primary selection" '~\$ echo alpha beta gamma'
+
+# Dragging below the window selects what shows, and one row of autoscroll.
+C l
+T 'seq 1 200' -k Return
+sleep 0.5
+wtype -k Shift_L -M shift -k Prior -m shift
+sleep 0.3
+at 0 0
+v down left
+v move 999 699
+v up left
+sleep 0.3
+first=$(timeout 2 wl-paste -p -n | head -1)
+last=$(timeout 2 wl-paste -p -n | grep -xE '[0-9]+' | tail -1)
+n=$(timeout 2 wl-paste -p -n | wc -l)
+if [ "${n:-0}" -ge 22 ] && [ "${n:-0}" -le 25 ] && [ -n "$first" ] && [ "$last" -gt "$first" ]; then
+	echo "ok: dragging below the window selects what shows"
+else
+	fail "dragging below the window: $n lines, '$first' to '$last'"
+fi
+T 'clear' -k Return
+
+"$MWT" -e sh -c 'exit 7'
+echo "info: mwt -e of 'exit 7' ends with code $? (mt passes it on)"
+"$MWT" -e /nichtda/prog 2>"$DIR/err"
+echo "info: mwt -e of a missing program ends with code $?, stderr '$(head -1 "$DIR/err" | cut -c1-60)'"
+
+grim "$DIR/shot.png" && echo "ok: screenshot"
+
+# ---- last: this one may leave a stuck program behind ----------------------
+
+python3 -c "print(': %060d\n' * 5000 % tuple(range(5000)), end='')" >"$DIR/lines"
+T 'sleep 3017' -k Return
+wl-copy <"$DIR/lines"
+sleep 0.5
+K v
+sleep 1
+C c
+sleep 1
+if pgrep -f '^sleep 3017$' >/dev/null; then
+	fail "Ctrl+C does not get through a paste the program does not read"
+	pkill -f '^sleep 3017$'
+	pkill -f "^$MWT"
+	sleep 0.5
+	start_mwt
+else
+	echo "ok: Ctrl+C gets through a paste the program does not read"
+	T 'echo paste-weg' -k Return
+	expect "and the rest of the paste is gone" 'paste-weg'
+fi
+
+T 'exit' -k Return
+for ((i = 0; i < 20; i++)); do
+	pgrep -f "^$MWT" >/dev/null || break
+	sleep 0.2
+done
+if pgrep -f "^$MWT" >/dev/null; then fail "mwt stays after the shell exits"; else echo "ok: mwt ends with the shell"; fi
+grep -q "ERROR: AddressSanitizer\|runtime error" "$LOG" && { fail "sanitizer"; grep -m1 -A14 "AddressSanitizer\|runtime error" "$LOG"; }
+if [ "$FAILS" = 0 ]; then echo "PASS"; else echo "=== $FAILS checks failed ==="; exit 1; fi

@@ -38,6 +38,15 @@ test_vt: test_vt.c vt.c vt.h
 check: test_vt
 	./test_vt
 
+# Runs mwt under a headless sway with wtype, wl-clipboard, grim and mwc's vinput.
+test: mwt
+	tests/run.sh
+
+# The tests and the adversarial cases in a Podman container, with sanitizers too;
+# needs no compositor or tools on the host, and takes about 20 minutes.
+evil:
+	tests/container.sh
+
 install: mwt
 	install -Dm755 mwt $(DESTDIR)$(PREFIX)/bin/mwt
 	tic -x -o $(DESTDIR)$(PREFIX)/share/terminfo mwt.info
@@ -45,4 +54,4 @@ install: mwt
 clean:
 	rm -f mwt test_vt *.o $(PROTO_H) $(PROTO_C)
 
-.PHONY: all check install clean
+.PHONY: all check test evil install clean
