@@ -55,9 +55,17 @@ width: mwt
 
 install: mwt
 	install -Dm755 mwt $(DESTDIR)$(PREFIX)/bin/mwt
-	tic -x -o $(DESTDIR)$(PREFIX)/share/terminfo mwt.info
+	# Not under PREFIX: ncurses does not search /usr/local/share/terminfo.
+	install -d $(DESTDIR)/usr/share/terminfo
+	tic -x -o $(DESTDIR)/usr/share/terminfo mwt.info
+
+# Also removes the entry older versions put under PREFIX. tic picks m/ or 6d/.
+uninstall:
+	rm -f $(DESTDIR)$(PREFIX)/bin/mwt
+	rm -f $(DESTDIR)/usr/share/terminfo/m/mwt $(DESTDIR)/usr/share/terminfo/6d/mwt
+	rm -f $(DESTDIR)$(PREFIX)/share/terminfo/m/mwt $(DESTDIR)$(PREFIX)/share/terminfo/6d/mwt
 
 clean:
 	rm -f mwt test_vt *.o $(PROTO_H) $(PROTO_C)
 
-.PHONY: all check test evil width install clean
+.PHONY: all check test evil width install uninstall clean

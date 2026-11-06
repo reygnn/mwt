@@ -6,6 +6,11 @@ Offen, noch nicht bestätigt:
 
 Behoben:
 
+* Strg+L löschte nach make install nicht, und tput kannte das Terminal nicht: die
+  terminfo lag unter /usr/local/share/terminfo, wo ncurses nicht sucht, mwt setzte
+  aber TERM=mwt, weil es dort nachsah. Sie kommt jetzt nach /usr/share/terminfo,
+  und mwt sieht in /usr/local nicht mehr nach. Tests: tests/run.sh.
+
 * -g 2147483647x2147483647 stürzte ab: vt_new forderte 16 GB an, und weder
   alloc_screen noch vt_resize prüften ihre Allokationen. Das Raster ist jetzt
   auf 4096x2048 begrenzt (VT_MAX_COLS/ROWS in vt.h), -g lehnt mehr mit Code 2

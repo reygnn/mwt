@@ -1689,7 +1689,7 @@ static bool have_terminfo(const char *name)
 	for (char *tok = tdirs ? strtok(tdirs, ":") : NULL; tok && n < 10; tok = strtok(NULL, ":"))
 		dirs[n++] = tok;
 	static const char *std[] = { "/etc/terminfo", "/lib/terminfo", "/usr/share/terminfo",
-		"/usr/lib/terminfo", "/usr/local/share/terminfo" };
+		"/usr/lib/terminfo" };
 	for (size_t i = 0; i < LEN(std); i++)
 		dirs[n++] = std[i];
 	bool found = false;

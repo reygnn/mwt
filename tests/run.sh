@@ -403,7 +403,26 @@ if [ "${n:-0}" -ge 22 ] && [ "${n:-0}" -le 25 ] && [ -n "$first" ] && [ "$last" 
 else
 	fail "dragging below the window: $n lines, '$first' to '$last'"
 fi
+T 'echo strg-l-weg' -k Return
+expect "text to clear" 'strg-l-weg'
+C l
+expect_n "Ctrl+L clears the screen" 'strg-l-weg' 0
 T 'clear' -k Return
+
+# Whatever TERM mwt picks, programs must find its entry. It once set TERM=mwt for
+# an entry in /usr/local, which ncurses does not search.
+mkdir -p "$DIR/noinfo"
+HOME=$DIR/noinfo "$MWT" -e sh -c "tput clear >/dev/null && echo \"\$TERM\" >'$DIR/term'" 2>>"$LOG"
+if [ -s "$DIR/term" ]; then echo "ok: without ~/.terminfo tput knows TERM=$(cat "$DIR/term")"; else fail "without ~/.terminfo tput does not know the TERM mwt set"; fi
+if [ -x mwt ] && make -s -o mwt install DESTDIR="$DIR/dest" >>"$LOG" 2>&1 &&
+	infocmp -D | grep -qx /usr/share/terminfo &&
+	TERMINFO_DIRS=$DIR/dest/usr/share/terminfo infocmp -x mwt >/dev/null 2>&1; then
+	echo "ok: make install puts the terminfo where ncurses searches"
+else
+	fail "make install: the terminfo is not in /usr/share/terminfo"
+fi
+make -s uninstall DESTDIR="$DIR/dest" >>"$LOG" 2>&1
+if [ -z "$(find "$DIR/dest" -type f 2>/dev/null)" ]; then echo "ok: make uninstall leaves no files"; else fail "make uninstall leaves: $(find "$DIR/dest" -type f | head -3 | tr '\n' ' ')"; fi
 
 "$MWT" -e sh -c 'exit 7'
 echo "info: mwt -e of 'exit 7' ends with code $? (mt passes it on)"

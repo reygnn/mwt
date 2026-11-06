@@ -12,7 +12,8 @@ make check      # Tests für den VT-Kern (headless, mit ASan/UBSan)
 make test       # Black-Box-Tests unter headless sway (braucht sway, wtype, wl-clipboard, grim und vinput aus mwc)
 make width      # wo mwt und bash, vim oder tmux Zeichenbreiten verschieden zählen (braucht zusätzlich vim und tmux)
 make evil       # alle Tests plus Härtefälle in einem Podman-Container, auch mit Sanitizern
-sudo make install   # installiert nach /usr/local und kompiliert die terminfo
+sudo make install   # installiert mwt nach /usr/local und die terminfo nach /usr/share/terminfo
+sudo make uninstall # entfernt beides wieder
 ```
 
 Ohne Installation genügt `tic -x mwt.info`. Das legt den Eintrag unter `~/.terminfo` ab. Fehlt der Eintrag, setzt mwt `TERM=xterm-256color` und gibt dazu eine Warnung aus.
