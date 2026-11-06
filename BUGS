@@ -6,6 +6,13 @@ Offen, noch nicht bestätigt:
 
 Behoben:
 
+* -g 2147483647x2147483647 stürzte ab: vt_new forderte 16 GB an, und weder
+  alloc_screen noch vt_resize prüften ihre Allokationen. Das Raster ist jetzt
+  auf 4096x2048 begrenzt (VT_MAX_COLS/ROWS in vt.h), -g lehnt mehr mit Code 2
+  ab. vt_new gibt bei Speichermangel NULL zurück, vt_resize false, und dann
+  bleibt das Terminal, wie es war. Test: test_vt.c lässt per --wrap jede
+  Allokation in vt_new und vt_resize einmal fehlschlagen.
+
 * send_text schrieb blockierend in die Pipe des Lesers: Ein Leser, der eine
   Auswahl über 64 KiB anforderte und nicht las, hielt mwt an. Jetzt bekommt
   jeder Leser eine eigene Kopie, und der Rest geht nicht blockierend aus der

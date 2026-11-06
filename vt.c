@@ -60,17 +60,6 @@ static void fill(struct cell *l, int from, int to, struct cell b)
 		l[i] = b;
 }
 
-static struct cell **alloc_screen(int cols, int rows)
-{
-	struct cell **s = calloc(rows, sizeof *s);
-	struct cell b = { ' ', COL_DEFAULT_FG, COL_DEFAULT_BG, 0 };
-	for (int r = 0; r < rows; r++) {
-		s[r] = malloc(cols * sizeof **s);
-		fill(s[r], 0, cols, b);
-	}
-	return s;
-}
-
 static void free_screen(struct cell **s, int rows)
 {
 	if (!s)
@@ -78,6 +67,24 @@ static void free_screen(struct cell **s, int rows)
 	for (int r = 0; r < rows; r++)
 		free(s[r]);
 	free(s);
+}
+
+/* a blank screen, or NULL with nothing left allocated */
+static struct cell **alloc_screen(int cols, int rows)
+{
+	struct cell **s = calloc(rows, sizeof *s);
+	if (!s)
+		return NULL;
+	struct cell b = { ' ', COL_DEFAULT_FG, COL_DEFAULT_BG, 0 };
+	for (int r = 0; r < rows; r++) {
+		s[r] = malloc((size_t)cols * sizeof **s);
+		if (!s[r]) {
+			free_screen(s, rows);
+			return NULL;
+		}
+		fill(s[r], 0, cols, b);
+	}
+	return s;
 }
 
 static void dirty_range(struct vt *vt, int a, int b)
@@ -357,8 +364,8 @@ struct vt *vt_new(int cols, int rows, int histsize, const struct vt_callbacks *c
 	struct vt *vt = calloc(1, sizeof *vt);
 	if (!vt)
 		return NULL;
-	vt->cols = MAX(cols, 1);
-	vt->rows = MAX(rows, 1);
+	vt->cols = CLAMP(cols, 1, VT_MAX_COLS);
+	vt->rows = CLAMP(rows, 1, VT_MAX_ROWS);
 	vt->pri = alloc_screen(vt->cols, vt->rows);
 	vt->alt = alloc_screen(vt->cols, vt->rows);
 	vt->line = vt->pri;
@@ -368,6 +375,11 @@ struct vt *vt_new(int cols, int rows, int histsize, const struct vt_callbacks *c
 	if (vt->hist_cap) {
 		vt->hist = calloc(vt->hist_cap, sizeof *vt->hist);
 		vt->hist_len = calloc(vt->hist_cap, sizeof *vt->hist_len);
+	}
+	if (!vt->pri || !vt->alt || !vt->dirty || !vt->tabs ||
+	    (vt->hist_cap && (!vt->hist || !vt->hist_len))) {
+		vt_free(vt);
+		return NULL;
 	}
 	if (cb)
 		vt->cb = *cb;
@@ -381,7 +393,7 @@ void vt_free(struct vt *vt)
 		return;
 	free_screen(vt->pri, vt->rows);
 	free_screen(vt->alt, vt->rows);
-	for (int i = 0; i < vt->hist_cap; i++)
+	for (int i = 0; vt->hist && i < vt->hist_cap; i++)
 		free(vt->hist[i]);
 	free(vt->hist);
 	free(vt->hist_len);
@@ -390,22 +402,19 @@ void vt_free(struct vt *vt)
 	free(vt);
 }
 
-static struct cell **resize_screen(struct vt *vt, struct cell **old, int shift,
-				   int cols, int rows)
+/* a new screen holding what fits of old, which is left as it is */
+static struct cell **copy_screen(const struct vt *vt, struct cell **old, int shift,
+				 int cols, int rows)
 {
-	struct cell **s = calloc(rows, sizeof *s);
+	struct cell **s = alloc_screen(cols, rows);
+	if (!s)
+		return NULL;
 	struct cell b = { ' ', COL_DEFAULT_FG, COL_DEFAULT_BG, 0 };
-	for (int r = 0; r < rows; r++) {
-		s[r] = malloc(cols * sizeof **s);
-		fill(s[r], 0, cols, b);
-		int src = r + shift;
-		if (src < vt->rows) {
-			memcpy(s[r], old[src], MIN(cols, vt->cols) * sizeof **s);
-			if (cols < vt->cols && (s[r][cols - 1].attr & ATTR_WIDE))
-				s[r][cols - 1] = b;
-		}
+	for (int r = 0; r < rows && r + shift < vt->rows; r++) {
+		memcpy(s[r], old[r + shift], MIN(cols, vt->cols) * sizeof **s);
+		if (cols < vt->cols && (s[r][cols - 1].attr & ATTR_WIDE))
+			s[r][cols - 1] = b;
 	}
-	free_screen(old, vt->rows);
 	return s;
 }
 
@@ -416,24 +425,38 @@ static void clamp_cursor(struct vt_cursor *c, int cols, int rows)
 	c->wrapnext = false;
 }
 
-void vt_resize(struct vt *vt, int cols, int rows)
+bool vt_resize(struct vt *vt, int cols, int rows)
 {
-	cols = MAX(cols, 1);
-	rows = MAX(rows, 1);
+	cols = CLAMP(cols, 1, VT_MAX_COLS);
+	rows = CLAMP(rows, 1, VT_MAX_ROWS);
 	if (cols == vt->cols && rows == vt->rows)
-		return;
+		return true;
 	bool alt = vt->mode & MODE_ALTSCREEN;
 	struct vt_cursor *pc = alt ? &vt->saved_pri : &vt->c;
 	struct vt_cursor *ac = alt ? &vt->c : &vt->saved_alt;
 
-	/* keep the cursor line visible: push lines above into history */
+	/* keep the cursor line visible: lines above it go into history */
 	int pshift = MAX(0, pc->y - (rows - 1));
-	for (int i = 0; i < pshift; i++)
-		push_hist(vt, vt->pri[i], vt->cols);
 	int ashift = MAX(0, ac->y - (rows - 1));
 
-	vt->pri = resize_screen(vt, vt->pri, pshift, cols, rows);
-	vt->alt = resize_screen(vt, vt->alt, ashift, cols, rows);
+	/* everything new first, so a failure leaves the terminal as it was */
+	struct cell **npri = copy_screen(vt, vt->pri, pshift, cols, rows);
+	struct cell **nalt = copy_screen(vt, vt->alt, ashift, cols, rows);
+	bool *ndirty = calloc(rows, sizeof *ndirty);
+	bool *ntabs = calloc(cols, sizeof *ntabs);
+	if (!npri || !nalt || !ndirty || !ntabs) {
+		free_screen(npri, rows);
+		free_screen(nalt, rows);
+		free(ndirty);
+		free(ntabs);
+		return false;
+	}
+	for (int i = 0; i < pshift; i++)
+		push_hist(vt, vt->pri[i], vt->cols);
+	free_screen(vt->pri, vt->rows);
+	free_screen(vt->alt, vt->rows);
+	vt->pri = npri;
+	vt->alt = nalt;
 	vt->line = alt ? vt->alt : vt->pri;
 	pc->y -= pshift;
 	ac->y -= ashift;
@@ -444,8 +467,8 @@ void vt_resize(struct vt *vt, int cols, int rows)
 
 	free(vt->dirty);
 	free(vt->tabs);
-	vt->dirty = calloc(rows, sizeof *vt->dirty);
-	vt->tabs = calloc(cols, sizeof *vt->tabs);
+	vt->dirty = ndirty;
+	vt->tabs = ntabs;
 	vt->cols = cols;
 	vt->rows = rows;
 	reset_tabs(vt);
@@ -456,6 +479,7 @@ void vt_resize(struct vt *vt, int cols, int rows)
 	clamp_cursor(&vt->saved_alt, cols, rows);
 	vt->view = 0;
 	vt_mark_all(vt);
+	return true;
 }
 
 /* ---- printing --------------------------------------------------------- */

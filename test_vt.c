@@ -2,12 +2,31 @@
 #define _XOPEN_SOURCE 700
 #include "vt.h"
 
+#include <limits.h>
 #include <locale.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
 static int failures, checks;
+
+/* Fault injection, linked with --wrap: with countdown = n the n-th allocation
+ * from vt.c (and this file) fails, all others succeed. */
+void *__real_malloc(size_t n);
+void *__real_calloc(size_t n, size_t sz);
+void *__real_realloc(void *p, size_t n);
+static long countdown = -1;
+static bool injected;
+static bool inject(void)
+{
+	if (countdown < 0 || countdown-- > 0)
+		return false;
+	injected = true;
+	return true;
+}
+void *__wrap_malloc(size_t n) { return inject() ? NULL : __real_malloc(n); }
+void *__wrap_calloc(size_t n, size_t sz) { return inject() ? NULL : __real_calloc(n, sz); }
+void *__wrap_realloc(void *p, size_t n) { return inject() ? NULL : __real_realloc(p, n); }
 static char replybuf[256];
 static char titlebuf[256];
 
@@ -301,6 +320,57 @@ static void test_origin(void)
 	vt_free(vt);
 }
 
+static void test_alloc_failures(void)
+{
+	/* vt_new: any one allocation failing gives NULL and leaks nothing */
+	for (long n = 0;; n++) {
+		injected = false;
+		countdown = n;
+		struct vt *vt = vt_new(20, 5, 10, NULL);
+		countdown = -1;
+		if (!injected) {
+			CHECK(vt != NULL);
+			vt_free(vt);
+			break;
+		}
+		CHECK(vt == NULL);
+	}
+	/* vt_resize: a failure leaves the terminal as it was, and it goes on */
+	int fails = 0;
+	for (long n = 0;; n++) {
+		struct vt *vt = mk(10, 4, 10);
+		w(vt, "1\r\n2\r\n3\r\nabc");
+		injected = false;
+		countdown = n;
+		bool ok = vt_resize(vt, 30, 2);
+		countdown = -1;
+		if (ok) { /* no failure, or only a history line was lost */
+			CHECK(vt->cols == 30 && vt->rows == 2 && vt->c.y == 1);
+			CHECK_STR(row(vt, 1), "abc");
+		} else {
+			fails++;
+			CHECK(vt->cols == 10 && vt->rows == 4 && vt->hist_count == 0);
+			CHECK(vt->c.x == 3 && vt->c.y == 3);
+			CHECK_STR(row(vt, 0), "1");
+			CHECK_STR(row(vt, 3), "abc");
+			w(vt, "\r\nmore");
+			CHECK_STR(row(vt, 3), "more");
+			CHECK(vt->hist_count == 1);
+		}
+		vt_free(vt);
+		if (!injected)
+			break;
+	}
+	CHECK(fails > 0);
+	/* sizes are clamped, the largest grid still works */
+	struct vt *vt = mk(INT_MAX, INT_MAX, 0);
+	CHECK(vt && vt->cols == VT_MAX_COLS && vt->rows == VT_MAX_ROWS);
+	w(vt, "\033[2048;4096Hz");
+	CHECK(vt->pri[VT_MAX_ROWS - 1][VT_MAX_COLS - 1].cp == 'z');
+	CHECK(vt_resize(vt, -5, INT_MIN) && vt->cols == 1 && vt->rows == 1);
+	vt_free(vt);
+}
+
 int main(void)
 {
 	if (!setlocale(LC_CTYPE, "C.UTF-8"))
@@ -316,6 +386,7 @@ int main(void)
 	test_charset_and_misc();
 	test_resize();
 	test_origin();
+	test_alloc_failures();
 	printf("%d/%d checks passed\n", checks - failures, checks);
 	return failures != 0;
 }

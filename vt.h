@@ -68,6 +68,10 @@ struct vt_callbacks {
 	void *ud;
 };
 
+/* the grid never gets larger: 8K at the smallest font is about 1500x700 */
+#define VT_MAX_COLS 4096
+#define VT_MAX_ROWS 2048
+
 #define VT_MAX_PARAMS 24
 #define VT_OSC_MAX    1024
 
@@ -108,10 +112,12 @@ struct vt {
 	struct vt_callbacks cb;
 };
 
+/* sizes are clamped to 1..VT_MAX_*; NULL when out of memory */
 struct vt *vt_new(int cols, int rows, int histsize, const struct vt_callbacks *cb);
 void vt_free(struct vt *vt);
 void vt_write(struct vt *vt, const char *buf, size_t len);
-void vt_resize(struct vt *vt, int cols, int rows);
+/* false when out of memory, and then nothing has changed */
+bool vt_resize(struct vt *vt, int cols, int rows);
 void vt_reset(struct vt *vt);
 
 /* line as shown at screen row r with the current view offset;

@@ -33,7 +33,8 @@ font.o: font.c font.h
 	$(SCANNER) private-code $($*_XML) $@
 
 test_vt: test_vt.c vt.c vt.h
-	$(CC) -std=c11 -Wall -Wextra -g -fsanitize=address,undefined -o $@ test_vt.c vt.c
+	$(CC) -std=c11 -Wall -Wextra -g -fsanitize=address,undefined \
+		-Wl,--wrap=malloc,--wrap=calloc,--wrap=realloc -o $@ test_vt.c vt.c
 
 check: test_vt
 	./test_vt

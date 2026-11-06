@@ -980,12 +980,16 @@ static void snap_size(int cols, int rows, int *w, int *h)
 
 static void update_grid(void)
 {
-	int cols = MAX(1, (t.width * t.scale - 2 * t.pad) / t.cw);
-	int rows = MAX(1, (t.height * t.scale - 2 * t.pad) / t.ch);
+	int cols = MIN(MAX(1, (t.width * t.scale - 2 * t.pad) / t.cw), VT_MAX_COLS);
+	int rows = MIN(MAX(1, (t.height * t.scale - 2 * t.pad) / t.ch), VT_MAX_ROWS);
 	if (cols != t.vt->cols || rows != t.vt->rows) {
-		vt_resize(t.vt, cols, rows);
+		/* out of memory: keep the old grid, the rest of the window stays empty */
+		if (!vt_resize(t.vt, cols, rows))
+			fprintf(stderr, "mwt: no memory for %dx%d, staying at %dx%d\n",
+				cols, rows, t.vt->cols, t.vt->rows);
 		sel_clear();
-		struct winsize ws = { rows, cols, t.width * t.scale, t.height * t.scale };
+		struct winsize ws = { t.vt->rows, t.vt->cols,
+				      MIN(t.width * t.scale, 65535), MIN(t.height * t.scale, 65535) };
 		if (t.pty >= 0)
 			ioctl(t.pty, TIOCSWINSZ, &ws);
 	}
@@ -1798,6 +1802,27 @@ static void reap_child(void)
 	wait_child(1000);
 }
 
+/* COLSxROWS within 1..VT_MAX_COLS and 1..VT_MAX_ROWS */
+static bool parse_geometry(const char *s, int *cols, int *rows)
+{
+	char *end;
+	errno = 0;
+	long c = strtol(s, &end, 10);
+	if (errno || end == s || *end != 'x')
+		return false;
+	const char *r0 = end + 1;
+	long r = strtol(r0, &end, 10);
+	if (errno || end == r0 || *end)
+		return false;
+	if (c < 1 || r < 1 || c > VT_MAX_COLS || r > VT_MAX_ROWS) {
+		fprintf(stderr, "mwt: -g takes 1x1 up to %dx%d\n", VT_MAX_COLS, VT_MAX_ROWS);
+		return false;
+	}
+	*cols = (int)c;
+	*rows = (int)r;
+	return true;
+}
+
 static void usage(void)
 {
 	fprintf(stderr, "usage: mwt [-f font] [-a app-id] [-T title] [-g COLSxROWS] "
@@ -1818,8 +1843,7 @@ int main(int argc, char **argv)
 		case 'a': app_id = optarg; break;
 		case 'T': title = optarg; break;
 		case 'g':
-			if (sscanf(optarg, "%dx%d", &t.init_cols, &t.init_rows) != 2 ||
-			    t.init_cols < 1 || t.init_rows < 1)
+			if (!parse_geometry(optarg, &t.init_cols, &t.init_rows))
 				usage();
 			break;
 		case 'e': goto done; /* the rest is the command */
