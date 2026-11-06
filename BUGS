@@ -6,6 +6,9 @@ Offen, noch nicht bestätigt:
 
 Behoben:
 
+* Der wl_registry-Proxy wurde beim Beenden nicht freigegeben, einmalig 96 Bytes.
+  Das einzige Leck, das mwt selbst hatte. Test: tests/leaks.py, mit LeakSanitizer
+  über Scrollback, Resizes, Zoom, Skalierung, Menü und Zwischenablage.
 * mwt gab einer Paste-Quelle das nicht blockierende Ende der Pipe. Ein Programm,
   das einfach in einer Schleife schreibt, brach bei voller Pipe ab, und die Paste
   endete nach 64 KiB ohne ein Wort. wl-copy kam damit klar und zeigte es nicht.

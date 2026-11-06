@@ -38,7 +38,7 @@ echo "=== make test ==="
 tests/run.sh 2>&1 | grep -E '^(FAIL|PASS|info|=== )'
 [ "${PIPESTATUS[0]}" = 0 ] || fail=1
 echo "=== evil: timing, without sanitizers ==="
-ONLY="flood_ctrl_c flood_rss paste_integrity paste_over_16mb low_memory" tests/evil.sh || fail=1
+ONLY="flood_ctrl_c flood_rss paste_integrity paste_over_16mb low_memory soak" tests/evil.sh || fail=1
 build "$SAN" "-fsanitize=address,undefined"
 export ASAN_OPTIONS=detect_leaks=0
 echo "=== make test, sanitizers ==="
@@ -48,7 +48,7 @@ echo "=== evil under sway, sanitizers ==="
 tests/evil.sh || fail=1
 echo "=== evil under mwc, sanitizers ==="
 tests/evil-mwc.sh || fail=1
-echo "=== terminfo, keys, pixel, mouse, keyboard, sanitizers ==="
+echo "=== terminfo, keys, pixel, mouse, keyboard, leaks, sanitizers ==="
 make terminfo 2>&1 | grep -E '^(FAIL|PASS|=== )'
 [ "${PIPESTATUS[0]}" = 0 ] || fail=1
 tests/headless.sh tests/keys.py 2>&1 | grep -E '^(FAIL|PASS|info|=== )'
@@ -58,6 +58,8 @@ tests/headless.sh tests/pixel.py 2>&1 | grep -E '^(FAIL|PASS|info|=== )'
 tests/headless.sh tests/mouse.py 2>&1 | grep -E '^(FAIL|PASS|info|=== )'
 [ "${PIPESTATUS[0]}" = 0 ] || fail=1
 tests/headless.sh tests/keyboard.py 2>&1 | grep -E '^(FAIL|PASS|info|=== )'
+[ "${PIPESTATUS[0]}" = 0 ] || fail=1
+tests/headless.sh tests/leaks.py 2>&1 | grep -E '^(FAIL|PASS|info|=== )'
 [ "${PIPESTATUS[0]}" = 0 ] || fail=1
 # Known gaps in character widths are only reported. A crash or a width.sh that
 # could not run (its messages start with "width:") fails the run.

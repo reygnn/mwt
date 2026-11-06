@@ -666,8 +666,46 @@ reply_flood_raw() {
 	pkill -f 'os.write' 2>/dev/null
 	return 0
 }
-flood_rss() {
+# All that a day does, over and over, without sanitizers: what mwt holds must not
+# grow once history and caches are full. SOAK_SECONDS sets the length.
+soak() {
+	if ldd "$MWT" | grep -q asan; then
+		info "skipped: ASan's own memory would hide it"
+		return 0
+	fi
 	start_mwt
+	local pid r0 r1 f0 f1 end i=0 first=1
+	pid=$(mwtpid)
+	T 'clear' -k Return
+	end=$((SECONDS + ${SOAK_SECONDS:-150}))
+	while [ "$SECONDS" -lt "$end" ]; do
+		i=$((i + 1))
+		T 'seq -f "%078g" 1 7000; printf "\033[?1049h\033[31m漢字 äöü\033[?1049l\033]0;t'"$i"'\007\033[0m\n"' -k Return
+		swaymsg -q "[app_id=\"mwt\"] resize set $((300 + i % 7 * 90)) $((200 + i % 5 * 80))"
+		K plus; K minus
+		v move 200 150; v click right; sleep 0.1; T -k Escape
+		sel_screen; K c
+		timeout 3 wl-paste -n >/dev/null
+		echo "runde $i" | wl-copy
+		sleep 0.2
+		K v; C u
+		alive || break
+		# The first rounds fill history, glyph cache and allocator.
+		if [ "$first" = 1 ] && [ "$SECONDS" -gt $((end - ${SOAK_SECONDS:-150} / 2)) ]; then
+			first=0
+			r0=$(awk '/VmRSS/{print $2}' /proc/$pid/status)
+			f0=$(ls /proc/"$pid"/fd | wc -l)
+		fi
+	done
+	if ! alive; then gap "mwt died in the soak, round $i"; return; fi
+	r1=$(awk '/VmRSS/{print $2}' /proc/$pid/status)
+	f1=$(ls /proc/"$pid"/fd | wc -l)
+	info "soak, $i rounds: RSS $r0 kB in the middle, $r1 kB at the end; $f0 -> $f1 file descriptors"
+	if [ "$r1" -gt $((r0 + 5120)) ]; then gap "memory grows in the soak: $r0 kB to $r1 kB"; else ok "memory stays level over $i rounds"; fi
+	if [ "$f1" -gt $((f0 + 1)) ]; then gap "file descriptors grow in the soak: $f0 -> $f1"; else ok "file descriptors stay level"; fi
+}
+flood_rss() {
+	start_mwt "$SMALL_QUARANTINE"
 	local pid r0 r1
 	pid=$(mwtpid)
 	T 'yes "äöü 漢字 $(printf x%.0s {1..60})"' -k Return
@@ -677,6 +715,7 @@ flood_rss() {
 	r1=$(awk '/VmRSS/{print $2}' /proc/$pid/status)
 	C c
 	info "RSS during a flood: $r0 kB at 10 s, $r1 kB at 35 s; CPU $(ps -o %cpu= -p "$pid")%"
+	[ "$r1" -gt $((r0 + 5120)) ] && gap "memory grows during a flood: $r0 kB at 10 s, $r1 kB at 35 s"
 }
 
 # ---- start up
@@ -1061,7 +1100,7 @@ for c in dcs_swallow osc_swallow_cat fuzz noncharacters \
 	mid_char_selection drag_during_flood select_history click_clusters \
 	paste_integrity paste_bidi paste_escape ctrl_c_behind_paste paste_holds_until_return line_limits paste_over_16mb \
 	snippet_typed snippet_paste snippet_paste_no_newline \
-	stty_raw_read_in_shell inlcr tcoff cyrillic_ctrl_c cyrillic_raw copy_on_ru raw_paste_ctrl_c python_repl flood_ctrl_c flood_rss reply_flood reply_flood_raw \
+	stty_raw_read_in_shell inlcr tcoff cyrillic_ctrl_c cyrillic_raw copy_on_ru raw_paste_ctrl_c python_repl flood_ctrl_c flood_rss soak reply_flood reply_flood_raw \
 	args shells closed_stdio cwd_tricks exit_with_jobs close_ignores_hup \
 	tiny resize_storm fd_leak stalled_readers stalled_pipes silent_source plain_source flood_source fd_limit low_memory menu_abuse compositor_dies; do
 	run "$c"

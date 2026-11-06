@@ -120,6 +120,7 @@ static struct {
 	struct xkb_state *xkb_state;
 	struct xkb_compose_state *compose;
 	bool compose_fed; /* the key being handled went through compose */
+	struct wl_registry *registry;
 	int repeat_fd, repeat_rate, repeat_delay;
 	xkb_keycode_t repeat_key;
 	uint32_t serial;
@@ -2308,8 +2309,8 @@ done:;
 	t.display = wl_display_connect(NULL);
 	if (!t.display)
 		die("cannot connect to Wayland display");
-	struct wl_registry *reg = wl_display_get_registry(t.display);
-	wl_registry_add_listener(reg, &reg_listener, NULL);
+	t.registry = wl_display_get_registry(t.display);
+	wl_registry_add_listener(t.registry, &reg_listener, NULL);
 	wl_display_roundtrip(t.display);
 	if (!t.compositor || !t.shm || !t.wm_base)
 		die("compositor lacks wl_compositor, wl_shm or xdg_wm_base");
@@ -2401,6 +2402,7 @@ done:;
 
 	while (t.nxfers)
 		xfer_drop(0);
+	wl_registry_destroy(t.registry);
 	wl_display_disconnect(t.display); /* the window goes first */
 	reap_child();
 	return 0;
