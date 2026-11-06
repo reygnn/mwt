@@ -39,6 +39,16 @@ test_vt: test_vt.c vt.c vt.h
 check: test_vt
 	./test_vt
 
+test_replay: tests/replay.c vt.c vt.h
+	$(CC) -std=c11 -Wall -Wextra -g -O1 -I. -fsanitize=address,undefined \
+		-fno-sanitize-recover=all -o $@ tests/replay.c vt.c
+
+# About 290 recorded VT100 animations and ANSI files through the VT core, whole,
+# byte by byte, in random chunks and while resizing; fetched on the first run.
+# REPORT=1 lists what each file uses that mwt does not support.
+replay: test_replay
+	tests/replay.sh $(if $(REPORT),-r)
+
 # Each capability of mwt.info against the VT core. Needs python3 and ncurses.
 vtdump: tests/vtdump.c vt.c vt.h
 	$(CC) -std=c11 -Wall -Wextra -g -fsanitize=address,undefined -I. -o $@ tests/vtdump.c vt.c
@@ -83,6 +93,6 @@ uninstall:
 	rm -f $(DESTDIR)$(PREFIX)/share/terminfo/m/mwt $(DESTDIR)$(PREFIX)/share/terminfo/6d/mwt
 
 clean:
-	rm -f mwt test_vt vtdump *.o $(PROTO_H) $(PROTO_C)
+	rm -f mwt test_vt vtdump test_replay *.o $(PROTO_H) $(PROTO_C)
 
-.PHONY: all check terminfo keys pixel mouse test evil width install uninstall clean
+.PHONY: all check replay terminfo keys pixel mouse test evil width install uninstall clean

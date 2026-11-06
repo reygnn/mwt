@@ -9,6 +9,7 @@ Abhängigkeiten: wayland-client, wayland-cursor, wayland-protocols, wayland-scan
 ```sh
 make            # baut ./mwt
 make check      # Tests für den VT-Kern (headless, mit ASan/UBSan), auch ein Fuzzer
+make replay     # rund 290 alte VT100-Animationen und ANSI-Dateien durch den VT-Kern (holt sie beim ersten Mal von GitHub)
 make terminfo   # jede Fähigkeit aus mwt.info gegen den VT-Kern (braucht python3 und ncurses)
 make keys       # was mwt für Tasten und Maus sendet, gegen mwt.info (unter headless sway, wie make test)
 make pixel      # was mwt zeichnet, per Screenshot (unter headless sway, wie make test)
@@ -19,6 +20,8 @@ make evil       # alle Tests plus Härtefälle in einem Podman-Container, auch m
 sudo make install   # installiert mwt nach /usr/local und die terminfo nach /usr/share/terminfo
 sudo make uninstall # entfernt beides wieder
 ```
+
+`make replay` holt die Dateien beim ersten Lauf aus dem Netz nach `tests/vt100`. Sie sind wegen ihrer unklaren Lizenz nicht im Repository. Der Container von `make evil` hat kein Netz und überspringt den Replay, wenn sie fehlen: `tests/replay.sh --fetch` einmal auf dem Host holt sie.
 
 Ohne Installation genügt `tic -x mwt.info`. Das legt den Eintrag unter `~/.terminfo` ab. Fehlt der Eintrag, setzt mwt `TERM=xterm-256color` und gibt dazu eine Warnung aus.
 
@@ -62,6 +65,7 @@ Alles Weitere, also Farben, Schrift, Padding und Scrollback, steht in `config.h`
 | `mwt.c` | Wayland (xdg-shell, xdg-decoration, wl_shm, wl_data_device, primary selection), Tastatur über xkbcommon inklusive Compose/Dead Keys, Maus, pty, Event-Loop |
 | `mwt.info` | terminfo: deklariert nur, was `vt.c` wirklich kann |
 | `test_vt.c` | Tests für den VT-Kern |
+| `tests/replay.c` | spielt aufgezeichnete Terminalausgabe ab: am Stück, Byte für Byte, in zufälligen Stücken und mit Größenänderungen. Die ersten drei müssen gleich enden, und nach jedem Schreiben muss das Raster stimmen. `make replay REPORT=1` listet pro Datei, was mwt davon nicht kann. |
 | `tests/` | Black-Box-Tests und Härtefälle, aus dem mt-Projekt übernommen. `MWC_DIR` nennt den mwc-Quellbaum, Standard ist `../../mwc`. |
 
 Gezeichnet werden nur geänderte Zeilen. Bei Doppelpufferung wird vorher der zuletzt gezeigte Puffer kopiert. Die Ausgabe ist an Frame-Callbacks gekoppelt.

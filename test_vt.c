@@ -513,6 +513,37 @@ static void test_charset_and_misc(void)
 	vt_free(vt);
 }
 
+/* VT100 features mwt does not have, as old animations and vttest send them:
+ * they must leave text, cursor and modes as if they had not been sent. */
+static void test_unsupported_vt100(void)
+{
+	struct vt *vt = mk(10, 3, 0);
+	/* double height/width lines, single width: text stays normal */
+	w(vt, "\033#3ab\033#4cd\033#6ef\033#5gh");
+	CHECK_STR(row(vt, 0), "abcdefgh");
+	CHECK(vt->c.x == 8 && vt->c.y == 0);
+	/* 132 columns, reverse screen, smooth scroll, interlace: no change */
+	unsigned mode = vt->mode;
+	w(vt, "\033[?3h\033[?5h\033[?4h\033[?9h\033[?3l\033[?5l");
+	CHECK(vt->cols == 10 && vt->mode == mode && vt->c.x == 8);
+	/* blink is kept as an attribute */
+	w(vt, "\r\n\033[5mB\033[m");
+	CHECK(vt->pri[1][0].attr & ATTR_BLINK);
+	/* DECID, DECREQTPARM, LEDs, ENQ: no answer, nothing written */
+	replybuf[0] = 0;
+	w(vt, "\033Z\033[x\033[1x\033[1;2q\005C");
+	CHECK_STR(replybuf, "");
+	CHECK_STR(row(vt, 1), "BC");
+	/* a national set (UK) and G2/G3 shifts are plain ASCII */
+	w(vt, "\033(A#\033)A\016#\017\033*0\033nx\033o\033Ny");
+	CHECK_STR(row(vt, 1), "BC##xy");
+	CHECK(vt->c.charset[0] == 0 && vt->c.charset[1] == 0 && vt->c.gl == 0);
+	/* VT52 mode is not entered: ESC A afterwards is not "cursor up" */
+	w(vt, "\033[?2l\033Az");
+	CHECK(vt->c.y == 1 && vt->pri[1][6].cp == 'z');
+	vt_free(vt);
+}
+
 static void test_resize(void)
 {
 	struct vt *vt = mk(10, 5, 10);
@@ -616,6 +647,7 @@ int main(void)
 	test_altscreen();
 	test_replies();
 	test_charset_and_misc();
+	test_unsupported_vt100();
 	test_resize();
 	test_origin();
 	test_cursor_style_redraw();

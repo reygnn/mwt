@@ -1,6 +1,8 @@
 /mwt
 /test_vt
 /vtdump
+/test_replay
+/tests/vt100/
 *.o
 *-client-protocol.h
 *-protocol.c

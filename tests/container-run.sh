@@ -24,6 +24,15 @@ build() {
 echo "=== make check ==="
 make check 2>&1 | tail -1
 [ "${PIPESTATUS[0]}" = 0 ] || fail=1
+# No network in here: the files come with the sources if `tests/replay.sh
+# --fetch` ran on the host, otherwise this is skipped.
+echo "=== replay ==="
+if [ -d tests/vt100/videos ]; then
+	make test_replay >/dev/null && tests/replay.sh 2>&1 | grep -E '^(FAIL|replay:)|ERROR'
+	[ "${PIPESTATUS[0]}" = 0 ] || fail=1
+else
+	echo "skipped: no tests/vt100 (tests/replay.sh --fetch on the host)"
+fi
 build "-O2 -g" ""
 echo "=== make test ==="
 tests/run.sh 2>&1 | grep -E '^(FAIL|PASS|info|=== )'
