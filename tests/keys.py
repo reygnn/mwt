@@ -35,14 +35,15 @@ CAP_KEYS = {
     "khome": ("Home",), "kich1": ("Insert",), "knp": ("Next",), "kpp": ("Prior",),
     "kDC": ("Delete", "shift"), "kEND": ("End", "shift"), "kHOM": ("Home", "shift"),
     "kLFT": ("Left", "shift"), "kRIT": ("Right", "shift"), "kind": ("Down", "shift"),
-    "kri": ("Up", "shift"),
+    "kri": ("Up", "shift"), "kNXT": ("Next", "shift"), "kPRV": ("Prior", "shift"),
 }
 for n in range(1, 13):
     CAP_KEYS[f"kf{n}"] = (f"F{n}",)
     CAP_KEYS[f"kf{n + 12}"] = (f"F{n}", "shift")
 
-# Declared, but mwt keeps these keys for itself (paste, scrollback), on every screen.
-TAKEN_BY_MWT = {"kIC": ("Insert", "shift"), "kNXT": ("Next", "shift"), "kPRV": ("Prior", "shift")}
+# mwt keeps these on the normal screen (paste, scrollback): no program sees them.
+MWT_KEEPS = [("Insert", "shift"), ("Prior", "shift"), ("Next", "shift"),
+             ("Home", "shift"), ("End", "shift")]
 # Checked below by events, not by a key.
 BY_EVENT = {"kmous", "kxIN", "kxOUT"}
 
@@ -111,7 +112,7 @@ def main():
         caps = terminfo.compile_entry(d)
     # the entry for mwt itself stays where headless.sh put it
     os.environ.pop("TERMINFO", None)
-    known = set(CAP_KEYS) | set(TAKEN_BY_MWT) | BY_EVENT
+    known = set(CAP_KEYS) | BY_EVENT
     for name in sorted(n for n in caps if n.startswith("k")):
         if name not in known:
             fail(f"{name}: in mwt.info, but no key here")
@@ -119,22 +120,24 @@ def main():
         fail(f"{name}: listed here, but not in mwt.info")
 
     # As programs using terminfo run: smkx, on the alternate screen where mwt leaves
-    # Shift+Home and Shift+End to the program.
+    # the Shift keys that scroll to the program.
     log = Logger(caps["smkx"] + caps["smcup"])
     for name, spec in sorted(CAP_KEYS.items()):
         press(log, f"{name}: {'+'.join(reversed(spec))}", spec, caps[name])
-    for name, spec in sorted(TAKEN_BY_MWT.items()):
-        combo(spec[0], *spec[1:])
-        got = log.take()
-        if got == caps[name]:
-            fail(f"{name}: mwt no longer keeps this key, take it off TAKEN_BY_MWT")
-        else:
-            print(f"info: {name}: {'+'.join(reversed(spec))} never reaches a program, mwt keeps it")
+    combo("Insert", "shift")
+    time.sleep(0.3)
+    got = log.take()
+    check(got == b"", "alternate screen: Shift+Insert stays with mwt", repr(got))
     log.close()
 
     log = Logger()
     for spec, want in PLAIN:
         press(log, f"normal mode: {'+'.join(reversed(spec))}", spec, want)
+    for spec in MWT_KEEPS:
+        combo(spec[0], *spec[1:])
+        time.sleep(0.3)
+        got = log.take()
+        check(got == b"", f"normal screen: {'+'.join(reversed(spec))} stays with mwt", repr(got))
     log.close()
 
     # Focus: kxOUT when another window takes it, kxIN when it comes back.

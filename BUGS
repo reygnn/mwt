@@ -2,13 +2,15 @@ BUGS
 
 Offen, noch nicht bestätigt:
 
-* mwt.info verspricht kIC, kPRV und kNXT, aber Shift+Insert, Shift+PgUp und
-  Shift+PgDn kommen bei keinem Programm an, auch nicht im Alternate Screen, wo
-  mwt nichts zu scrollen hat. Shift+Pos1 und Shift+Ende gehen dort durch. Gewollt?
-  tests/keys.py hält den Stand in TAKEN_BY_MWT fest.
+* Zur Zeit nichts.
 
 Behoben:
 
+* mwt.info versprach kIC, kPRV und kNXT, aber Shift+Insert, Shift+PgUp und
+  Shift+PgDn kamen bei keinem Programm an. Im Alternate Screen, wo es nichts zu
+  scrollen gibt, gingen die beiden letzten verloren. Dort gehen sie jetzt ans
+  Programm wie Shift+Pos1 und Shift+Ende. Shift+Insert bleibt Einfügen, kIC ist aus
+  mwt.info gestrichen. Test: tests/keys.py.
 * Ein Wechsel der Cursorform (CSI n SP q) zeigte sich erst, wenn die Zeile aus
   anderem Grund neu gezeichnet wurde. Das Zeichnen achtete nur auf Sichtbarkeit und
   Position des Cursors. Tests: test_vt.c test_cursor_style_redraw, tests/pixel.py.

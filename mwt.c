@@ -1435,11 +1435,16 @@ static void handle_key(xkb_keycode_t code)
 		case XKB_KEY_Insert: case XKB_KEY_KP_Insert:
 			paste(true);
 			return;
+		/* The alternate screen has no scrollback, these go to the program there. */
 		case XKB_KEY_Prior: case XKB_KEY_KP_Prior:
+			if (t.vt->mode & MODE_ALTSCREEN)
+				break;
 			vt_scroll_view(t.vt, t.vt->rows - 1);
 			t.need_redraw = true;
 			return;
 		case XKB_KEY_Next: case XKB_KEY_KP_Next:
+			if (t.vt->mode & MODE_ALTSCREEN)
+				break;
 			vt_scroll_view(t.vt, -(t.vt->rows - 1));
 			t.need_redraw = true;
 			return;
