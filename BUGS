@@ -6,6 +6,15 @@ Offen, noch nicht bestätigt:
 
 Behoben:
 
+* mwt gab einer Paste-Quelle das nicht blockierende Ende der Pipe. Ein Programm,
+  das einfach in einer Schleife schreibt, brach bei voller Pipe ab, und die Paste
+  endete nach 64 KiB ohne ein Wort. wl-copy kam damit klar und zeigte es nicht.
+  Test: tests/evil.sh plain_source mit tests/stallsource.c.
+* Eine Paste-Quelle, die nie aufhört, hätte mwt den Speicher gefüllt, und der
+  Lesevorgang gab die Event-Loop kaum frei. Jetzt liest mwt höchstens 1 MiB pro
+  Durchlauf und verwirft eine Paste über 64 MiB ganz. Test: flood_source.
+* Bei Speichermangel stürzte mwt beim Kopieren und Einfügen ab: Die Rückgabe von
+  realloc blieb in put_utf8 und read_paste ungeprüft. Test: low_memory.
 * Nach einem Dead Key ging ein Ctrl+C verloren, und Return, Pfeile, Tab oder ein
   Fokuswechsel beendeten den Dead Key nicht: Das nächste a wurde auch viel später
   noch zu á. Jetzt beendet jede Taste, die nicht durch Compose geht, das Begonnene,

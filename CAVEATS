@@ -12,6 +12,7 @@ steht im README unter "Bewusst weggelassen".
   sich das Fenster sofort. Nur ein leeres $SHELL fällt auf den passwd-Eintrag
   zurück.
 * Ohne Reflow wird beim Verkleinern abgeschnitten, was nicht mehr passt.
+* Eine Paste über 64 MiB wird ganz verworfen, mit einer Meldung auf stderr.
 * Der Selektionstext reicht nur so weit, wie die Scrollback-Historie reicht
   (5000 Zeilen, siehe config.h).
 * Ein unterbrochenes DCS oder OSC (ESC P oder ESC ] ohne Abschluss) verschluckt

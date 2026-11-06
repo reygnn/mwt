@@ -180,6 +180,8 @@ static void die(const char *msg)
 /* ---- pty output ------------------------------------------------------- */
 
 #define REPLY_BACKLOG_MAX (1024 * 1024) /* bytes waiting for the pty */
+#define PASTE_MAX (64 * 1024 * 1024)    /* a larger paste is dropped whole */
+#define PASTE_TURN_MAX (1024 * 1024)    /* read in one turn of the event loop */
 
 static void flush_out(void)
 {
@@ -313,11 +315,16 @@ static void sel_range(int64_t *ba, int *bc, int64_t *ea, int *ec)
 	}
 }
 
-static void put_utf8(char **buf, size_t *len, size_t *cap, uint32_t cp)
+/* false when out of memory, and then the buffer is as it was */
+static bool put_utf8(char **buf, size_t *len, size_t *cap, uint32_t cp)
 {
 	if (*len + 5 > *cap) {
-		*cap = MAX(*cap * 2, 256);
-		*buf = realloc(*buf, *cap);
+		size_t ncap = MAX(*cap * 2, 256);
+		char *p = realloc(*buf, ncap);
+		if (!p)
+			return false;
+		*buf = p;
+		*cap = ncap;
 	}
 	unsigned char *p = (unsigned char *)*buf + *len;
 	int n;
@@ -328,6 +335,7 @@ static void put_utf8(char **buf, size_t *len, size_t *cap, uint32_t cp)
 	else { p[0] = 0xf0 | cp >> 18; p[1] = 0x80 | (cp >> 12 & 0x3f);
 		p[2] = 0x80 | (cp >> 6 & 0x3f); p[3] = 0x80 | (cp & 0x3f); n = 4; }
 	*len += n;
+	return true;
 }
 
 static char *selection_text(void)
@@ -348,18 +356,23 @@ static char *selection_text(void)
 		int c1 = a == ea ? MIN(ec, n - 1) : n - 1;
 		size_t start = len;
 		for (int c = c0; c <= c1; c++)
-			if (!(l[c].attr & ATTR_WDUMMY))
-				put_utf8(&buf, &len, &cap, l[c].cp ? l[c].cp : ' ');
+			if (!(l[c].attr & ATTR_WDUMMY) &&
+			    !put_utf8(&buf, &len, &cap, l[c].cp ? l[c].cp : ' '))
+				goto nomem;
 		bool wrapped = n > 0 && c1 == n - 1 && (l[n - 1].attr & ATTR_WRAP);
 		if (!wrapped) {
 			while (len > start && buf[len - 1] == ' ')
 				len--;
-			if (a != ea)
-				put_utf8(&buf, &len, &cap, '\n');
+			if (a != ea && !put_utf8(&buf, &len, &cap, '\n'))
+				goto nomem;
 		}
 	}
-	put_utf8(&buf, &len, &cap, 0);
-	return buf;
+	if (put_utf8(&buf, &len, &cap, 0))
+		return buf;
+nomem:
+	fputs("mwt: no memory for the selection\n", stderr);
+	free(buf);
+	return NULL;
 }
 
 static void sel_clear(void)
@@ -605,6 +618,8 @@ static void dd_data_offer(void *d, struct wl_data_device *dd, struct wl_data_off
 {
 	(void)d; (void)dd;
 	int *rank = malloc(sizeof *rank);
+	if (!rank)
+		die("out of memory");
 	*rank = 99;
 	wl_data_offer_add_listener(o, &offer_listener, rank);
 }
@@ -651,6 +666,8 @@ static void pd_data_offer(void *d, struct zwp_primary_selection_device_v1 *pd,
 {
 	(void)d; (void)pd;
 	int *rank = malloc(sizeof *rank);
+	if (!rank)
+		die("out of memory");
 	*rank = 99;
 	zwp_primary_selection_offer_v1_add_listener(o, &poffer_listener, rank);
 }
@@ -683,9 +700,12 @@ static void paste(bool primary)
 		(t.clip_offer ? wl_data_offer_get_user_data(t.clip_offer) : NULL);
 	if (!rank || *rank >= (int)LEN(mimes))
 		return;
+	/* Only our end: a source that writes in a plain loop would stop at a full pipe,
+	 * and the paste would end there without a word. */
 	int fds[2];
-	if (pipe2(fds, O_CLOEXEC | O_NONBLOCK) < 0)
+	if (pipe2(fds, O_CLOEXEC) < 0)
 		return;
+	fcntl(fds[0], F_SETFL, O_NONBLOCK);
 	if (primary)
 		zwp_primary_selection_offer_v1_receive(t.prim_offer, mimes[*rank], fds[1]);
 	else
@@ -715,16 +735,41 @@ static int utf8_seq(const unsigned char *s, size_t n)
 	return k;
 }
 
+static void drop_paste(const char *why)
+{
+	fprintf(stderr, "mwt: paste dropped: %s\n", why);
+	close(t.paste_fd);
+	t.paste_fd = -1;
+	free(t.paste_buf);
+	t.paste_buf = NULL;
+	t.paste_len = t.paste_cap = 0;
+}
+
+/* A source may never stop writing: the rest waits for the next turn of the event
+ * loop, so keys still get through, and past PASTE_MAX the paste goes whole. */
 static void read_paste(void)
 {
-	for (;;) {
+	for (size_t got = 0;;) {
+		if (got >= PASTE_TURN_MAX)
+			return;
 		if (t.paste_len + 4096 > t.paste_cap) {
-			t.paste_cap = MAX(t.paste_cap * 2, 8192);
-			t.paste_buf = realloc(t.paste_buf, t.paste_cap);
+			if (t.paste_len + 4096 > PASTE_MAX) {
+				drop_paste("larger than 64 MiB");
+				return;
+			}
+			size_t cap = MAX(t.paste_cap * 2, 8192);
+			char *p = realloc(t.paste_buf, cap);
+			if (!p) {
+				drop_paste("out of memory");
+				return;
+			}
+			t.paste_buf = p;
+			t.paste_cap = cap;
 		}
 		ssize_t n = read(t.paste_fd, t.paste_buf + t.paste_len, 4096);
 		if (n > 0) {
 			t.paste_len += n;
+			got += n;
 			continue;
 		}
 		if (n < 0 && (errno == EAGAIN || errno == EINTR))
@@ -747,15 +792,20 @@ static void read_paste(void)
 				for (int j = 1; j < k; j++)
 					cp = cp << 6 | (p[j] & 0x3f);
 			}
-			put_utf8(&buf, &len, &cap, cp);
+			if (!put_utf8(&buf, &len, &cap, cp))
+				goto nomem;
 			i += k;
 			continue;
 		}
-		if (*p < 0x80 || *p >= 0xa0)
-			put_utf8(&buf, &len, &cap, *p);
+		if ((*p < 0x80 || *p >= 0xa0) && !put_utf8(&buf, &len, &cap, *p))
+			goto nomem;
 		i++;
 	}
 	paste_text(buf ? buf : "", len);
+	free(buf);
+	return;
+nomem:
+	fputs("mwt: paste dropped: out of memory\n", stderr);
 	free(buf);
 }
 
