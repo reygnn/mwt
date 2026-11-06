@@ -48,6 +48,11 @@ test: mwt
 evil:
 	tests/container.sh
 
+# Where mwt and bash, vim or tmux count a character's width differently.
+# Needs what `make test` needs plus vim and tmux.
+width: mwt
+	tests/width.sh
+
 install: mwt
 	install -Dm755 mwt $(DESTDIR)$(PREFIX)/bin/mwt
 	tic -x -o $(DESTDIR)$(PREFIX)/share/terminfo mwt.info
@@ -55,4 +60,4 @@ install: mwt
 clean:
 	rm -f mwt test_vt *.o $(PROTO_H) $(PROTO_C)
 
-.PHONY: all check test evil install clean
+.PHONY: all check test evil width install clean

@@ -39,5 +39,8 @@ echo "=== evil under sway, sanitizers ==="
 tests/evil.sh || fail=1
 echo "=== evil under mwc, sanitizers ==="
 tests/evil-mwc.sh || fail=1
+# Known gaps in character widths: reported, they do not fail the run (yet).
+echo "=== width, sanitizers (report only) ==="
+tests/width.sh 2>&1 | grep -E '^(GAP|===)'
 [ "$fail" = 0 ] && echo "ALL PASS" || echo "SOMETHING FAILED"
 exit "$fail"

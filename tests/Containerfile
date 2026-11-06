@@ -5,7 +5,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential pkg-config libwayland-dev wayland-protocols \
     libxkbcommon-dev libfreetype-dev libfontconfig-dev ncurses-bin \
     libcairo2-dev libpango1.0-dev \
-    sway wtype wl-clipboard grim python3 \
+    sway wtype wl-clipboard grim python3 vim tmux \
     fonts-dejavu-core fontconfig procps xkb-data locales \
     libwlroots-0.19-dev libxcb1-dev libxcb-icccm4-dev libx11-dev libpixman-1-dev
 RUN useradd -m tester

@@ -10,6 +10,7 @@ Abhängigkeiten: wayland-client, wayland-cursor, wayland-protocols, wayland-scan
 make            # baut ./mwt
 make check      # Tests für den VT-Kern (headless, mit ASan/UBSan)
 make test       # Black-Box-Tests unter headless sway (braucht sway, wtype, wl-clipboard, grim und vinput aus mwc)
+make width      # wo mwt und bash, vim oder tmux Zeichenbreiten verschieden zählen (braucht zusätzlich vim und tmux)
 make evil       # alle Tests plus Härtefälle in einem Podman-Container, auch mit Sanitizern
 sudo make install   # installiert nach /usr/local und kompiliert die terminfo
 ```

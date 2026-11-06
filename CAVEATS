@@ -22,3 +22,8 @@ steht im README unter "Bewusst weggelassen".
   starten. Das ist ein Stopp im Kernel, keine Taste hilft.
 * Mit Ctrl+Shift+Buchstabe auf nicht-lateinischen Layouts ohne lateinisches
   Zweitlayout gilt die QWERTY-Position der Taste.
+* Zeichenbreiten zählt mwt mit wcwidth() aus der glibc, Zeichen ohne Breite
+  (ZWJ, VS16, kombinierende Akzente) verwirft es, auch beim Kopieren. bash
+  zählt genauso. tmux fasst Emoji-Folgen (Hautton, ZWJ, VS16) zu einem Zeichen
+  der Breite 2 zusammen, vim zählt Flaggen und Hangul-Jamo anders. Dort läuft
+  der Cursor weg. make width zeigt, wo.
