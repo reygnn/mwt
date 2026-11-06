@@ -135,6 +135,24 @@ def test_repeat_keyboard_gone():
     log.close()
 
 
+def test_keyboard_removed():
+    """The only keyboard goes away, with a key down, and later another comes."""
+    log = session(b"")
+    w = hold("x", 8000)
+    time.sleep(1.2)
+    w.send_signal(signal.SIGKILL)
+    w.wait()
+    time.sleep(0.4)
+    log.take()
+    time.sleep(1.0)
+    got = log.take(b"")
+    check(got == b"", "the last keyboard gone with a key down ends the repeat", f"{len(got)} more bytes in 1 s")
+    combo("q")
+    time.sleep(0.3)
+    expect(log, "a new keyboard works", b"q")
+    log.close()
+
+
 def main():
     path = os.path.join(mwtlib.DIR, "Compose")
     with open(path, "w", encoding="utf-8") as f:
@@ -149,6 +167,8 @@ def main():
     test_repeat_and_focus()
     test_repeat_keyboard_gone()
     mouse.close()
+    time.sleep(0.3)
+    test_keyboard_removed()
     return finish()
 
 

@@ -36,6 +36,10 @@ XML=tests/wlr-data-control-unstable-v1.xml
 	"$SCAN" private-code "$XML" "$DIR/data-control.c" &&
 	cc -std=c11 -O1 -I"$DIR" -o "$STALL" tests/stallreader.c "$DIR/data-control.c" \
 		$(pkg-config --cflags --libs wayland-client); } >"$DIR/stall.build" 2>&1 || STALL=
+# And a clipboard source that does not behave, for silent_source and flood_source.
+SRC=$DIR/stallsource
+cc -std=c11 -O1 -I"$DIR" -o "$SRC" tests/stallsource.c "$DIR/data-control.c" \
+	$(pkg-config --cflags --libs wayland-client) >>"$DIR/stall.build" 2>&1 || SRC=
 tic -x -o "$HOME/.terminfo" mwt.info || exit 1
 cat >"$DIR/sway.conf" <<'EOF'
 output HEADLESS-1 resolution 1000x700 position 0 0
@@ -853,6 +857,166 @@ stalled_pipes() {
 	kill "$sp" 2>/dev/null
 	wait "$sp" 2>/dev/null
 }
+# A source that takes a paste and sends nothing: mwt must not wait for it.
+silent_source() {
+	[ -n "$SRC" ] || { info "stallsource did not build"; return 0; }
+	start_mwt
+	local sp pid a b i
+	pid=$(mwtpid)
+	"$SRC" silent 60 >"$DIR/src.out" 2>&1 &
+	sp=$!
+	sleep 0.5
+	K v
+	sleep 0.5
+	grep -q '^send' "$DIR/src.out" || gap "the source was never asked: $(head -c 200 "$DIR/src.out")"
+	T 'echo trotz-paste' -k Return
+	if try 5 'trotz-paste'; then ok "typing goes on while a paste source sends nothing"; else gap "a paste source that sends nothing blocks mwt"; fi
+	a=$(ls /proc/"$pid"/fd | wc -l)
+	for ((i = 0; i < 20; i++)); do K v; done
+	b=$(ls /proc/"$pid"/fd | wc -l)
+	if [ "$b" -gt $((a + 1)) ]; then gap "20 pastes from a silent source: file descriptors $a -> $b"; else ok "20 pastes from a silent source keep the file descriptors, $a -> $b"; fi
+	kill "$sp" 2>/dev/null
+	wait "$sp" 2>/dev/null
+	sleep 0.5
+	C u
+	T 'echo nach-quelle' -k Return
+	try 5 'nach-quelle' && ok "and it ends with the source" || gap "no prompt after the silent source ended"
+}
+# A source that writes in a plain loop and takes a failed write for the end. mwt
+# once gave it the non-blocking end of the pipe, which cut a paste off at 64 KiB.
+plain_source() {
+	[ -n "$SRC" ] || { info "stallsource did not build"; return 0; }
+	start_mwt
+	local sp got
+	T 'stty -echo; cat >~/plain.txt; stty echo' -k Return
+	sleep 0.3
+	"$SRC" plain 30 >"$DIR/src.out" 2>&1 &
+	sp=$!
+	sleep 0.5
+	K v
+	sleep 3
+	C d
+	sleep 0.5
+	got=$(stat -c %s "$HOME/plain.txt" 2>/dev/null)
+	if [ "$got" = $((16 * 65520)) ]; then ok "a source writing in a plain loop: all of its $got bytes arrive"; else gap "a source writing in a plain loop: $got of $((16 * 65520)) bytes arrive"; fi
+	kill "$sp" 2>/dev/null
+	wait "$sp" 2>/dev/null
+}
+# A source that never stops writing: mwt must stay usable and must not fill memory.
+flood_source() {
+	[ -n "$SRC" ] || { info "stallsource did not build"; return 0; }
+	start_mwt "$SMALL_QUARANTINE"
+	local sp pid r0 r1
+	pid=$(mwtpid)
+	"$SRC" flood 40 >"$DIR/src.out" 2>&1 &
+	sp=$!
+	sleep 0.5
+	r0=$(awk '/VmRSS/{print $2}' /proc/$pid/status)
+	K v
+	sleep 5
+	grep -q '^send' "$DIR/src.out" || gap "the source was never asked: $(head -c 200 "$DIR/src.out")"
+	r1=$(awk '/VmRSS/{print $2}' /proc/$pid/status)
+	info "RSS during a paste that does not end: $r0 kB before, $r1 kB after 5 s; $(grep -c 'paste dropped' "$LOG") dropped"
+	[ "${r1:-0}" -gt $((r0 + 204800)) ] && gap "a paste that does not end fills memory: $r0 kB to $r1 kB in 5 s"
+	grep -q 'paste dropped' "$LOG" || gap "a paste that does not end is not dropped"
+	C c
+	T 'echo trotz-flut' -k Return
+	if try 5 'trotz-flut'; then ok "typing goes on during a paste that does not end"; else gap "a paste that does not end blocks mwt"; fi
+	kill "$sp" 2>/dev/null
+	wait "$sp" 2>/dev/null
+	sleep 1
+	alive || gap "mwt died with a paste that does not end"
+}
+# Runs mwt with its exit code in $DIR/rc, which tells a crash from a clean end.
+start_rc() {
+	LOG=$DIR/log.$CASE
+	rm -f "$DIR/rc"
+	(cd "$HOME" && sh -c '"$@" >>"'"$LOG"'" 2>&1; echo $? >"'"$DIR/rc"'"' sh "$@" &)
+	sleep 1.5
+}
+# A crash is a gap, ending with a message is fine.
+rc_ok() {
+	local rc
+	alive && return 0
+	for ((rc = 0; rc < 25; rc++)); do [ -s "$DIR/rc" ] && break; sleep 0.2; done
+	rc=$(cat "$DIR/rc" 2>/dev/null)
+	if [ "${rc:-999}" -ge 128 ]; then gap "$1: mwt ended with code ${rc:-unknown}"; tail -3 "$LOG" | cut -c1-110; fi
+	return 0
+}
+fd_limit() {
+	local n
+	for n in 4 5 6 7 8 9 10 12 16; do
+		start_rc prlimit --nofile=$n:$n "$MWT"
+		T 'echo wenig-fds' -k Return
+		rc_ok "started with $n file descriptors"
+		info "$n file descriptors: $(alive && echo runs || echo "ends with code $(cat "$DIR/rc" 2>/dev/null)")"
+		check_log
+		stop_mwt
+	done
+	# Taken away while it runs: a new pipe or an fd in a message can fail.
+	start_rc "$MWT"
+	local pid used
+	pid=$(mwtpid)
+	T 'seq 1 200' -k Return
+	sleep 0.5
+	used=$(ls /proc/"$pid"/fd | wc -l)
+	prlimit --pid "$pid" --nofile=$used:$used
+	echo klemmt | wl-copy
+	sleep 0.3
+	K v
+	sel_screen
+	K c
+	timeout 2 wl-paste -n >/dev/null
+	T 'echo noch-da' -k Return
+	rc_ok "file descriptors taken away while it runs"
+	if alive; then
+		prlimit --pid "$pid" --nofile=1024:1024
+		C u
+		T 'echo wieder-da' -k Return
+		try 5 'wieder-da' && ok "no file descriptors left, and it works again once there are" || gap "mwt does not recover when file descriptors are back"
+	else
+		ok "no file descriptors left: mwt ends cleanly"
+	fi
+}
+# ASan reserves terabytes, so only without sanitizers.
+low_memory() {
+	if ldd "$MWT" | grep -q asan; then
+		info "skipped: built with ASan, which cannot run under a limit"
+		return 0
+	fi
+	local mb pid vm
+	for mb in 8 16 24 32 48 64 96 128; do
+		start_rc prlimit --as=$((mb * 1048576)) "$MWT"
+		T 'seq 1 300' -k Return
+		sleep 0.3
+		rc_ok "started with $mb MB"
+		info "$mb MB: $(alive && echo runs || echo "ends with code $(cat "$DIR/rc" 2>/dev/null)")"
+		stop_mwt
+	done
+	# Used up while it runs: history, a large window, zoom, a large selection.
+	start_rc "$MWT"
+	pid=$(mwtpid)
+	vm=$(awk '/VmSize/{print $2}' /proc/$pid/status)
+	prlimit --pid "$pid" --as=$(((vm + 4096) * 1024))
+	T 'seq -f "%078g" 1 6000' -k Return
+	sleep 3
+	rc_ok "out of memory in the scrollback"
+	swaymsg -q '[app_id="mwt"] resize set 970 670' 2>/dev/null
+	sleep 0.5
+	K plus; K plus; K plus; K plus
+	sleep 0.5
+	rc_ok "out of memory on a resize and a zoom"
+	K a
+	K c
+	sleep 0.5
+	timeout 3 wl-paste -n >/dev/null
+	wl-copy <"$DIR/integrity.txt"
+	sleep 0.5
+	K v
+	sleep 1
+	rc_ok "out of memory on a large copy and paste"
+	alive && ok "mwt lives on a tight memory limit" || ok "mwt ends cleanly when memory runs out"
+}
 menu_abuse() {
 	start_mwt
 	T 'yes menu' -k Return
@@ -899,7 +1063,7 @@ for c in dcs_swallow osc_swallow_cat fuzz noncharacters \
 	snippet_typed snippet_paste snippet_paste_no_newline \
 	stty_raw_read_in_shell inlcr tcoff cyrillic_ctrl_c cyrillic_raw copy_on_ru raw_paste_ctrl_c python_repl flood_ctrl_c flood_rss reply_flood reply_flood_raw \
 	args shells closed_stdio cwd_tricks exit_with_jobs close_ignores_hup \
-	tiny resize_storm fd_leak stalled_readers stalled_pipes menu_abuse compositor_dies; do
+	tiny resize_storm fd_leak stalled_readers stalled_pipes silent_source plain_source flood_source fd_limit low_memory menu_abuse compositor_dies; do
 	run "$c"
 done
 echo "=== $GAPS gaps, $CRASHES crashes ==="
