@@ -869,10 +869,12 @@ menu_abuse() {
 		esac
 		alive || break
 	done
+	# The last round can leave the menu open, and it would take the Ctrl+C.
+	T -k Escape
 	C c
 	sleep 0.5
 	if alive; then ok "the menu through a flood, a resize and a zoom"; else gap "the context menu killed mwt"; fi
-	T -k Escape
+	pgrep -x yes >/dev/null && gap "Ctrl+C does not reach the flood after the menu closed"
 	T 'sleep 1; exit' -k Return
 	v move 300 200
 	v click right
