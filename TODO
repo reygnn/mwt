@@ -8,13 +8,8 @@ TODO
   Abnahme: tests/width.sh schaltet den Modus ein, und die tmux-Fälle laufen
   ohne GAP. Die vim-Fälle (Flaggen, Jamo) zählen nicht: vim zählt selbst.
 
-Tests, die noch fehlen, nach Nutzen sortiert:
+Tests, die noch fehlen, als Kür:
 
-* Rest des VT-Kerns, ein kleiner Test in test_vt.c genügt: IND, NEL, SO/SI, G1.
-  Der Rest ist durch make terminfo und make pixel abgedeckt, DECALN braucht keiner.
-* Lecks und Dauerlast: tests/evil.sh und tests/container-run.sh schalten die
-  Leckerkennung ab, flood_rss gibt nur Zahlen aus und schlägt nie fehl. Ein Lauf
-  mit LSan und ein Dauertest mit RSS-Grenze.
 * Andere Compositoren (weston, labwc), auch wegen fehlender Protokolle. vttest und
   esctest. Bildschirmvergleich gegen tmux capture-pane mit aufgezeichneten
   Sitzungen von vim oder htop.

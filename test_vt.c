@@ -560,6 +560,40 @@ static void test_resize(void)
 	vt_free(vt);
 }
 
+static void test_index_and_charsets(void)
+{
+	struct vt *vt = mk(5, 3, 10);
+	/* IND keeps the column, and scrolls at the bottom */
+	w(vt, "a\033Db");
+	CHECK(vt->pri[1][1].cp == 'b' && vt->c.y == 1 && vt->c.x == 2);
+	w(vt, "\033[3;2H\033D");
+	CHECK(vt->c.y == 2 && vt->c.x == 1 && vt->hist_count == 1);
+	CHECK_STR(row(vt, 0), " b");
+	/* NEL goes to the start of the next row, and scrolls too */
+	w(vt, "\033[1;4H\033E");
+	CHECK(vt->c.y == 1 && vt->c.x == 0);
+	w(vt, "\033[3;4H\033E");
+	CHECK(vt->c.y == 2 && vt->c.x == 0 && vt->hist_count == 2);
+	vt_free(vt);
+
+	vt = mk(10, 3, 0);
+	/* G1 is ASCII until it is set: SO alone changes nothing */
+	w(vt, "\016q\017");
+	CHECK(vt->pri[0][0].cp == 'q');
+	/* with G1 as line drawing SO and SI switch, and G0 stays */
+	w(vt, "\033)0q\016q\017q");
+	CHECK(vt->pri[0][1].cp == 'q' && vt->pri[0][2].cp == 0x2500 && vt->pri[0][3].cp == 'q');
+	/* G0 as line drawing does not touch G1 */
+	w(vt, "\033)B\033(0q\016q\017q\033(B");
+	CHECK(vt->pri[0][4].cp == 0x2500 && vt->pri[0][5].cp == 'q' && vt->pri[0][6].cp == 0x2500);
+	/* DECSC and DECRC take the charsets along, and the position */
+	w(vt, "\033[2;1H\033)0\016\0337\017\033)Bq");
+	CHECK(vt->pri[1][0].cp == 'q' && vt->c.gl == 0);
+	w(vt, "\0338q");
+	CHECK(vt->pri[1][0].cp == 0x2500 && vt->c.gl == 1 && vt->c.x == 1);
+	vt_free(vt);
+}
+
 /* the display draws dirty rows, and a new cursor shape must reach the screen */
 static void test_cursor_style_redraw(void)
 {
@@ -651,6 +685,7 @@ int main(void)
 	test_resize();
 	test_origin();
 	test_cursor_style_redraw();
+	test_index_and_charsets();
 	test_alloc_failures();
 	test_fuzz();
 	printf("%d/%d checks passed\n", checks - failures, checks);
