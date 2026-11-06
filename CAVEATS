@@ -5,6 +5,8 @@ steht im README unter "Bewusst weggelassen".
 
 * mwt -e gibt immer 0 zurück, auch wenn der Befehl fehlschlägt oder nicht
   startet. Die Fehlermeldung landet im Fenster, das sich sofort schließt.
+* Beim Schließen des Fensters bekommt die Shell SIGHUP. Ignoriert sie das, folgt
+  nach zwei Sekunden SIGKILL. Ihre Hintergrundjobs bleiben unberührt.
 * Ist $SHELL nicht ausführbar oder kein absoluter Pfad (SHELL=bash), schließt
   sich das Fenster sofort. Nur ein leeres $SHELL fällt auf den passwd-Eintrag
   zurück.

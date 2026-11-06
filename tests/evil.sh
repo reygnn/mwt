@@ -28,6 +28,14 @@ export LANG=C.UTF-8 LC_ALL=C.UTF-8
 export ASAN_OPTIONS=detect_leaks=0 UBSAN_OPTIONS=print_stacktrace=1
 unset WAYLAND_DISPLAY DISPLAY MWC_ACTIVE MWC_INACTIVE
 printf 'PS1="\\w\\$ "\nunset PROMPT_COMMAND\n' >"$HOME/.bashrc"
+# A clipboard reader that asks and never reads, for stalled_pipes.
+STALL=$DIR/stallreader
+SCAN=$(pkg-config --variable=wayland_scanner wayland-scanner)
+XML=tests/wlr-data-control-unstable-v1.xml
+{ "$SCAN" client-header "$XML" "$DIR/wlr-data-control-unstable-v1-client-protocol.h" &&
+	"$SCAN" private-code "$XML" "$DIR/data-control.c" &&
+	cc -std=c11 -O1 -I"$DIR" -o "$STALL" tests/stallreader.c "$DIR/data-control.c" \
+		$(pkg-config --cflags --libs wayland-client); } >"$DIR/stall.build" 2>&1 || STALL=
 tic -x -o "$HOME/.terminfo" mwt.info || exit 1
 cat >"$DIR/sway.conf" <<'EOF'
 output HEADLESS-1 resolution 1000x700 position 0 0
@@ -695,6 +703,21 @@ exit_with_jobs() {
 	pgrep -x sleep >/dev/null && info "a background 'sleep 1000' outlives the window (HUP not delivered to it)"
 	pkill -f 'while :' 2>/dev/null
 }
+close_ignores_hup() {
+	start_mwt
+	T "exec sh -c \"trap '' HUP; while :; do sleep 1; done\"" -k Return
+	sleep 0.5
+	local pid
+	pid=$(mwtpid)
+	swaymsg -q '[app_id="mwt"] kill'
+	sleep 0.5
+	swaymsg -t get_tree | grep -q '"app_id": "mwt"' && gap "the window stays up while mwt waits for the shell"
+	sleep 3.5
+	if kill -0 "$pid" 2>/dev/null; then gap "mwt runs on without a window: its shell ignores SIGHUP"; else ok "a shell that ignores SIGHUP does not keep mwt after the window is closed"; fi
+	pgrep -f "trap '' HUP" >/dev/null && info "the shell outlives mwt"
+	pkill -9 -f "trap '' HUP" 2>/dev/null
+	return 0
+}
 
 # ---- window
 tiny() {
@@ -760,6 +783,30 @@ stalled_readers() {
 	if try 6 'responsive'; then ok "14 readers that do not read"; else gap "stalled clipboard readers block mwt"; fi
 	sleep 7
 }
+# wl-paste reads everything into a file of its own first and never stalls, so
+# stalled_readers cannot catch a source that writes blocking. stallreader can.
+stalled_pipes() {
+	[ -n "$STALL" ] || { info "stallreader did not build"; return 0; }
+	start_mwt
+	T "seq -f '%078g' 1 6000" -k Return
+	sleep 4
+	sel_history
+	K c
+	local want got sp
+	want=$(timeout 5 wl-paste -n | wc -c)
+	"$STALL" 3 60 >"$DIR/stall.out" 2>&1 &
+	sp=$!
+	sleep 1
+	grep -q stalled "$DIR/stall.out" || info "stallreader: $(head -1 "$DIR/stall.out")"
+	T 'echo responsive' -k Return
+	if try 3 'responsive'; then ok "3 readers that ask for $want bytes and never read"; else gap "a clipboard reader that does not read blocks mwt"; fi
+	got=$(timeout 5 wl-paste -n | wc -c)
+	if [ "$got" = "$want" ]; then ok "the clipboard is served whole next to them ($got bytes)"; else gap "clipboard next to stalled readers: $got of $want bytes"; fi
+	# still within the readers' 60 s, so nothing above got through by their exit
+	kill -0 "$sp" 2>/dev/null || info "stallreader ended early, the checks above prove less"
+	kill "$sp" 2>/dev/null
+	wait "$sp" 2>/dev/null
+}
 compositor_dies() {
 	start_mwt
 	T 'sleep 777' -k Return
@@ -777,8 +824,8 @@ for c in dcs_swallow osc_swallow_cat fuzz noncharacters \
 	paste_integrity paste_bidi paste_escape ctrl_c_behind_paste paste_holds_until_return line_limits paste_over_16mb \
 	snippet_typed snippet_paste snippet_paste_no_newline \
 	stty_raw_read_in_shell inlcr tcoff cyrillic_ctrl_c cyrillic_raw copy_on_ru raw_paste_ctrl_c python_repl flood_ctrl_c flood_rss \
-	args shells closed_stdio cwd_tricks exit_with_jobs \
-	tiny resize_storm fd_leak stalled_readers compositor_dies; do
+	args shells closed_stdio cwd_tricks exit_with_jobs close_ignores_hup \
+	tiny resize_storm fd_leak stalled_readers stalled_pipes compositor_dies; do
 	run "$c"
 done
 echo "=== $GAPS gaps, $CRASHES crashes ==="

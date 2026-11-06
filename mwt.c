@@ -53,6 +53,14 @@ struct buffer {
 	bool busy;
 };
 
+/* a clipboard transfer to one reader, fed from the event loop */
+struct xfer {
+	int fd;
+	char *data;
+	size_t len, off;
+};
+#define MAX_XFERS 16
+
 enum { SEL_CHAR = 1, SEL_WORD, SEL_LINE };
 
 static const char *mimes[] = {
@@ -144,6 +152,8 @@ static struct {
 	char *paste_buf;
 	size_t paste_len, paste_cap;
 	bool paste_latin1;
+	struct xfer xfers[MAX_XFERS];
+	int nxfers;
 } t = { .pty = -1, .repeat_fd = -1, .paste_fd = -1, .child_fd = -1, .scale = 1 };
 
 static void die(const char *msg)
@@ -363,23 +373,57 @@ static char *to_latin1(const char *s)
 	return out;
 }
 
+/* slots stay in age order, oldest first */
+static void xfer_drop(int i)
+{
+	close(t.xfers[i].fd);
+	free(t.xfers[i].data);
+	t.nxfers--;
+	memmove(&t.xfers[i], &t.xfers[i + 1], (t.nxfers - i) * sizeof t.xfers[0]);
+}
+
+/* write what the pipe takes now; false once the transfer is over */
+static bool xfer_step(struct xfer *x)
+{
+	while (x->off < x->len) {
+		ssize_t n = write(x->fd, x->data + x->off, x->len - x->off);
+		if (n < 0 && errno == EINTR)
+			continue;
+		if (n < 0)
+			return errno == EAGAIN; /* EPIPE: the reader went away */
+		x->off += n;
+	}
+	return false;
+}
+
+static void xfers_run(void)
+{
+	for (int i = t.nxfers - 1; i >= 0; i--)
+		if (!xfer_step(&t.xfers[i]))
+			xfer_drop(i);
+}
+
+/*
+ * Never write to a reader's pipe blocking: a reader that stops reading would
+ * stop mwt with it. Each reader gets its own copy, so a new selection does not
+ * change a transfer under way, and the rest goes out from the event loop. When
+ * all slots hang on readers that do not read, the oldest is cut off.
+ */
 static void send_text(const char *text, const char *mime, int fd)
 {
-	char *latin1 = text && !strcmp(mime, "STRING") ? to_latin1(text) : NULL;
-	if (latin1)
-		text = latin1;
-	size_t len = text ? strlen(text) : 0, off = 0;
-	while (off < len) {
-		ssize_t n = write(fd, text + off, len - off);
-		if (n < 0) {
-			if (errno == EINTR)
-				continue;
-			break;
-		}
-		off += n;
+	char *data = text && !strcmp(mime, "STRING") ? to_latin1(text) :
+		     strdup(text ? text : "");
+	if (!data || fcntl(fd, F_SETFL, fcntl(fd, F_GETFL) | O_NONBLOCK) < 0) {
+		free(data);
+		close(fd);
+		return;
 	}
-	free(latin1);
-	close(fd);
+	if (t.nxfers == MAX_XFERS)
+		xfer_drop(0);
+	struct xfer *x = &t.xfers[t.nxfers++];
+	*x = (struct xfer){ fd, data, strlen(data), 0 };
+	if (!xfer_step(x))
+		xfer_drop(t.nxfers - 1);
 }
 
 static int mime_rank(const char *mime)
@@ -1708,6 +1752,52 @@ static void read_pty(void)
 
 /* ---- main ------------------------------------------------------------- */
 
+static int64_t now_ms(void)
+{
+	struct timespec ts;
+	clock_gettime(CLOCK_MONOTONIC, &ts);
+	return (int64_t)ts.tv_sec * 1000 + ts.tv_nsec / 1000000;
+}
+
+/* true once the child is reaped, waiting at most ms */
+static bool wait_child(int ms)
+{
+	int64_t end = now_ms() + ms;
+	for (;;) {
+		pid_t r = waitpid(t.child, NULL, WNOHANG);
+		if (r == t.child || (r < 0 && errno == ECHILD))
+			return true;
+		int64_t left = end - now_ms();
+		if (left <= 0)
+			return false;
+		/* without a pidfd (kernel < 5.3) this polls every 20 ms */
+		struct pollfd p = { t.child_fd, POLLIN, 0 };
+		poll(&p, 1, t.child_fd >= 0 ? (int)left : (int)MIN(left, 20));
+	}
+}
+
+/*
+ * Closing the master hangs up the session, SIGHUP goes to the shell as well.
+ * A shell that ignores both gets two seconds and then SIGKILL; its jobs are
+ * not touched. Should even that not reap it (stuck in the kernel), mwt goes
+ * anyway and leaves it to init rather than hang on with no window.
+ */
+static void reap_child(void)
+{
+	if (t.child <= 0)
+		return;
+	if (t.pty >= 0) {
+		close(t.pty);
+		t.pty = -1;
+	}
+	kill(t.child, SIGHUP);
+	if (wait_child(2000))
+		return;
+	fprintf(stderr, "mwt: shell ignores SIGHUP, sending SIGKILL\n");
+	kill(t.child, SIGKILL);
+	wait_child(1000);
+}
+
 static void usage(void)
 {
 	fprintf(stderr, "usage: mwt [-f font] [-a app-id] [-T title] [-g COLSxROWS] "
@@ -1817,14 +1907,17 @@ done:;
 			wl_display_dispatch_pending(t.display);
 		bool wl_out = wl_display_flush(t.display) < 0 && errno == EAGAIN;
 
-		struct pollfd fds[5] = {
+		struct pollfd fds[5 + MAX_XFERS] = {
 			{ wlfd, POLLIN | (wl_out ? POLLOUT : 0), 0 },
 			{ t.pty, POLLIN | (t.out_len ? POLLOUT : 0), 0 },
 			{ t.repeat_fd, POLLIN, 0 },
 			{ t.paste_fd, POLLIN, 0 },
 			{ t.child_fd, POLLIN, 0 },
 		};
-		if (poll(fds, 5, -1) < 0) {
+		int nx = t.nxfers;
+		for (int i = 0; i < nx; i++)
+			fds[5 + i] = (struct pollfd){ t.xfers[i].fd, POLLOUT, 0 };
+		if (poll(fds, 5 + nx, -1) < 0) {
 			wl_display_cancel_read(t.display);
 			if (errno == EINTR)
 				continue;
@@ -1853,12 +1946,17 @@ done:;
 			read_paste();
 		if (fds[4].revents & POLLIN)
 			t.running = false; /* the pty may stay open, held by jobs */
+		/* slots may have moved during dispatch, so try them all */
+		for (int i = 0; i < nx; i++)
+			if (fds[5 + i].revents) {
+				xfers_run();
+				break;
+			}
 	}
 
-	if (t.child > 0) {
-		kill(t.child, SIGHUP);
-		waitpid(t.child, NULL, 0);
-	}
-	wl_display_disconnect(t.display);
+	while (t.nxfers)
+		xfer_drop(0);
+	wl_display_disconnect(t.display); /* the window goes first */
+	reap_child();
 	return 0;
 }

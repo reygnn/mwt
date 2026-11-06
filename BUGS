@@ -2,10 +2,18 @@ BUGS
 
 Offen, noch nicht bestätigt:
 
-* send_text schreibt blockierend in die Pipe des Lesers. Liest ein Client eine
-  große Auswahl nicht ab, könnte mwt stehen bleiben. Nur aus dem Code gelesen:
-  tests/evil.sh (stalled_readers) ist grün, aber wl-paste puffert vermutlich
-  selbst und löst den Fall dann nicht aus.
-* Am Ende von main wartet waitpid ohne Zeitlimit auf das Kind. Ignoriert es
-  SIGHUP, könnte mwt nach dem Schließen des Fensters unsichtbar weiterlaufen.
-  Nur aus dem Code gelesen.
+* Zur Zeit nichts.
+
+Behoben:
+
+* send_text schrieb blockierend in die Pipe des Lesers: Ein Leser, der eine
+  Auswahl über 64 KiB anforderte und nicht las, hielt mwt an. Jetzt bekommt
+  jeder Leser eine eigene Kopie, und der Rest geht nicht blockierend aus der
+  Event-Loop. Bei 16 hängenden Lesern wird der älteste abgeschnitten. Test:
+  tests/evil.sh stalled_pipes mit tests/stallreader.c, der anfragt und nie
+  liest (wl-paste puffert selbst und konnte den Fall nicht auslösen).
+* Am Ende von main wartete waitpid ohne Zeitlimit auf das Kind. Ignorierte es
+  SIGHUP, blieb das Fenster stehen und mwt lief weiter. Jetzt geht das Fenster
+  zuerst, der Master wird geschlossen, die Shell bekommt SIGHUP, nach zwei
+  Sekunden SIGKILL, und nach einer weiteren Sekunde geht mwt in jedem Fall.
+  Jobs der Shell werden nicht angefasst. Test: tests/evil.sh close_ignores_hup.
