@@ -154,6 +154,19 @@ static struct {
 	bool paste_latin1;
 	struct xfer xfers[MAX_XFERS];
 	int nxfers;
+
+	/* context menu, a popup with its own surface and buffer */
+	struct {
+		struct wl_surface *surface;
+		struct xdg_surface *xsurface;
+		struct xdg_popup *popup;
+		struct buffer bufs[2]; /* a compositor may hold on to the one it shows */
+		int w, h; /* logical */
+		int row_h; /* buffer pixels */
+		int hover, pressed; /* item, or -1 */
+		bool configured, dirty;
+	} menu;
+	struct wl_surface *ptr_surface; /* the surface the pointer is on */
 } t = { .pty = -1, .repeat_fd = -1, .paste_fd = -1, .child_fd = -1, .scale = 1 };
 
 static void die(const char *msg)
@@ -1009,6 +1022,223 @@ static void draw(void)
 	t.need_redraw = false;
 }
 
+/* ---- context menu ----------------------------------------------------- */
+
+static void paste_clipboard(void)
+{
+	paste(false);
+}
+
+static const struct {
+	const char *label, *keys;
+	void (*run)(void);
+} menu_items[] = {
+	{ "Copy", "Ctrl+Shift+C", copy_clipboard },
+	{ "Paste", "Ctrl+Shift+V", paste_clipboard },
+	{ "Select all", "Ctrl+Shift+A", select_all },
+};
+#define MENU_COLS 26
+
+static bool in_menu(void)
+{
+	return t.menu.surface && t.ptr_surface == t.menu.surface;
+}
+
+static bool menu_enabled(int i)
+{
+	return menu_items[i].run == copy_clipboard ? t.sel.active :
+	       menu_items[i].run == paste_clipboard ? t.clip_offer != NULL : true;
+}
+
+static void menu_close(void)
+{
+	if (!t.menu.popup)
+		return;
+	if (t.ptr_surface == t.menu.surface)
+		t.ptr_surface = NULL;
+	xdg_popup_destroy(t.menu.popup);
+	xdg_surface_destroy(t.menu.xsurface);
+	wl_surface_destroy(t.menu.surface);
+	for (int i = 0; i < 2; i++) {
+		struct buffer *b = &t.menu.bufs[i];
+		if (b->wb) {
+			wl_buffer_destroy(b->wb);
+			munmap(b->data, b->size);
+		}
+	}
+	memset(&t.menu, 0, sizeof t.menu);
+}
+
+static void menu_text(struct buffer *b, const char *s, int x, int y, uint32_t fg)
+{
+	for (; *s; s++, x += t.cw) {
+		const struct glyph *g = font_glyph(t.font, (unsigned char)*s, STYLE_REGULAR);
+		if (g->w)
+			blit(b, g, x, y, 0, b->w, 0, b->h, fg);
+	}
+}
+
+/* the buffer free to draw in, or NULL */
+static struct buffer *menu_buffer(void)
+{
+	for (int i = 0; i < 2; i++)
+		if (!t.menu.bufs[i].busy)
+			return &t.menu.bufs[i];
+	return NULL;
+}
+
+static void menu_draw(struct buffer *b)
+{
+	int W = t.menu.w * t.scale, H = t.menu.h * t.scale;
+	if (b->w != W || b->h != H) {
+		if (!buffer_init(b, W, H)) {
+			menu_close();
+			return;
+		}
+	}
+	int border = t.scale;
+	fill_rect(b, 0, 0, W, H, color_sel_bg);
+	fill_rect(b, border, border, W - 2 * border, H - 2 * border, color_bg);
+	for (int i = 0; i < (int)LEN(menu_items); i++) {
+		int y = border + i * t.menu.row_h;
+		bool on = menu_enabled(i), hover = i == t.menu.hover;
+		uint32_t fg = !on ? blend(color_bg, color_fg, 110) & 0xffffff : color_fg;
+		if (hover) {
+			fill_rect(b, border, y, W - 2 * border, t.menu.row_h, color_sel_bg);
+			fg = color_sel_fg;
+		}
+		int base = y + (t.menu.row_h - t.ch) / 2 + t.ascent;
+		menu_text(b, menu_items[i].label, border + t.cw, base, fg);
+		int n = (int)strlen(menu_items[i].keys);
+		menu_text(b, menu_items[i].keys, W - border - (n + 1) * t.cw, base,
+			  hover ? fg : blend(color_bg, fg, 150) & 0xffffff);
+	}
+	wl_surface_set_buffer_scale(t.menu.surface, t.scale);
+	wl_surface_attach(t.menu.surface, b->wb, 0, 0);
+	wl_surface_damage_buffer(t.menu.surface, 0, 0, W, H);
+	wl_surface_commit(t.menu.surface);
+	b->busy = true;
+	t.menu.dirty = false;
+}
+
+static void menu_set_hover(int i)
+{
+	if (i != t.menu.hover) {
+		t.menu.hover = i;
+		t.menu.dirty = true;
+	}
+}
+
+/* the item at y (logical, within the popup) */
+static void menu_pointer(double y)
+{
+	int i = ((int)(y * t.scale) - t.scale) / t.menu.row_h;
+	menu_set_hover(y >= 1 && i < (int)LEN(menu_items) && menu_enabled(i) ? i : -1);
+}
+
+static void menu_run(int i)
+{
+	void (*run)(void) = menu_items[i].run;
+	menu_close();
+	run();
+}
+
+static void menu_button(bool press)
+{
+	if (press)
+		t.menu.pressed = t.menu.hover;
+	else if (t.menu.hover >= 0 && t.menu.hover == t.menu.pressed)
+		menu_run(t.menu.hover);
+}
+
+static void menu_key(xkb_keysym_t sym)
+{
+	int n = LEN(menu_items), step = 0;
+	switch (sym) {
+	case XKB_KEY_Escape:
+		menu_close();
+		return;
+	case XKB_KEY_Return: case XKB_KEY_KP_Enter:
+		if (t.menu.hover >= 0)
+			menu_run(t.menu.hover);
+		return;
+	case XKB_KEY_Up: case XKB_KEY_KP_Up:
+		step = n - 1;
+		break;
+	case XKB_KEY_Down: case XKB_KEY_KP_Down:
+		step = 1;
+		break;
+	default:
+		return;
+	}
+	int i = t.menu.hover < 0 && step == 1 ? n - 1 : MAX(t.menu.hover, 0);
+	for (int k = 0; k < n; k++) {
+		i = (i + step) % n;
+		if (menu_enabled(i)) {
+			menu_set_hover(i);
+			return;
+		}
+	}
+}
+
+static void menu_configure(void *d, struct xdg_surface *xs, uint32_t serial)
+{
+	(void)d;
+	xdg_surface_ack_configure(xs, serial);
+	t.menu.configured = true;
+	t.menu.dirty = true;
+}
+static const struct xdg_surface_listener menu_xs_listener = { menu_configure };
+
+static void popup_configure(void *d, struct xdg_popup *p, int32_t x, int32_t y, int32_t w, int32_t h)
+{
+	(void)d; (void)p; (void)x; (void)y; (void)w; (void)h;
+}
+static void popup_done(void *d, struct xdg_popup *p)
+{
+	(void)d; (void)p;
+	menu_close();
+}
+static void popup_repositioned(void *d, struct xdg_popup *p, uint32_t token)
+{
+	(void)d; (void)p; (void)token;
+}
+static const struct xdg_popup_listener popup_listener = {
+	popup_configure, popup_done, popup_repositioned,
+};
+
+/* opens at the pointer; needs the serial of the button press in t.serial */
+static void menu_open(void)
+{
+	if (t.menu.popup || !t.seat)
+		return;
+	t.menu.row_h = t.ch + 2 * t.pad;
+	t.menu.hover = t.menu.pressed = -1;
+	t.menu.w = (MENU_COLS * t.cw + 2 * t.scale + t.scale - 1) / t.scale;
+	t.menu.h = ((int)LEN(menu_items) * t.menu.row_h + 2 * t.scale + t.scale - 1) / t.scale;
+
+	t.menu.surface = wl_compositor_create_surface(t.compositor);
+	t.menu.xsurface = xdg_wm_base_get_xdg_surface(t.wm_base, t.menu.surface);
+	xdg_surface_add_listener(t.menu.xsurface, &menu_xs_listener, NULL);
+
+	struct xdg_positioner *pos = xdg_wm_base_create_positioner(t.wm_base);
+	xdg_positioner_set_size(pos, t.menu.w, t.menu.h);
+	xdg_positioner_set_anchor_rect(pos, MIN(MAX((int)t.px, 0), t.width - 1),
+				       MIN(MAX((int)t.py, 0), t.height - 1), 1, 1);
+	xdg_positioner_set_anchor(pos, XDG_POSITIONER_ANCHOR_BOTTOM_RIGHT);
+	xdg_positioner_set_gravity(pos, XDG_POSITIONER_GRAVITY_BOTTOM_RIGHT);
+	xdg_positioner_set_constraint_adjustment(pos,
+		XDG_POSITIONER_CONSTRAINT_ADJUSTMENT_FLIP_X |
+		XDG_POSITIONER_CONSTRAINT_ADJUSTMENT_FLIP_Y |
+		XDG_POSITIONER_CONSTRAINT_ADJUSTMENT_SLIDE_X |
+		XDG_POSITIONER_CONSTRAINT_ADJUSTMENT_SLIDE_Y);
+	t.menu.popup = xdg_surface_get_popup(t.menu.xsurface, t.xsurface, pos);
+	xdg_positioner_destroy(pos);
+	xdg_popup_add_listener(t.menu.popup, &popup_listener, NULL);
+	xdg_popup_grab(t.menu.popup, t.seat, t.serial);
+	wl_surface_commit(t.menu.surface);
+}
+
 /* ---- sizing ----------------------------------------------------------- */
 
 static void snap_size(int cols, int rows, int *w, int *h)
@@ -1064,6 +1294,7 @@ static void load_cursor_theme(void)
 
 static void reload_font(double pt, int scale)
 {
+	menu_close();
 	struct font *f = font_open(t.font_spec, pt, scale);
 	if (!f)
 		return;
@@ -1321,8 +1552,10 @@ static void kb_keymap(void *d, struct wl_keyboard *kb, uint32_t fmt, int fd, uin
 static void kb_enter(void *d, struct wl_keyboard *kb, uint32_t serial,
 		     struct wl_surface *s, struct wl_array *keys)
 {
-	(void)d; (void)kb; (void)s; (void)keys;
+	(void)d; (void)kb; (void)keys;
 	t.serial = serial;
+	if (s && s == t.menu.surface)
+		return;
 	t.focused = true;
 	t.vt->dirty[t.vt->c.y] = true;
 	t.need_redraw = true;
@@ -1339,9 +1572,12 @@ static void stop_repeat(void)
 
 static void kb_leave(void *d, struct wl_keyboard *kb, uint32_t serial, struct wl_surface *s)
 {
-	(void)d; (void)kb; (void)serial; (void)s;
-	t.focused = false;
+	(void)d; (void)kb; (void)serial;
 	stop_repeat();
+	/* the menu going away reports a leave too, without a surface */
+	if ((s && s == t.menu.surface) || !t.focused)
+		return;
+	t.focused = false;
 	t.vt->dirty[t.vt->c.y] = true;
 	t.need_redraw = true;
 	if (t.vt->mode & MODE_FOCUS)
@@ -1354,6 +1590,11 @@ static void kb_key(void *d, struct wl_keyboard *kb, uint32_t serial, uint32_t ti
 	(void)d; (void)kb; (void)time;
 	t.serial = serial;
 	xkb_keycode_t code = key + 8;
+	if (t.menu.popup) {
+		if (state == WL_KEYBOARD_KEY_STATE_PRESSED && t.xkb_state)
+			menu_key(xkb_state_key_get_one_sym(t.xkb_state, code));
+		return;
+	}
 	if (state == WL_KEYBOARD_KEY_STATE_PRESSED) {
 		handle_key(code);
 		if (t.repeat_rate > 0 && t.keymap && xkb_keymap_key_repeats(t.keymap, code)) {
@@ -1428,25 +1669,37 @@ static void pointer_cell(int *col, int *row)
 static void ptr_enter(void *d, struct wl_pointer *p, uint32_t serial,
 		      struct wl_surface *s, wl_fixed_t x, wl_fixed_t y)
 {
-	(void)d; (void)s;
+	(void)d;
 	t.enter_serial = serial;
-	t.px = wl_fixed_to_double(x);
-	t.py = wl_fixed_to_double(y);
-	pointer_cell(&t.mcol, &t.mrow);
+	t.ptr_surface = s;
 	if (t.cursor_image)
 		wl_pointer_set_cursor(p, serial, t.cursor_surface,
 				      t.cursor_image->hotspot_x / t.scale,
 				      t.cursor_image->hotspot_y / t.scale);
+	if (in_menu()) {
+		menu_pointer(wl_fixed_to_double(y));
+		return;
+	}
+	t.px = wl_fixed_to_double(x);
+	t.py = wl_fixed_to_double(y);
+	pointer_cell(&t.mcol, &t.mrow);
 }
 
 static void ptr_leave(void *d, struct wl_pointer *p, uint32_t serial, struct wl_surface *s)
 {
 	(void)d; (void)p; (void)serial; (void)s;
+	if (in_menu())
+		menu_set_hover(-1);
+	t.ptr_surface = NULL;
 }
 
 static void ptr_motion(void *d, struct wl_pointer *p, uint32_t time, wl_fixed_t x, wl_fixed_t y)
 {
 	(void)d; (void)p; (void)time;
+	if (in_menu()) {
+		menu_pointer(wl_fixed_to_double(y));
+		return;
+	}
 	t.px = wl_fixed_to_double(x);
 	t.py = wl_fixed_to_double(y);
 	int col, row;
@@ -1454,6 +1707,8 @@ static void ptr_motion(void *d, struct wl_pointer *p, uint32_t time, wl_fixed_t 
 	bool moved = col != t.mcol || row != t.mrow;
 	t.mcol = col;
 	t.mrow = row;
+	if (t.menu.popup)
+		return;
 
 	if (mouse_mode()) {
 		unsigned m = t.vt->mode;
@@ -1494,12 +1749,27 @@ static void ptr_button(void *d, struct wl_pointer *p, uint32_t serial, uint32_t 
 	else
 		t.buttons &= ~(1u << b);
 
+	if (in_menu()) {
+		menu_button(press);
+		return;
+	}
+	if (t.menu.popup) { /* on the window, where a grab may let it through */
+		if (press)
+			menu_close();
+		return;
+	}
 	if (mouse_mode()) {
 		mouse_report(b, press);
 		return;
 	}
 	int64_t abs = (int64_t)t.vt->scrolled - t.vt->view + t.mrow;
-	if (b == 0 && press) {
+	if (b == 0 && press && t.sel.active && t.xkb_state && mod_active(XKB_MOD_NAME_SHIFT)) {
+		t.sel.ea = abs; /* Shift extends the selection */
+		t.sel.ec = t.mcol;
+		t.sel.dragging = true;
+		vt_mark_all(t.vt);
+		t.need_redraw = true;
+	} else if (b == 0 && press) {
 		if (time - t.click_time < 400 && abs == t.click_abs && t.mcol == t.click_col)
 			t.click_count = t.click_count % 3 + 1;
 		else
@@ -1520,12 +1790,13 @@ static void ptr_button(void *d, struct wl_pointer *p, uint32_t serial, uint32_t 
 			copy_primary();
 	} else if (b == 1 && press) {
 		paste(true);
-	} else if (b == 2 && press && t.sel.active) {
-		t.sel.ea = abs; /* right click extends the selection */
-		t.sel.ec = t.mcol;
-		vt_mark_all(t.vt);
-		t.need_redraw = true;
-		copy_primary();
+	} else if (b == 2 && press) {
+		if (t.sel.dragging) {
+			t.sel.dragging = false;
+			if (t.sel.active)
+				copy_primary();
+		}
+		menu_open();
 	}
 }
 
@@ -1547,7 +1818,7 @@ static void wheel(bool down)
 static void ptr_axis(void *d, struct wl_pointer *p, uint32_t time, uint32_t axis, wl_fixed_t v)
 {
 	(void)d; (void)p; (void)time;
-	if (axis != WL_POINTER_AXIS_VERTICAL_SCROLL)
+	if (axis != WL_POINTER_AXIS_VERTICAL_SCROLL || t.menu.popup)
 		return;
 	t.axis_acc += wl_fixed_to_double(v);
 	while (t.axis_acc >= 10) {
@@ -1985,6 +2256,8 @@ done:;
 	while (t.running) {
 		if (t.need_redraw && !t.frame_cb && t.configured)
 			draw();
+		if (t.menu.popup && t.menu.configured && t.menu.dirty && menu_buffer())
+			menu_draw(menu_buffer());
 		while (wl_display_prepare_read(t.display) != 0)
 			wl_display_dispatch_pending(t.display);
 		bool wl_out = wl_display_flush(t.display) < 0 && errno == EAGAIN;

@@ -67,13 +67,15 @@ v() { echo "$*" >&7; read -r -t 3 _ <&8; }
 start_sway
 
 T() { wtype -k Shift_L "$@"; sleep 0.3; }
+# Shift held by a wtype in the background, while vinput clicks.
+shift_click() { wtype -k Shift_L -M shift -s 800 -m shift & sleep 0.3; v click "${1:-left}"; wait $!; sleep 0.1; }
 K() { wtype -k Shift_L -M ctrl -M shift -k "$1" -m shift -m ctrl; sleep 0.3; }
 C() { wtype -k Shift_L -M ctrl -k "$1" -m ctrl; sleep 0.3; }
 # Selects the whole screen, or with sel_history everything from the top of the
 # scrollback. The pause keeps two drags from counting as a double click.
 sel_screen() { sleep 0.45; v move 21 21; v down left; v move 999 699; v up left; sleep 0.1; }
 pages() { local a=() i; for ((i = 0; i < $2; i++)); do a+=(-k "$1"); done; wtype -k Shift_L -M shift "${a[@]}" -m shift; sleep 0.5; }
-sel_history() { pages Prior 230; sleep 0.45; v move 21 21; v down left; v move 60 21; v up left; pages Next 230; v move 500 $R_LAST; v click right; sleep 0.2; }
+sel_history() { pages Prior 230; sleep 0.45; v move 21 21; v down left; v move 60 21; v up left; pages Next 230; v move 500 $R_LAST; shift_click; sleep 0.2; }
 shown() { sel_screen; printf '%s' "$(timeout 3 wl-paste -p -n 2>/dev/null)" >"$DIR/shown"; cat "$DIR/shown"; }
 try() { local n=$1 p=$2 i; for ((i = 0; i < n; i++)); do shown | grep -qx -- "$p" && return 0; sleep 0.2; done; return 1; }
 alive() { pgrep -x "$NAME" >/dev/null; }
@@ -811,6 +813,32 @@ stalled_pipes() {
 	kill "$sp" 2>/dev/null
 	wait "$sp" 2>/dev/null
 }
+menu_abuse() {
+	start_mwt
+	T 'yes menu' -k Return
+	local i
+	for ((i = 0; i < 24; i++)); do
+		v move 300 200
+		v click right
+		sleep 0.1
+		case $((i % 4)) in
+		0) wtype -k Escape ;;
+		1) v click left ;;
+		2) swaymsg -q '[app_id="mwt"] resize set 500 300' ;;
+		3) K plus ;;
+		esac
+		alive || break
+	done
+	C c
+	sleep 0.5
+	if alive; then ok "the menu through a flood, a resize and a zoom"; else gap "the context menu killed mwt"; fi
+	T -k Escape
+	T 'sleep 1; exit' -k Return
+	v move 300 200
+	v click right
+	sleep 2
+	if alive; then gap "mwt stays when the shell ends behind an open menu"; else ok "the shell ends behind an open menu"; fi
+}
 compositor_dies() {
 	start_mwt
 	T 'sleep 777' -k Return
@@ -829,7 +857,7 @@ for c in dcs_swallow osc_swallow_cat fuzz noncharacters \
 	snippet_typed snippet_paste snippet_paste_no_newline \
 	stty_raw_read_in_shell inlcr tcoff cyrillic_ctrl_c cyrillic_raw copy_on_ru raw_paste_ctrl_c python_repl flood_ctrl_c flood_rss \
 	args shells closed_stdio cwd_tricks exit_with_jobs close_ignores_hup \
-	tiny resize_storm fd_leak stalled_readers stalled_pipes compositor_dies; do
+	tiny resize_storm fd_leak stalled_readers stalled_pipes menu_abuse compositor_dies; do
 	run "$c"
 done
 echo "=== $GAPS gaps, $CRASHES crashes ==="

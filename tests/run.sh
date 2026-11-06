@@ -90,6 +90,8 @@ v() { echo "$*" >&7; read -r -t 3 _ <&8; }
 T() { wtype -k Shift_L "$@"; sleep 0.3; }
 K() { wtype -k Shift_L -M ctrl -M shift -k "$1" -m shift -m ctrl; sleep 0.3; }
 C() { wtype -k Shift_L -M ctrl -k "$1" -m ctrl; sleep 0.3; }
+# Shift held by a wtype in the background, while vinput clicks.
+shift_click() { wtype -k Shift_L -M shift -s 800 -m shift & sleep 0.3; v click "${1:-left}"; wait $!; sleep 0.1; }
 
 # What mwt shows, without the blank rows at the end. The pause keeps two drags
 # from counting as a double click.
@@ -346,10 +348,10 @@ sleep 0.3
 	fail "double click selects a word: '$(timeout 2 wl-paste -p -n)'"
 sleep 0.45
 at 13 1
-v click right
+shift_click
 sleep 0.3
-[ "$(timeout 2 wl-paste -p -n)" = 'beta gamma' ] && echo "ok: right click extends" ||
-	fail "right click extends: '$(timeout 2 wl-paste -p -n)'"
+[ "$(timeout 2 wl-paste -p -n)" = 'beta gamma' ] && echo "ok: Shift+click extends" ||
+	fail "Shift+click extends: '$(timeout 2 wl-paste -p -n)'"
 sleep 0.45
 C l
 T 'echo alpha beta gamma' -k Return
@@ -442,6 +444,79 @@ sleep 0.5
 timeout 5 wl-paste -n >"$DIR/all"
 n=$(wc -l <"$DIR/all")
 if [ "$n" -ge 5000 ] && grep -q '0006000$' "$DIR/all"; then echo "ok: Ctrl+Shift+A with a full scrollback: $n lines"; else fail "Ctrl+Shift+A with a full scrollback: $n lines"; fi
+
+# The context menu opens below and right of the pointer: a 1 px border, then rows
+# of a cell and twice the padding. Copy, Paste, Select all.
+menu_at() { at "$1" "$2"; v click right; sleep 0.4; }
+item() { v move $((X + 30)) $((Y + 2 + (CH + 4) * $1 + (CH + 4) / 2)); sleep 0.2; }
+C l
+T 'echo menu-text' -k Return
+sleep 0.4
+at 2 1
+v click left
+v click left
+sleep 0.5
+menu_at 40 5
+T -k Down -k Return
+sleep 0.3
+[ "$(timeout 2 wl-paste -n)" = menu-text ] && echo "ok: menu by keyboard: Copy" ||
+	fail "menu by keyboard: Copy gave '$(timeout 2 wl-paste -n)'"
+menu_at 40 5
+item 1
+v click left
+sleep 0.3
+expect "menu by mouse: Paste" '~\$ menu-text'
+C u
+menu_at 40 5
+T -k Escape
+T 'echo nach-esc' -k Return
+expect "the right click alone runs nothing, Escape closes" 'nach-esc'
+menu_at 40 5
+at 60 20
+v click left
+sleep 0.3
+T 'echo nach-klick' -k Return
+expect "a click next to the menu closes it" 'nach-klick'
+menu_at 40 5
+item 2
+v click left
+sleep 0.3
+timeout 2 wl-paste -p -n >"$DIR/all"
+grep -qx 'menu-text' "$DIR/all" && grep -qx 'nach-klick' "$DIR/all" && echo "ok: menu: Select all" ||
+	fail "menu: Select all gave $(wc -l <"$DIR/all") lines"
+at 60 20
+sleep 0.5
+v click left
+sleep 0.5
+printf keep | wl-copy
+sleep 0.3
+menu_at 40 5
+item 0
+v click left
+sleep 0.3
+T -k Escape
+[ "$(timeout 2 wl-paste -n)" = keep ] && echo "ok: menu: Copy without a selection does nothing" ||
+	fail "menu: Copy without a selection gave '$(timeout 2 wl-paste -n)'"
+# With the mouse taken a drag reads nothing back, so cat writes to a file.
+T "printf '\\033[?1000;1006h'; cat -v >'$DIR/mm'" -k Return
+sleep 0.3
+at 40 5
+v click right
+sleep 0.2
+T -k Return
+sleep 0.3
+grep -q '\^\[\[<2;' "$DIR/mm" && echo "ok: with the mouse taken, a right click goes to the program" ||
+	fail "with the mouse taken, the program got: '$(cat "$DIR/mm")'"
+at 40 5
+shift_click right
+sleep 0.3
+T 'x' -k Escape
+T 'y' -k Return
+sleep 0.3
+[ "$(tail -n 1 "$DIR/mm")" = y ] && echo "ok: and Shift+right click opens the menu, which takes the keys" ||
+	fail "Shift+right click: the last line is '$(tail -n 1 "$DIR/mm")'"
+C c
+T "printf '\\033[?1000;1006l'" -k Return
 
 # Dragging below the window selects what shows, and one row of autoscroll.
 C l

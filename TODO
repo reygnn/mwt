@@ -1,10 +1,5 @@
 TODO
 
-* Rechte Maustaste: Popup-Menü zum Markieren, Kopieren und Einfügen.
-  Heute erweitert ein Rechtsklick die Auswahl. Das muss dem Menü weichen oder
-  einen neuen Platz bekommen. README und tests/run.sh ("right click extends")
-  gehen mit.
-
 * Mode 2027 (Graphem-Cluster), sobald die Spezifikation der Terminal-WG bei
   freedesktop.org verabschiedet ist. Standard bleibt wcwidth, Programme
   schalten per CSI ? 2027 h um. Dazu gehört: Cluster in einer Zelle
