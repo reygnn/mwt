@@ -255,6 +255,17 @@ static void test_replies(void)
 	CHECK_STR(titlebuf, "hello");
 	w(vt, "\033]2;w\xc3\xa4rld\033\\");
 	CHECK_STR(titlebuf, "w\xc3\xa4rld");
+	/* DECRQM: set, reset, unknown; 2027 stays unknown until it is in */
+	replybuf[0] = 0;
+	w(vt, "\033[?2004h\033[?2004$p\033[?1049$p\033[?2027$p\033[?25$p");
+	CHECK_STR(replybuf, "\033[?2004;1$y\033[?1049;2$y\033[?2027;0$y\033[?25;1$y");
+	replybuf[0] = 0;
+	w(vt, "\033[4h\033[4$p\033[20$p\033[99$p\033[4l");
+	CHECK_STR(replybuf, "\033[4;1$y\033[20;2$y\033[99;0$y");
+	/* a private mode with an intermediate is not a set or reset */
+	w(vt, "\033[?2004$h\033[?2004$l");
+	CHECK(vt->mode & MODE_BRACKETED);
+	w(vt, "\033[?2004l");
 	/* DCS strings are swallowed without output */
 	w(vt, "\033P+q544e\033\\ok");
 	CHECK_STR(row(vt, 2), "   ok");

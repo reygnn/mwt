@@ -61,7 +61,7 @@ Gezeichnet werden nur geänderte Zeilen. Bei Doppelpufferung wird vorher der zul
 * VT100/VT220-Kern: Cursorbewegung, ED/EL/ECH, ICH/DCH, IL/DL, SU/SD, Scroll-Regionen, Origin Mode, Tabs, REP, DEC-Sondergrafik (G0/G1)
 * SGR: Bold, Dim, Italic, Underline, Reverse, Invisible, Strike; 16, 256 und Truecolor (`;` und `:`-Form)
 * Alternate Screen (47/1047/1049), Bracketed Paste, Maus (1000/1002/1003 + SGR 1006), Focus Events, DECSCUSR (Cursorform)
-* Antworten auf DA, DA2, DSR/CPR, XTVERSION, Fenstergröße (CSI 18 t)
+* Antworten auf DA, DA2, DSR/CPR, DECRQM, XTVERSION, Fenstergröße (CSI 18 t)
 * OSC 0/2 (Fenstertitel)
 * Wide Characters (CJK, Emoji als Umriss, sofern ein Fallback-Font sie hat)
 * HiDPI über `wl_surface.preferred_buffer_scale` (Ganzzahl-Skalierung)

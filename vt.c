@@ -773,13 +773,41 @@ static void set_private_mode(struct vt *vt, int m, bool on)
 		vt->mode &= ~bit;
 }
 
+/* DECRQM answer for a private mode: 1 set, 2 reset, 0 unknown. Modes mwt
+ * accepts but ignores (12 blink, 1005/1015 mouse encodings) count as unknown,
+ * and so does 2027 until grapheme clusters are in: see TODO. */
+static int private_mode_state(const struct vt *vt, int m)
+{
+	unsigned bit;
+	switch (m) {
+	case 1: bit = MODE_APPCURSOR; break;
+	case 6: return vt->c.origin ? 1 : 2;
+	case 7: bit = MODE_AUTOWRAP; break;
+	case 25: return vt->mode & MODE_HIDECURSOR ? 2 : 1;
+	case 47: case 1047: case 1049: bit = MODE_ALTSCREEN; break;
+	case 1000: bit = MODE_MOUSE_BTN; break;
+	case 1002: bit = MODE_MOUSE_DRAG; break;
+	case 1003: bit = MODE_MOUSE_ANY; break;
+	case 1004: bit = MODE_FOCUS; break;
+	case 1006: bit = MODE_MOUSE_SGR; break;
+	case 2004: bit = MODE_BRACKETED; break;
+	default: return 0;
+	}
+	return vt->mode & bit ? 1 : 2;
+}
+
 static void csi_dispatch(struct vt *vt, uint32_t f)
 {
 	struct vt_cursor *c = &vt->c;
 	int n = arg(vt, 0, 1);
 
 	if (vt->priv == '?') {
-		if (f == 'h' || f == 'l')
+		if (vt->ninter == 1 && vt->inter[0] == '$' && f == 'p') { /* DECRQM */
+			int m = arg(vt, 0, 0);
+			reply(vt, "\033[?%d;%d$y", m, private_mode_state(vt, m));
+		} else if (vt->ninter) {
+			/* nothing else with intermediates */
+		} else if (f == 'h' || f == 'l')
 			for (int i = 0; i < vt->nparams; i++)
 				set_private_mode(vt, vt->params[i], f == 'h');
 		else if (f == 'n' && arg(vt, 0, 0) == 6)
@@ -802,6 +830,10 @@ static void csi_dispatch(struct vt *vt, uint32_t f)
 					   s <= 4 ? CURSOR_UNDERLINE : CURSOR_BAR;
 		} else if (vt->inter[0] == '!' && f == 'p') {
 			soft_reset(vt);
+		} else if (vt->inter[0] == '$' && f == 'p') { /* DECRQM, ANSI modes */
+			int m = arg(vt, 0, 0);
+			unsigned bit = m == 4 ? MODE_INSERT : m == 20 ? MODE_LNM : 0;
+			reply(vt, "\033[%d;%d$y", m, !bit ? 0 : vt->mode & bit ? 1 : 2);
 		}
 		return;
 	}

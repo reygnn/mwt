@@ -4,3 +4,10 @@ TODO
   Heute erweitert ein Rechtsklick die Auswahl. Das muss dem Menü weichen oder
   einen neuen Platz bekommen. README und tests/run.sh ("right click extends")
   gehen mit.
+
+* Mode 2027 (Graphem-Cluster), sobald die Spezifikation der Terminal-WG bei
+  freedesktop.org verabschiedet ist. Standard bleibt wcwidth, Programme
+  schalten per CSI ? 2027 h um. Dazu gehört: Cluster in einer Zelle
+  speichern, als ein Glyph zeichnen, beim Kopieren erhalten, und die
+  DECRQM-Antwort in vt.c (private_mode_state) auf 1/2 umstellen.
+  Abnahme: make width ohne GAP bei eingeschaltetem Modus.
