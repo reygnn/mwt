@@ -12,6 +12,12 @@ before them is done, see the end.
 
 The three it found to fix are done, see the end.
 
+### To fix
+
+- Read: `load_face` (`font.c`) does not check the `strdup` of the face's path. Out of
+  memory, `path` is NULL, and `find_fallback` then passes it to `strcmp`. Older than the
+  fallback faces making room for each other; found while checking that change.
+
 ### To decide
 
 - Read: a character no font has costs a `FcFontMatch` the first time it is drawn, in each
@@ -19,10 +25,9 @@ The three it found to fix are done, see the end.
   costs nothing again, but random Unicode keeps bringing new ones, and the glyph cache grows
   without a limit. Measured by `make fonts` (`tests/fallback.py` `test_missing_cost`): a
   screenful of 1919 code points no face has takes 0.37 s to show the first time, 0.02 s
-  again, against 0.02 s for ASCII; about 0.18 ms a new character.
-- Measured: after 16 fallback faces (`MAX_FALLBACK`), a script with a font on the system
-  draws nothing. `make fonts` draws 19 of 26 scripts; Tamil, Devanagari, Thai, Syriac,
-  Javanese, Balinese and Vai come too late in its list.
+  again, against 0.02 s for ASCII; about 0.18 ms a new character. Since fallback faces
+  make room for each other (see the end), the search no longer stops once 16 are open;
+  the measurement, in a window with none open, is not affected.
 - Read, partly reproduced: each OSC 0 or 2 is a `set_title` request right away
   (`vt_title`, `mwt.c:275`), tens of thousands in one round of the event loop in a flood.
   Older libwayland versions are said to end the connection when the socket is full; with
@@ -160,3 +165,11 @@ container, and both fail with the old `mwt.c`:
 - Read: `paste_text` dropped only ESC and NUL, so ^C, ^Z and ^D in pasted text raised
   signals in the kernel. Now only tab, CR and LF stay of the C0 controls, and DEL goes too.
   `evil.sh paste_controls`.
+
+The limit of fallback faces, found by `make fonts`, which passes with the fix:
+
+- Measured: after 16 fallback faces (`MAX_FALLBACK`), a script with a font on the system
+  drew nothing; `make fonts` drew 19 of 26 scripts. Now the face used longest ago makes
+  room for a new one. Glyphs already drawn stay, the glyph cache holds bitmaps and no
+  faces; a glyph not drawn before loads its face again. `tests/fallback.py`
+  `test_many_scripts` wants all 26, then the first 8 in bold, from faces loaded anew.

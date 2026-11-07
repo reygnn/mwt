@@ -14,6 +14,9 @@
 #include <stdlib.h>
 #include <string.h>
 
+/* Fallback faces kept open at a time. With more scripts than that, the face used
+ * longest ago makes room: glyphs already drawn stay in the cache, which holds
+ * bitmaps and no faces, so only a glyph not drawn before loads it again. */
 #define MAX_FALLBACK 16
 
 struct face {
@@ -21,6 +24,7 @@ struct face {
 	bool embolden;
 	char *path;
 	int index;
+	unsigned long used; /* fallback faces: font.tick when last found */
 };
 
 struct entry {
@@ -35,6 +39,7 @@ struct font {
 	struct face style[4];
 	struct face fallback[MAX_FALLBACK];
 	int nfallback;
+	unsigned long tick;
 	double size_pt, size_px;
 	int cw, ch, ascent;
 	struct entry *cache;
@@ -214,10 +219,10 @@ double font_size_pt(const struct font *f)
 static struct face *find_fallback(struct font *f, uint32_t cp)
 {
 	for (int i = 0; i < f->nfallback; i++)
-		if (FT_Get_Char_Index(f->fallback[i].ft, cp))
+		if (FT_Get_Char_Index(f->fallback[i].ft, cp)) {
+			f->fallback[i].used = ++f->tick;
 			return &f->fallback[i];
-	if (f->nfallback >= MAX_FALLBACK)
-		return NULL;
+		}
 
 	FcPattern *p = FcPatternDuplicate(f->base);
 	FcCharSet *cs = FcCharSetCreate();
@@ -235,19 +240,30 @@ static struct face *find_fallback(struct font *f, uint32_t cp)
 	if (FcPatternGetCharSet(m, FC_CHARSET, 0, &mcs) == FcResultMatch &&
 	    FcCharSetHasChar(mcs, cp) &&
 	    FcPatternGetString(m, FC_FILE, 0, &file) == FcResultMatch) {
+		/* a face already open does not have cp, or the loop above found it */
 		bool dup = false;
 		for (int i = 0; i < 4; i++)
 			dup |= !strcmp(f->style[i].path, (const char *)file);
 		for (int i = 0; i < f->nfallback; i++)
 			dup |= !strcmp(f->fallback[i].path, (const char *)file);
-		struct face *fc = &f->fallback[f->nfallback];
-		if (!dup && load_face(f, m, fc) && FT_Get_Char_Index(fc->ft, cp)) {
-			fc->embolden = false;
-			res = fc;
-			f->nfallback++;
-		} else if (!dup && fc->ft) {
-			free_face(fc);
-			memset(fc, 0, sizeof *fc);
+		struct face nf = { 0 };
+		if (!dup && load_face(f, m, &nf) && FT_Get_Char_Index(nf.ft, cp)) {
+			int slot = f->nfallback;
+			if (slot == MAX_FALLBACK) {
+				slot = 0;
+				for (int i = 1; i < MAX_FALLBACK; i++)
+					if (f->fallback[i].used < f->fallback[slot].used)
+						slot = i;
+				free_face(&f->fallback[slot]);
+			} else {
+				f->nfallback++;
+			}
+			nf.embolden = false;
+			nf.used = ++f->tick;
+			f->fallback[slot] = nf;
+			res = &f->fallback[slot];
+		} else if (!dup && nf.ft) {
+			free_face(&nf);
 		}
 	}
 	FcPatternDestroy(m);

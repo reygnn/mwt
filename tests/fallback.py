@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """Glyphs from fallback faces, which only the image of `make fonts` has: the image
 of `make evil` has DejaVu alone, and there find_fallback in font.c never finds a
-face. Screenshots as in tests/pixel.py. Some checks describe rather than judge and
-print info: how many scripts get a face before MAX_FALLBACK, and what a glyph no
-face has costs, the data for deciding on a negative cache (see Review.md).
-FALLBACK_NO_TIMING=1 leaves the timings out, for a sanitizer build. Run with
+face. Screenshots as in tests/pixel.py. The timings describe rather than judge and
+print info: what a glyph no face has costs, the data for deciding on a negative
+cache (see Review.md). FALLBACK_NO_TIMING=1 leaves them out, for a sanitizer
+build. Run with
 `make fonts`, through tests/headless.sh."""
 import os
 import sys
@@ -18,7 +18,7 @@ CJK = "漢"      # 漢, in Droid Sans Fallback
 HANGUL = "한"   # 한, in Nanum: Droid Sans Fallback has no Hangul
 EMOJI = "\U0001f642"  # 🙂, a color bitmap in Noto Color Emoji, an outline in Symbola
 # A letter from each of many scripts, each of which fonts-noto-core has in a file of
-# its own, more of them than the 16 fallback faces mwt keeps.
+# its own, more of them than the 16 fallback faces mwt keeps open.
 SCRIPTS = [
     ("Ethiopic", "አ"), ("Cherokee", "Ꭰ"), ("Thaana", "ހ"),
     ("Sinhala", "අ"), ("Khmer", "ក"), ("Lao", "ກ"),
@@ -70,17 +70,21 @@ def test_zoom(win):
 
 
 def test_many_scripts():
-    """Each script costs a face until 16 are loaded; after that a script with a font
-    on the system draws nothing. Reported, not judged: which face covers what is the
-    distribution's business."""
+    """More scripts than the 16 fallback faces mwt keeps open: each must draw, as
+    the face used longest ago makes room. Then the first ones in bold, a style not
+    drawn yet, which needs their faces again after they made room."""
     with Window() as win:
-        win.feed(RESET + " ".join(c for _, c in SCRIPTS).encode() + b"\r\nX")
+        win.feed(RESET + " ".join(c for _, c in SCRIPTS).encode() + b"\r\nX\r\n\033[1m"
+                 + " ".join(c for _, c in SCRIPTS[:8]).encode() + b"\033[0m")
         g = Grid(settle(), 80, 24)
         drawn = [name for i, (name, _) in enumerate(SCRIPTS) if g.ink(2 * i, 0)]
         missing = [name for name, _ in SCRIPTS if name not in drawn]
         check(g.ink(0, 1), "the text after them still draws")
-        check(len(drawn) >= 16, "at least 16 scripts from fallback faces", f"{len(drawn)}")
-        print(f"info: {len(drawn)} of {len(SCRIPTS)} scripts drawn; none for {', '.join(missing) or '-'}")
+        check(not missing, f"all {len(SCRIPTS)} scripts from fallback faces, more than 16",
+              f"none for {', '.join(missing)}")
+        bold = [name for i, (name, _) in enumerate(SCRIPTS[:8]) if not g.ink(2 * i, 2)]
+        check(not bold, "the first 8 again in bold, from faces loaded anew",
+              f"none for {', '.join(bold)}")
 
 
 def until_marker(win, text, limit=60.0):
@@ -99,9 +103,9 @@ def until_marker(win, text, limit=60.0):
 
 
 def test_missing_cost():
-    """A glyph no face has costs a FcFontMatch the first time, in each style, as long
-    as fewer than 16 fallback faces are loaded: so a window of its own. Code points
-    of a private use plane, which no font here has."""
+    """A glyph no face has costs a FcFontMatch the first time, in each style. A
+    window of its own, with no fallback face open yet. Code points of a private
+    use plane, which no font here has."""
     n = 80 * 24 - 1
     with Window() as win:
         ascii_s = until_marker(win, "a" * n)

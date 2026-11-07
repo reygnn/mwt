@@ -6,6 +6,12 @@ Offen, noch nicht bestätigt:
 
 Behoben:
 
+* Waren 16 Fallback-Schriften geladen, zeichnete mwt jedes Zeichen einer weiteren
+  Schrift als nichts, obwohl eine Schrift dafür installiert war: In make fonts
+  blieben 7 von 26 Schriftsystemen leer, darunter Devanagari und Thai. Jetzt
+  macht die am längsten nicht gebrauchte Fallback-Schrift Platz. Gezeichnete
+  Zeichen bleiben im Glyph-Cache, der keine Schriften hält; nur ein neues Zeichen
+  lädt seine Schrift wieder. Test: tests/fallback.py test_many_scripts.
 * Eine Paste ließ von den Steuerzeichen nur ESC und NUL weg. ^C, ^Z, ^D, ^U und
   DEL im eingefügten Text wirkten in der Line Discipline des Kernels, mit
   Bracketed Paste oder ohne: Ein ^C beendete das Programm, das die Paste las.
