@@ -6,11 +6,7 @@
 /test_replay
 /tests/vt100/
 /fuzz_vt
-/tests/fuzz-corpus/
-/tests/fuzz-crash-*
-/tests/fuzz-timeout-*
-/tests/fuzz-oom-*
-/tests/fuzz-leak-*
+/tests/fuzz/
 *.o
 *-client-protocol.h
 *-protocol.c

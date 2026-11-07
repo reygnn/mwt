@@ -7,11 +7,13 @@
  * resized a few times, the view scrolled through the history and the terminal
  * reset, each followed by the same checks. Sanitizers catch the rest.
  *
- *   make fuzz                     ten minutes, corpus in tests/fuzz-corpus
+ *   make fuzz                     ten minutes, corpus in tests/fuzz/corpus
  *   make fuzz FUZZ_TIME=3600      one hour
- *   ./fuzz_vt crash-...           replay one finding
+ *   ./fuzz_vt tests/fuzz/crash-…  replay one finding (make fuzz_vt, needs clang)
  *
- * Needs clang. The corpus starts from tests/vt100 if `make replay` fetched it. */
+ * make fuzz runs it in the container of make evil when the host has no clang
+ * with libFuzzer, see tests/fuzz.sh. It starts from tests/vt100 if `make replay`
+ * fetched it. */
 #define _XOPEN_SOURCE 700
 #include "vt.h"
 

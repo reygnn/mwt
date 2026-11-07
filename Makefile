@@ -54,18 +54,16 @@ replay: test_replay
 	tests/replay.sh $(if $(REPORT),-r)
 
 # Coverage-guided fuzzing of the VT core with libFuzzer, see tests/fuzz_vt.c.
-# Needs clang and its runtime (libclang-rt-dev). Ten minutes by default, on all
-# cores; the corpus grows in tests/fuzz-corpus, a finding is tests/fuzz-crash-*.
+# Ten minutes by default (FUZZ_TIME=seconds), on all cores. Uses clang on the
+# host if it has libFuzzer, otherwise the container of make evil (tests/fuzz.sh).
+# The corpus grows in tests/fuzz/corpus, a finding is tests/fuzz/crash-*.
 FUZZ_TIME ?= 600
 fuzz_vt: tests/fuzz_vt.c vt.c vt.h version.h
 	clang -std=c11 -Wall -Wextra -g -O1 -I. -fsanitize=fuzzer,address,undefined \
 		-fno-sanitize-recover=all -o $@ tests/fuzz_vt.c vt.c
 
-fuzz: fuzz_vt
-	mkdir -p tests/fuzz-corpus
-	./fuzz_vt -fork=$$(nproc) -max_total_time=$(FUZZ_TIME) -max_len=4098 \
-		-dict=tests/fuzz_vt.dict -artifact_prefix=tests/fuzz- \
-		tests/fuzz-corpus $(wildcard tests/vt100/videos)
+fuzz:
+	FUZZ_TIME=$(FUZZ_TIME) tests/fuzz.sh
 
 # Each capability of mwt.info against the VT core. Needs python3 and ncurses.
 vtdump: tests/vtdump.c vt.c vt.h version.h

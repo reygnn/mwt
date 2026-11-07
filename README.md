@@ -10,7 +10,7 @@ Dependencies: wayland-client, wayland-cursor, wayland-protocols, wayland-scanner
 make            # builds ./mwt
 make check      # tests for the VT core (headless, with ASan/UBSan), including a fuzzer
 make replay     # about 290 old VT100 animations and ANSI files through the VT core (fetches them from GitHub on the first run)
-make fuzz       # coverage-guided fuzzing of the VT core with libFuzzer, 10 minutes (FUZZ_TIME=seconds), needs clang
+make fuzz       # coverage-guided fuzzing of the VT core with libFuzzer, 10 minutes (FUZZ_TIME=seconds), with clang on the host or in the Podman container
 make terminfo   # each capability in mwt.info against the VT core (needs python3 and ncurses)
 make keys       # what mwt sends for keys and the mouse, against mwt.info (under headless sway, like make test)
 make pixel      # what mwt draws, by screenshot (under headless sway, like make test)
