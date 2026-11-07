@@ -17,7 +17,8 @@ The three it found to fix are done, see the end.
 - Read: a character no font has costs a `FcFontMatch` the first time it is drawn, in each
   style (`find_fallback`, `font.c:212`). The empty result is cached, so the same character
   costs nothing again, but random Unicode keeps bringing new ones, and the glyph cache grows
-  without a limit. Not measured.
+  without a limit. Not measured. `make fonts` (a draft, not yet run) measures it in an
+  image with fallback fonts: `tests/fallback.py` `test_missing_cost`.
 - Read, partly reproduced: each OSC 0 or 2 is a `set_title` request right away
   (`vt_title`, `mwt.c:275`), tens of thousands in one round of the event loop in a flood.
   Older libwayland versions are said to end the connection when the socket is full; with
@@ -94,7 +95,8 @@ is not in the repository.
 ### Fonts (`font.c`)
 
 - Fallback fonts (`find_fallback`, `font.c:212`): the test image has no font beyond
-  DejaVu, so no CJK or emoji, and the search for a fallback never runs.
+  DejaVu, so no CJK or emoji, and the search for a fallback never runs. `make fonts` has
+  an image of its own for it (`tests/Containerfile.fonts`, a draft, not yet run).
 - A synthesized bold or italic when the family has no such face (`font.c:139`).
 - The font matrix from fontconfig (`font.c:63`), a size given in pixels (`font.c:102`), and
   the error paths: no scalable font (`font.c:134`), a size out of range (`font.c:161`), a

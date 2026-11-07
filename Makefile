@@ -102,6 +102,11 @@ test: mwt
 evil:
 	tests/container.sh
 
+# Glyphs from fallback faces (CJK, emoji, many scripts) in an image with more
+# fonts than the one of `make evil`; see tests/Containerfile.fonts.
+fonts:
+	tests/fonts.sh
+
 # Where mwt and bash, vim or tmux count a character's width differently.
 # Needs what `make test` needs plus vim and tmux.
 width: mwt
@@ -132,4 +137,4 @@ uninstall:
 clean:
 	rm -f mwt mwt-esctest test_vt vtdump test_replay fuzz_vt fuzz_regress fuzz_regress.log *.o $(PROTO_H) $(PROTO_C)
 
-.PHONY: all check replay fuzz terminfo keys pixel mouse keyboard test evil width esctest profile install uninstall clean
+.PHONY: all check replay fuzz terminfo keys pixel mouse keyboard test evil fonts width esctest profile install uninstall clean

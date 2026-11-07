@@ -1,0 +1,19 @@
+# What `make fonts` runs in: the image of `make evil` with fallback fonts, so the
+# search for a face that has a missing glyph (find_fallback in font.c) runs at all.
+# A separate image: in mwt-test, DejaVu alone keeps the pictures and the timings
+# of the other tests as they are. Each font has a part to play:
+#
+# fonts-droid-fallback   CJK and Hangul in one face: wide glyphs from a fallback
+# fonts-noto-color-emoji emoji as color bitmaps, a face mwt cannot use; fontconfig
+#                        tends to rank it first for emoji
+# fonts-symbola          emoji as outlines, the face mwt should end up with
+# fonts-noto-core        a file per script, enough of them to go past the 16
+#                        fallback faces mwt keeps (MAX_FALLBACK)
+#
+# DejaVu Sans Mono stays what "monospace" means; tests/fonts-run.sh checks it.
+FROM localhost/mwt-test
+USER root
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    fonts-droid-fallback fonts-noto-color-emoji fonts-symbola fonts-noto-core \
+    && rm -rf /var/lib/apt/lists/* && fc-cache -f
+USER tester
