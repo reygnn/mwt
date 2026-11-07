@@ -97,6 +97,7 @@ static struct {
 	int cfg_w, cfg_h;
 	bool cfg_fixed;    /* maximized, fullscreen or tiled: use size as given */
 	bool configured, focused, running, need_redraw;
+	bool need_full;    /* the grid moved in the window: next frame from scratch */
 	int init_cols, init_rows;
 
 	/* font and grid, in buffer pixels */
@@ -1112,7 +1113,7 @@ static void draw(void)
 	if (!b)
 		return; /* both held by the compositor; retry on release */
 
-	bool full = false;
+	bool full = t.need_full;
 	if (b->w != W || b->h != H) {
 		if (!buffer_init(b, W, H))
 			return;
@@ -1128,6 +1129,7 @@ static void draw(void)
 		fill_rect(b, 0, 0, W, H, color_bg);
 		vt_mark_all(vt);
 		buffers_differ_all(H);
+		t.need_full = false;
 	}
 
 	int64_t ba = 0, ea = 0;
@@ -1446,6 +1448,7 @@ static void reload_font(double pt, int scale)
 	t.scale = scale;
 	font_metrics(f, &t.cw, &t.ch, &t.ascent);
 	t.pad = padding * scale;
+	t.need_full = true; /* a window that keeps its size keeps old cells beside the grid */
 	if (rescale && t.shm)
 		load_cursor_theme();
 	if (t.configured) {

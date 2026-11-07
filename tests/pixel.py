@@ -299,6 +299,31 @@ def test_zoom():
         check(settle() == before, "and Ctrl+Shift+0 again")
 
 
+def test_zoom_tiled():
+    """Tiled, the window keeps its size when the font changes, and the grid moves
+    within it. Nothing of the old grid may stay beside the new one: at each step
+    the screen red, the font one size up or down, then everything cleared to the
+    default background. Whether a step leaves a strip depends on how the cell
+    sizes divide the window, so it takes several steps each way."""
+    with Window(geometry="30x8") as win:
+        swaymsg('[app_id="mwt"]', "floating", "disable")
+        time.sleep(0.5)
+        left = []
+        for key in ["minus"] * 3 + ["0"] + ["plus"] * 5:
+            win.feed(RESET + b"\033[41m\033[2J")
+            settle()
+            combo(key, "ctrl", "shift")
+            settle()
+            win.feed(b"\033[0m\033[2J")
+            img = settle()
+            red = sum(img.px(x, y) == COLORS16[1] for y in range(img.h) for x in range(img.w))
+            if red:
+                left.append(f"{key}: {red}")
+        combo("0", "ctrl", "shift")
+        check(not left, "tiled, a new font size leaves nothing of the old grid",
+              "red pixels after " + ", ".join(left))
+
+
 def test_hidpi():
     with Window(geometry="30x8") as win:
         win.feed(RESET + b"\033[41m\033[Ktext\033[0m\r\n\033[4m    \033[0m plain")
@@ -340,6 +365,7 @@ def main():
         test_scrollback(win)
     test_partial_redraw()
     test_zoom()
+    test_zoom_tiled()
     test_hidpi()
     mouse.close()
     return finish()
