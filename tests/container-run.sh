@@ -66,6 +66,15 @@ echo "=== pixel, each frame against a full redraw ==="
 build "-O2 -g -DMWT_CHECK_REDRAW" ""
 tests/headless.sh tests/pixel.py 2>&1 | grep -E '^(FAIL|PASS|info|=== )'
 [ "${PIPESTATUS[0]}" = 0 ] || fail=1
+# A report: much of what esctest covers mwt leaves out. Fails only if it did not
+# run. Like the replay, it needs `tests/esctest.sh --fetch` on the host first.
+echo "=== esctest (report only) ==="
+if [ -d tests/esctest ]; then
+	make mwt-esctest >/dev/null && tests/esctest.sh
+	[ $? = 0 ] || fail=1
+else
+	echo "skipped: no tests/esctest (tests/esctest.sh --fetch on the host)"
+fi
 build "$SAN" "-fsanitize=address,undefined"
 # Known gaps in character widths are only reported. A crash or a width.sh that
 # could not run (its messages start with "width:") fails the run.

@@ -17,13 +17,14 @@ make mouse      # what mwt reports in each mouse mode (under headless sway, like
 make keyboard   # dead keys, Compose, and key repeat (under headless sway, like make test)
 make test       # black-box tests under headless sway (needs sway, wtype, wl-clipboard, grim, and vinput from mwc)
 make width      # where mwt and bash, vim, or tmux count character widths differently (also needs vim and tmux)
+make esctest    # esctest's escape sequence tests in mwt under headless sway, a report (fetches esctest on the first run)
 make evil       # all tests plus adversarial cases in a Podman container, also with sanitizers
 make profile    # where mwt spends its time, under load and at 60 Hz, in the same container (measures only)
 sudo make install   # installs mwt to /usr/local and the terminfo entry to /usr/share/terminfo
 sudo make uninstall # removes both again
 ```
 
-On its first run, `make replay` downloads its files to `tests/vt100`. They are not in the repository because their license is unclear. The `make evil` container has no network and skips the replay if they are missing: run `tests/replay.sh --fetch` once on the host to get them.
+On its first run, `make replay` downloads its files to `tests/vt100`. They are not in the repository because their license is unclear. The `make evil` container has no network and skips the replay if they are missing: run `tests/replay.sh --fetch` once on the host to get them. The same goes for `make esctest` and `tests/esctest`: esctest is GPL, so it is fetched, not included, and `tests/esctest.sh --fetch` gets it.
 
 Without installing, `tic -x mwt.info` is enough. It puts the entry in `~/.terminfo`. If the entry is missing, mwt sets `TERM=xterm-256color` and prints a warning.
 
@@ -80,6 +81,7 @@ Only changed rows are drawn. With double buffering, the rows that differ from th
 * SGR: bold, dim, italic, underline, reverse, invisible, strike; 16, 256, and truecolor (`;` and `:` forms)
 * Alternate screen (47/1047/1049), bracketed paste, mouse (1000/1002/1003 + SGR 1006), focus events, DECSCUSR (cursor shape)
 * Replies to DA, DA2, DSR/CPR, DECRQM, XTVERSION, window size (CSI 18 t)
+* DECRQCRA (checksum of a rectangle, as xterm computes it), only with `allow_checksum` in `config.h`: like xterm, off by default, since it lets any program read the screen. `make esctest` builds `mwt-esctest` with it on.
 * OSC 0/2 (window title)
 * Wide characters (CJK, emoji as outlines, if a fallback font has them)
 * HiDPI through `wl_surface.preferred_buffer_scale` (integer scaling)

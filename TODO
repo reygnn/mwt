@@ -16,6 +16,6 @@ TODO
 
 Tests, die noch fehlen, als Kür:
 
-* Andere Compositoren (weston, labwc), auch wegen fehlender Protokolle. vttest und
-  esctest. Bildschirmvergleich gegen tmux capture-pane mit aufgezeichneten
-  Sitzungen von vim oder htop.
+* Andere Compositoren (weston, labwc), auch wegen fehlender Protokolle. vttest.
+  Bildschirmvergleich gegen tmux capture-pane mit aufgezeichneten Sitzungen von
+  vim oder htop.

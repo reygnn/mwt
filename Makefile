@@ -22,6 +22,10 @@ all: mwt
 mwt: $(OBJ)
 	$(CC) $(LDFLAGS) -o $@ $(OBJ) $(LDLIBS)
 
+# mwt that answers DECRQCRA, which esctest reads the screen with; see allow_checksum.
+mwt-esctest: mwt.c config.h version.h vt.h font.h $(PROTO_H) $(filter-out mwt.o,$(OBJ))
+	$(CC) $(CFLAGS) -DMWT_ALLOW_CHECKSUM $(LDFLAGS) -o $@ mwt.c $(filter-out mwt.o,$(OBJ)) $(LDLIBS)
+
 mwt.o: mwt.c config.h version.h vt.h font.h $(PROTO_H)
 vt.o: vt.c vt.h version.h
 font.o: font.c font.h
@@ -83,6 +87,11 @@ evil:
 width: mwt
 	tests/width.sh
 
+# esctest under a headless sway, a report (see tests/esctest.sh); fetched on the
+# first run. Needs sway and python3.
+esctest: mwt-esctest
+	tests/esctest.sh
+
 # Where mwt spends its time, under a headless sway in the container of `make evil`.
 # Measures only, about 3 minutes. PROFILE_WORK picks loads (see tests/profile-run.sh).
 profile:
@@ -101,6 +110,6 @@ uninstall:
 	rm -f $(DESTDIR)$(PREFIX)/share/terminfo/m/mwt $(DESTDIR)$(PREFIX)/share/terminfo/6d/mwt
 
 clean:
-	rm -f mwt test_vt vtdump test_replay *.o $(PROTO_H) $(PROTO_C)
+	rm -f mwt mwt-esctest test_vt vtdump test_replay *.o $(PROTO_H) $(PROTO_C)
 
-.PHONY: all check replay terminfo keys pixel mouse keyboard test evil width profile install uninstall clean
+.PHONY: all check replay terminfo keys pixel mouse keyboard test evil width esctest profile install uninstall clean

@@ -1,4 +1,6 @@
 /mwt
+/mwt-esctest
+/tests/esctest/
 /test_vt
 /vtdump
 /test_replay
