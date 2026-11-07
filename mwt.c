@@ -839,12 +839,16 @@ static uint32_t rgb(uint32_t c)
 	return t.palette[c & 0xff];
 }
 
+/* Red and blue in one word, 16 bits each, and green on its own. A lane holds at
+ * most 255 * 255, and for those (x + 1 + (x >> 8)) >> 8 is exactly x / 255, so this
+ * gives the same pixels as dividing each channel, which tests/pixel.py relies on. */
 static inline uint32_t blend(uint32_t bg, uint32_t fg, unsigned a)
 {
-	uint32_t r = ((fg >> 16 & 0xff) * a + (bg >> 16 & 0xff) * (255 - a)) / 255;
-	uint32_t g = ((fg >> 8 & 0xff) * a + (bg >> 8 & 0xff) * (255 - a)) / 255;
-	uint32_t b = ((fg & 0xff) * a + (bg & 0xff) * (255 - a)) / 255;
-	return 0xff000000 | r << 16 | g << 8 | b;
+	uint32_t rb = (fg & 0xff00ff) * a + (bg & 0xff00ff) * (255 - a);
+	uint32_t g = (fg & 0xff00) * a + (bg & 0xff00) * (255 - a);
+	rb = (rb + 0x10001 + (rb >> 8 & 0xff00ff)) >> 8 & 0xff00ff;
+	g = (g + 0x100 + (g >> 8 & 0xffff00)) >> 8 & 0xff00;
+	return 0xff000000 | rb | g;
 }
 
 static void fill_rect(struct buffer *b, int x, int y, int w, int h, uint32_t c)
@@ -863,19 +867,20 @@ static void fill_rect(struct buffer *b, int x, int y, int w, int h, uint32_t c)
 static void blit(struct buffer *b, const struct glyph *g, int x, int y,
 		 int cx0, int cx1, int cy0, int cy1, uint32_t fg)
 {
-	cx1 = MIN(cx1, b->w);
-	cy1 = MIN(cy1, b->h);
-	for (int gy = 0; gy < g->h; gy++) {
-		int py = y - g->top + gy;
-		if (py < cy0 || py >= cy1)
-			continue;
-		uint32_t *row = b->data + (size_t)py * b->w;
+	/* the clip once, in glyph coordinates, and not at every pixel */
+	int ox = x + g->left, oy = y - g->top;
+	int gx0 = MAX(0, MAX(cx0, 0) - ox), gx1 = MIN(g->w, MIN(cx1, b->w) - ox);
+	int gy0 = MAX(0, MAX(cy0, 0) - oy), gy1 = MIN(g->h, MIN(cy1, b->h) - oy);
+	fg |= 0xff000000;
+	for (int gy = gy0; gy < gy1; gy++) {
+		uint32_t *row = b->data + (size_t)(oy + gy) * b->w + ox;
 		const uint8_t *a = g->alpha + gy * g->w;
-		for (int gx = 0; gx < g->w; gx++) {
-			int px = x + g->left + gx;
-			if (px < cx0 || px >= cx1 || !a[gx])
-				continue;
-			row[px] = a[gx] == 255 ? (fg | 0xff000000) : blend(row[px], fg, a[gx]);
+		for (int gx = gx0; gx < gx1; gx++) {
+			unsigned v = a[gx];
+			if (v == 255)
+				row[gx] = fg;
+			else if (v)
+				row[gx] = blend(row[gx], fg, v);
 		}
 	}
 }
