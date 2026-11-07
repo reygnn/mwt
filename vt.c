@@ -1077,8 +1077,10 @@ static void csi_dispatch(struct vt *vt, uint32_t f)
 	case 'X': clear_line(vt, c->y, c->x, c->x + n - 1); break;
 	case 'Z': tab(vt, -n); break;
 	case 'b': /* REP */
+		/* at most a screenful: more only adds the same lines to the history,
+		 * and 8 bytes asking for 65535 cells would stall reading for long */
 		if (vt->lastcp)
-			for (int i = 0; i < MIN(n, 65535); i++)
+			for (int i = 0; i < MIN(n, vt->cols * vt->rows); i++)
 				put(vt, vt->lastcp);
 		break;
 	case 'c':
@@ -1392,7 +1394,10 @@ void vt_write(struct vt *vt, const char *buf, size_t len)
 				vt->utf8_cp = vt->utf8_cp << 6 | (b & 0x3f);
 				if (--vt->utf8_need == 0) {
 					uint32_t cp = vt->utf8_cp;
-					if (cp > 0x10ffff || (cp >= 0xd800 && cp < 0xe000))
+					/* an overlong form is refused too: E0 80 9B would
+					 * be ESC, past a filter that drops the byte 0x1B */
+					if (cp < vt->utf8_min || cp > 0x10ffff ||
+					    (cp >= 0xd800 && cp < 0xe000))
 						cp = 0xfffd;
 					feed(vt, cp);
 				}
@@ -1405,12 +1410,15 @@ void vt_write(struct vt *vt, const char *buf, size_t len)
 			feed(vt, b);
 		} else if ((b & 0xe0) == 0xc0 && b >= 0xc2) {
 			vt->utf8_cp = b & 0x1f;
+			vt->utf8_min = 0x80;
 			vt->utf8_need = 1;
 		} else if ((b & 0xf0) == 0xe0) {
 			vt->utf8_cp = b & 0x0f;
+			vt->utf8_min = 0x800;
 			vt->utf8_need = 2;
 		} else if ((b & 0xf8) == 0xf0 && b <= 0xf4) {
 			vt->utf8_cp = b & 0x07;
+			vt->utf8_min = 0x10000;
 			vt->utf8_need = 3;
 		} else {
 			feed(vt, 0xfffd);

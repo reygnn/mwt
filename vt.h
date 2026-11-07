@@ -106,6 +106,7 @@ struct vt {
 	/* parser */
 	int state;
 	uint32_t utf8_cp;
+	uint32_t utf8_min;        /* the least value the sequence may encode */
 	int utf8_need;
 	int params[VT_MAX_PARAMS];
 	bool subparam[VT_MAX_PARAMS]; /* param was preceded by ':' */

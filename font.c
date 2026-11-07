@@ -162,8 +162,10 @@ struct font *font_open(const char *spec, double size_pt, int scale)
 		goto fail;
 	}
 
-	f->cache_cap = 1024;
-	f->cache = calloc(f->cache_cap, sizeof *f->cache);
+	f->cache = calloc(1024, sizeof *f->cache);
+	if (!f->cache)
+		goto fail;
+	f->cache_cap = 1024; /* only now: font_close walks cache_cap entries */
 	return f;
 fail:
 	font_close(f);
@@ -317,6 +319,11 @@ const struct glyph *font_glyph(struct font *f, uint32_t cp, int style)
 			f->cache = n;
 			f->cache_cap = ncap;
 			e = slot(f->cache, f->cache_cap, key);
+		} else if (f->cache_used + 1 >= f->cache_cap) {
+			/* no memory to grow, and a full table would leave slot()
+			 * without a free place: draw nothing for this one */
+			static const struct glyph none;
+			return &none;
 		}
 	}
 	e->used = true;

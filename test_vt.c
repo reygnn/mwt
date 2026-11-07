@@ -764,6 +764,30 @@ static void test_charset_and_misc(void)
 	w(vt, "\033[?1234;5h\033[>4;2m\033[=5uX");
 	CHECK(vt->pri[2][2].cp == 'X');
 	vt_free(vt);
+
+	/* Overlong UTF-8 is refused: E0 80 9B and F0 80 80 9B would be ESC, and the
+	 * [31m after them a color; so would E0 81 81 be an A. The shortest valid
+	 * three- and four-byte forms still pass. */
+	vt = mk(10, 3, 0);
+	w(vt, "\xe0\x80\x9b[31mX");
+	CHECK(vt->pri[0][0].cp == 0xfffd && vt->pri[0][1].cp == '[');
+	CHECK(vt->pri[0][5].cp == 'X' && vt->pri[0][5].fg == COL_DEFAULT_FG);
+	w(vt, "\r\n\xf0\x80\x80\x9b[31mX\xe0\x81\x81");
+	CHECK(vt->pri[1][0].cp == 0xfffd && vt->pri[1][1].cp == '[');
+	CHECK(vt->pri[1][5].fg == COL_DEFAULT_FG && vt->pri[1][6].cp == 0xfffd);
+	w(vt, "\r\n\xe0\xa0\x80\xf0\x90\x80\x80");
+	CHECK(vt->pri[2][0].cp == 0x800 && vt->pri[2][1].cp == 0x10000);
+	vt_free(vt);
+
+	/* REP writes at most a screenful, so a few bytes cannot ask for 65535
+	 * cells: on 10x3 an x and 30 more, the last wrapping into a new line, so
+	 * one line goes into the history instead of about 6550 */
+	vt = mk(10, 3, 100);
+	w(vt, "x\033[65535b");
+	CHECK(vt->hist_count == 1);
+	CHECK_STR(row(vt, 1), "xxxxxxxxxx");
+	CHECK_STR(row(vt, 2), "x");
+	vt_free(vt);
 }
 
 /* VT100 features mwt does not have, as old animations and vttest send them:
