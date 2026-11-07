@@ -83,6 +83,11 @@ evil:
 width: mwt
 	tests/width.sh
 
+# Where mwt spends its time, under a headless sway in the container of `make evil`.
+# Measures only, about 3 minutes. PROFILE_WORK picks loads (see tests/profile-run.sh).
+profile:
+	tests/profile.sh
+
 install: mwt
 	install -Dm755 mwt $(DESTDIR)$(PREFIX)/bin/mwt
 	# Not under PREFIX: ncurses does not search /usr/local/share/terminfo.
@@ -98,4 +103,4 @@ uninstall:
 clean:
 	rm -f mwt test_vt vtdump test_replay *.o $(PROTO_H) $(PROTO_C)
 
-.PHONY: all check replay terminfo keys pixel mouse keyboard test evil width install uninstall clean
+.PHONY: all check replay terminfo keys pixel mouse keyboard test evil width profile install uninstall clean

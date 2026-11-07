@@ -18,6 +18,7 @@ make keyboard   # Dead Keys, Compose und Key-Repeat (unter headless sway, wie ma
 make test       # Black-Box-Tests unter headless sway (braucht sway, wtype, wl-clipboard, grim und vinput aus mwc)
 make width      # wo mwt und bash, vim oder tmux Zeichenbreiten verschieden zählen (braucht zusätzlich vim und tmux)
 make evil       # alle Tests plus Härtefälle in einem Podman-Container, auch mit Sanitizern
+make profile    # wo mwt seine Zeit lässt, unter Last und bei 60 Hz, im selben Container (misst nur)
 sudo make install   # installiert mwt nach /usr/local und die terminfo nach /usr/share/terminfo
 sudo make uninstall # entfernt beides wieder
 ```
