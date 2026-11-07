@@ -47,6 +47,14 @@ check: test_vt fuzz_regress
 	@./fuzz_regress tests/fuzz-regress/* 2>fuzz_regress.log || { cat fuzz_regress.log; exit 1; }
 	@rm -f fuzz_regress.log
 
+# font.c with each strdup failing once in turn, under sanitizers; needs fallback
+# fonts to mean anything, so make fonts runs it (tests/fonts-run.sh).
+font_oom: tests/font_oom.c font.c font.h
+	$(CC) -std=c11 -Wall -Wextra -g -O1 -I. -fsanitize=address,undefined \
+		-fno-sanitize-recover=all $(shell pkg-config --cflags fontconfig freetype2) \
+		-Wl,--wrap=strdup -o $@ tests/font_oom.c font.c \
+		$(shell pkg-config --libs fontconfig freetype2) -lm
+
 fuzz_regress: tests/fuzz_vt.c vt.c vt.h version.h
 	$(CC) -std=c11 -Wall -Wextra -g -O1 -I. -DFUZZ_STANDALONE -fsanitize=address,undefined \
 		-fno-sanitize-recover=all -o $@ tests/fuzz_vt.c vt.c
@@ -135,6 +143,6 @@ uninstall:
 	rm -f $(DESTDIR)$(PREFIX)/share/terminfo/m/mwt $(DESTDIR)$(PREFIX)/share/terminfo/6d/mwt
 
 clean:
-	rm -f mwt mwt-esctest test_vt vtdump test_replay fuzz_vt fuzz_regress fuzz_regress.log *.o $(PROTO_H) $(PROTO_C)
+	rm -f mwt mwt-esctest test_vt vtdump test_replay fuzz_vt fuzz_regress fuzz_regress.log font_oom *.o $(PROTO_H) $(PROTO_C)
 
 .PHONY: all check replay fuzz terminfo keys pixel mouse keyboard test evil fonts width esctest profile install uninstall clean

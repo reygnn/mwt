@@ -12,12 +12,6 @@ before them is done, see the end.
 
 The three it found to fix are done, see the end.
 
-### To fix
-
-- Read: `load_face` (`font.c`) does not check the `strdup` of the face's path. Out of
-  memory, `path` is NULL, and `find_fallback` then passes it to `strcmp`. Older than the
-  fallback faces making room for each other; found while checking that change.
-
 ### To decide
 
 - Read: a character no font has costs a `FcFontMatch` the first time it is drawn, in each
@@ -173,3 +167,13 @@ The limit of fallback faces, found by `make fonts`, which passes with the fix:
   room for a new one. Glyphs already drawn stay, the glyph cache holds bitmaps and no
   faces; a glyph not drawn before loads its face again. `tests/fallback.py`
   `test_many_scripts` wants all 26, then the first 8 in bold, from faces loaded anew.
+
+Found while checking that change:
+
+- Read: `load_face` did not check the `strdup` of the face's path, nor did `font_open`
+  where it makes a bold or italic from the regular face. Out of memory, `path` was NULL,
+  and `find_fallback` passed it to `strcmp`. Both are checked now: `load_face` closes the
+  face and fails, `font_open` gives up. `tests/font_oom.c`, run by `make fonts`, fails each
+  `strdup` of `font_open` and of the fallback faces once in turn, under sanitizers:
+  all 8 pass with the fix; with the old `font.c` UBSan stops at the `strcmp` in
+  `find_fallback`.

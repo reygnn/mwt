@@ -71,8 +71,14 @@ static bool load_face(struct font *f, FcPattern *match, struct face *out)
 		};
 		FT_Set_Transform(out->ft, &m, NULL);
 	}
-	out->embolden = emb;
+	/* the path tells faces apart in find_fallback, which needs one */
 	out->path = strdup((const char *)file);
+	if (!out->path) {
+		FT_Done_Face(out->ft);
+		out->ft = NULL;
+		return false;
+	}
+	out->embolden = emb;
 	out->index = index;
 	return true;
 }
@@ -147,6 +153,8 @@ struct font *font_open(const char *spec, double size_pt, int scale)
 			FT_Set_Char_Size(f->style[i].ft, 0, (FT_F26Dot6)lround(f->size_px * 64), 72, 72);
 			f->style[i].embolden = st[i].weight == FC_WEIGHT_BOLD;
 			f->style[i].path = strdup(f->style[0].path);
+			if (!f->style[i].path)
+				goto fail; /* font_close closes the face */
 		}
 	}
 

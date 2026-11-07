@@ -8,6 +8,7 @@
 /fuzz_vt
 /fuzz_regress
 /fuzz_regress.log
+/font_oom
 /tests/fuzz/
 *.o
 *-client-protocol.h

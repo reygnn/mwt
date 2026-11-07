@@ -24,6 +24,12 @@ case $mono in
 *) echo "FAIL: monospace should stay DejaVu Sans Mono"; fail=1 ;;
 esac
 fc-match -f 'emoji goes to %{family} (%{file})\n' 'monospace:charset=1f642'
+# fontconfig keeps what it read on its first use for good, as in leaks.py.
+printf 'leak:libfontconfig\nleak:libexpat\n' >"$HOME/lsan.supp"
+echo "=== font.c out of memory ==="
+make -s font_oom 2>&1 | grep -E 'warning|error'
+ASAN_OPTIONS=detect_leaks=1 LSAN_OPTIONS=suppressions=$HOME/lsan.supp:print_suppressions=0 \
+	./font_oom || fail=1
 build "-O2 -g" ""
 echo "=== fallback ==="
 tests/headless.sh tests/fallback.py 2>&1 | grep -E '^(FAIL|PASS|info|ok|=== )'

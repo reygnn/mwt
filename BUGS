@@ -6,6 +6,11 @@ Offen, noch nicht bestätigt:
 
 Behoben:
 
+* Bei Speichermangel konnte eine Schrift ohne Pfad entstehen: load_face und das
+  synthetische Fett oder Kursiv in font_open prüften ihr strdup nicht, und
+  find_fallback gab den NULL-Pfad an strcmp. Jetzt schließt load_face die
+  Schrift und scheitert, font_open gibt auf. Gefunden beim Lesen. Test:
+  tests/font_oom.c in make fonts lässt jedes strdup einmal fehlschlagen.
 * Waren 16 Fallback-Schriften geladen, zeichnete mwt jedes Zeichen einer weiteren
   Schrift als nichts, obwohl eine Schrift dafür installiert war: In make fonts
   blieben 7 von 26 Schriftsystemen leer, darunter Devanagari und Thai. Jetzt
