@@ -439,6 +439,29 @@ paste_escape() {
 	K v; T -k Return
 	if try 6 'a\[201~b\]52cd'; then ok "control bytes stripped from a paste"; else info "paste result: $(tail -3 "$DIR/shown" | cut -c1-100)"; fi
 }
+# ^C, ^Z, ^D, ^U and DEL in pasted text act in the kernel's line discipline,
+# bracketed paste or not; only tab, CR and LF may stay of the controls.
+paste_controls() {
+	start_mwt
+	printf 'echo a\003b\025c\177d\032e' | wl-copy
+	sleep 0.4
+	K v; T -k Return
+	if try 6 'abcde'; then ok "controls dropped from a bracketed paste"; else gap "bracketed paste with controls: $(tail -3 "$DIR/shown" | tr '\n' '|' | cut -c1-100)"; fi
+	T 'cat >~/c0.txt' -k Return
+	sleep 0.3
+	printf 'eins\003zwei\032drei\004vier\025fuenf\177sechs\tsieben\n' | wl-copy
+	sleep 0.4
+	K v
+	sleep 0.5
+	C d
+	sleep 0.5
+	if [ "$(cat "$HOME/c0.txt" 2>/dev/null)" = "$(printf 'einszweidreivierfuenfsechs\tsieben')" ]; then
+		ok "controls dropped from a plain paste, the tab kept"
+	else
+		gap "plain paste with controls, cat wrote: '$(od -c "$HOME/c0.txt" 2>/dev/null | head -2 | tr -s ' \n' ' ')'"
+		pkill -x cat
+	fi
+}
 ctrl_c_behind_paste() {
 	start_mwt
 	T 'sleep 300' -k Return
@@ -1195,7 +1218,7 @@ compositor_dies() {
 
 for c in dcs_swallow osc_swallow_cat fuzz noncharacters \
 	mid_char_selection drag_during_flood select_history click_clusters \
-	paste_integrity paste_bidi paste_escape ctrl_c_behind_paste paste_holds_until_return line_limits paste_over_16mb \
+	paste_integrity paste_bidi paste_escape paste_controls ctrl_c_behind_paste paste_holds_until_return line_limits paste_over_16mb \
 	snippet_typed snippet_paste snippet_paste_no_newline \
 	stty_raw_read_in_shell inlcr tcoff cyrillic_ctrl_c cyrillic_raw copy_on_ru raw_paste_ctrl_c paste_bracket_on_signal python_repl flood_ctrl_c flood_rss soak reply_flood reply_flood_raw \
 	args shells closed_stdio cwd_tricks exit_with_jobs close_ignores_hup \

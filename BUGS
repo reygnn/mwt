@@ -6,6 +6,11 @@ Offen, noch nicht bestätigt:
 
 Behoben:
 
+* Eine Paste ließ von den Steuerzeichen nur ESC und NUL weg. ^C, ^Z, ^D, ^U und
+  DEL im eingefügten Text wirkten in der Line Discipline des Kernels, mit
+  Bracketed Paste oder ohne: Ein ^C beendete das Programm, das die Paste las.
+  Jetzt bleiben nur Tab, CR und LF. Gefunden beim Lesen.
+  Test: tests/evil.sh paste_controls.
 * Ctrl+C mitten in einer Paste schickte die schließende Klammer (ESC[201~),
   sobald eine noch in mwt wartete, auch wenn die öffnende nie hinausgegangen
   war: Das Programm bekam eine Klammer zu, die es nie offen gesehen hatte. Jetzt

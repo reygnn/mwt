@@ -609,14 +609,16 @@ static void paste_text(const char *s, size_t n)
 		memcpy(buf, "\033[200~", 6);
 		o = 6;
 	}
+	/* Of the controls only tab, CR and LF stay. ESC would end the bracket, and
+	 * ^C, ^Z, ^D, ^U, DEL and the like act in the kernel's line discipline,
+	 * bracketed paste or not: pasted text must not raise a signal or edit. */
 	for (size_t i = 0; i < n; i++) {
-		if (s[i] == '\033' || s[i] == 0)
-			continue; /* never let pasted text end the bracket */
-		if (s[i] == '\n') {
+		unsigned char c = (unsigned char)s[i];
+		if (c == '\n') {
 			if (i == 0 || s[i - 1] != '\r')
 				buf[o++] = '\r';
-		} else {
-			buf[o++] = s[i];
+		} else if ((c >= 0x20 && c != 0x7f) || c == '\t' || c == '\r') {
+			buf[o++] = (char)c;
 		}
 	}
 	if (br) {
