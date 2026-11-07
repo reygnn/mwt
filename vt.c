@@ -779,6 +779,7 @@ static void set_private_mode(struct vt *vt, int m, bool on)
 		bit = m == 1000 ? MODE_MOUSE_BTN :
 		      m == 1002 ? MODE_MOUSE_DRAG : MODE_MOUSE_ANY;
 		break;
+	case 66: bit = MODE_APPKEYPAD; break; /* DECNKM, the same as ESC = and ESC > */
 	case 1004: bit = MODE_FOCUS; break;
 	case 1006: bit = MODE_MOUSE_SGR; break;
 	case 2004: bit = MODE_BRACKETED; break;
@@ -790,13 +791,20 @@ static void set_private_mode(struct vt *vt, int m, bool on)
 		vt->mode &= ~bit;
 }
 
-/* DECRQM answer for a private mode: 1 set, 2 reset, 0 unknown. Modes mwt
- * accepts but ignores (12 blink, 1005/1015 mouse encodings) count as unknown,
- * and so does 2027 until grapheme clusters are in: see TODO. */
+/* DECRQM answer for a private mode: 1 set, 2 reset, 4 permanently reset, 0
+ * unknown. 4 is for the DEC and xterm modes mwt knows of but does not have, so
+ * setting them never takes (blink, 132 columns, reverse screen, margins, other
+ * mouse encodings...). 2027 stays unknown until grapheme clusters are in: see
+ * TODO. */
 static int private_mode_state(const struct vt *vt, int m)
 {
 	unsigned bit;
 	switch (m) {
+	case 3: case 4: case 5: case 9: case 12: case 18: case 19: case 38: case 40:
+	case 41: case 42: case 45: case 60: case 67: case 69: case 95: case 1001:
+	case 1005: case 1015: case 1045:
+		return 4;
+	case 66: bit = MODE_APPKEYPAD; break;
 	case 1: bit = MODE_APPCURSOR; break;
 	case 6: return vt->c.origin ? 1 : 2;
 	case 7: bit = MODE_AUTOWRAP; break;
@@ -922,7 +930,12 @@ static void csi_dispatch(struct vt *vt, uint32_t f)
 		} else if (vt->inter[0] == '$' && f == 'p') { /* DECRQM, ANSI modes */
 			int m = arg(vt, 0, 0);
 			unsigned bit = m == 4 ? MODE_INSERT : m == 20 ? MODE_LNM : 0;
-			reply(vt, "\033[%d;%d$y", m, !bit ? 0 : vt->mode & bit ? 1 : 2);
+			/* the ECMA-48 modes of a terminal mwt is not (guarded areas,
+			 * a locked keyboard, editing extents...) are permanently reset;
+			 * SRM (12) stays unknown, terminals disagree on what reset means */
+			bool never = (m >= 1 && m <= 19 && m != 4 && m != 6 && m != 8 &&
+				      m != 9 && m != 12);
+			reply(vt, "\033[%d;%d$y", m, bit ? (vt->mode & bit ? 1 : 2) : never ? 4 : 0);
 		}
 		return;
 	}
@@ -1059,6 +1072,78 @@ static void csi_dispatch(struct vt *vt, uint32_t f)
 	}
 }
 
+/* One color for an OSC query, in the form xterm answers with: 16 bits per
+ * channel, the byte doubled. which is "4;N" for the palette, or "10".."12". */
+static void color_reply(struct vt *vt, const char *which, uint32_t c)
+{
+	uint32_t v = vt->cb.color(vt->cb.ud, c);
+	unsigned r = v >> 16 & 0xff, g = v >> 8 & 0xff, b = v & 0xff;
+	reply(vt, "\033]%s;rgb:%02x%02x/%02x%02x/%02x%02x%s", which, r, r, g, g, b, b,
+	      vt->osc_bel ? "\a" : "\033\\");
+}
+
+/* Strict decimal, for OSC numbers: atoi takes "4x" as 4. */
+static bool osc_number(const char *s, int max, int *out)
+{
+	int v = 0;
+	if (!*s)
+		return false;
+	for (; *s; s++) {
+		if (*s < '0' || *s > '9' || (v = v * 10 + (*s - '0')) > max)
+			return false;
+	}
+	*out = v;
+	return true;
+}
+
+/* The next ';'-separated field of *s, empty ones included; NULL at the end. */
+static char *osc_field(char **s)
+{
+	char *f = *s;
+	if (!f)
+		return NULL;
+	char *semi = strchr(f, ';');
+	*s = semi ? semi + 1 : NULL;
+	if (semi)
+		*semi = 0;
+	return f;
+}
+
+/* Colors are only answered, not changed: the palette is fixed in config.h, a
+ * program setting one would not get it. OSC 4 takes pairs "N;spec"; OSC 10 to 12
+ * take a list in which each further entry is the next number, as in xterm, so
+ * "10;?;?" asks for the foreground and the background. */
+static void osc_colors(struct vt *vt, int num, char *args)
+{
+	if (!vt->cb.color)
+		return;
+	if (num == 4) {
+		for (;;) {
+			char *n = osc_field(&args);
+			char *spec = osc_field(&args);
+			int idx;
+			if (!n || !spec)
+				return;
+			if (strcmp(spec, "?") || !osc_number(n, 255, &idx))
+				continue;
+			char which[16];
+			snprintf(which, sizeof which, "4;%d", idx);
+			color_reply(vt, which, (uint32_t)idx);
+		}
+	}
+	static const uint32_t dyn[3] = { COL_DEFAULT_FG, COL_DEFAULT_BG, COL_CURSOR };
+	for (int i = num; i <= 12; i++) {
+		char *spec = osc_field(&args);
+		if (!spec)
+			return;
+		if (!strcmp(spec, "?")) {
+			char which[16];
+			snprintf(which, sizeof which, "%d", i);
+			color_reply(vt, which, dyn[i - 10]);
+		}
+	}
+}
+
 static void osc_dispatch(struct vt *vt)
 {
 	vt->osc[vt->osc_len] = 0;
@@ -1066,9 +1151,13 @@ static void osc_dispatch(struct vt *vt)
 	if (!semi)
 		return;
 	*semi = 0;
-	int num = atoi(vt->osc);
+	int num;
+	if (!osc_number(vt->osc, 999, &num))
+		return;
 	if ((num == 0 || num == 2) && vt->cb.title)
 		vt->cb.title(vt->cb.ud, semi + 1);
+	else if (num == 4 || (num >= 10 && num <= 12))
+		osc_colors(vt, num, semi + 1);
 }
 
 /* ---- the state machine ------------------------------------------------ */
@@ -1134,8 +1223,10 @@ static void feed(struct vt *vt, uint32_t cp)
 		return;
 	}
 	if (cp == 0x1b) {
-		if (vt->state == ST_OSC)
+		if (vt->state == ST_OSC) {
+			vt->osc_bel = false;
 			osc_dispatch(vt);
+		}
 		vt->state = ST_ESC;
 		clear_seq(vt);
 		return;
@@ -1222,6 +1313,7 @@ static void feed(struct vt *vt, uint32_t cp)
 		break;
 	case ST_OSC:
 		if (cp == 0x07) {
+			vt->osc_bel = true;
 			osc_dispatch(vt);
 			vt->state = ST_GROUND;
 		} else if (cp >= 0x20) {

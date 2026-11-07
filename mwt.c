@@ -841,6 +841,13 @@ static uint32_t rgb(uint32_t c)
 	return t.palette[c & 0xff];
 }
 
+/* What OSC 4, 10, 11 and 12 queries answer: the colors as drawn. */
+static uint32_t vt_color(void *ud, uint32_t c)
+{
+	(void)ud;
+	return c == COL_CURSOR ? color_cursor : rgb(c);
+}
+
 /* Red and blue in one word, 16 bits each, and green on its own. A lane holds at
  * most 255 * 255, and for those (x + 1 + (x >> 8)) >> 8 is exactly x / 255, so this
  * gives the same pixels as dividing each channel, which tests/pixel.py relies on. */
@@ -2410,7 +2417,7 @@ done:;
 		exit(2);
 	}
 
-	struct vt_callbacks cb = { .write = vt_reply, .title = vt_title };
+	struct vt_callbacks cb = { .write = vt_reply, .title = vt_title, .color = vt_color };
 	t.vt = vt_new(t.init_cols, t.init_rows, histsize, &cb);
 	if (!t.vt)
 		die("out of memory");

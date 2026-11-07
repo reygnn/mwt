@@ -8,7 +8,7 @@
 #
 # A report, it fails only when esctest could not run: mwt leaves out much of what
 # esctest covers (window operations, left and right margins, rectangle and selective
-# erase operations, color queries), and those tests fail by design.
+# erase operations, setting colors), and those tests fail by design.
 #
 #   tests/esctest.sh                  run all tests, print the summary and failures
 #   tests/esctest.sh --include=REGEX  only some, other options go to esctest too
@@ -73,25 +73,49 @@ sleep 0.3
 # As xterm at VT420: esctest reads the screen back only from VT level 4 on. mwt
 # answers DA and DA2 as a VT220, so those tests fail. A report that does not
 # come fails a test after 0.3 s instead of the default second.
-LOG=$DIR/esctest.log
-timeout 1800 "$MWT" -g 80x24 -e sh -c 'log=$1; shift; cd "$0/esctest" && exec python3 esctest.py \
-	--expected-terminal=xterm --max-vt-level=4 --timeout=0.3 --no-print-logs \
-	--logfile="$log" "$@" 2>"$log.err"' "$ESC_DIR" "$LOG" "$@" >"$DIR/mwt.log" 2>&1
-if ! grep -q '^\*\*\* .* passed' "$LOG" 2>/dev/null; then
-	echo "esctest: did not finish"
-	tail -n 20 "$DIR/mwt.log" "$LOG.err" "$LOG" 2>/dev/null
-	exit 1
+#
+# The tests that set colors run in a mwt of their own. mwt answers color queries
+# but keeps its colors, so they fail, and a test that asked for two colors leaves
+# the second answer unread: esctest does not empty its input between tests, and
+# every test after it would read the wrong reply. Options of your own: one run.
+run() { # log, esctest options...
+	local log=$1
+	shift
+	timeout 1800 "$MWT" -g 80x24 -e sh -c 'log=$1; shift; cd "$0/esctest" && exec python3 esctest.py \
+		--expected-terminal=xterm --max-vt-level=4 --timeout=0.3 --no-print-logs \
+		--logfile="$log" "$@" 2>"$log.err"' "$ESC_DIR" "$log" "$@" >>"$DIR/mwt.log" 2>&1
+	if ! grep -q '^\*\*\* .* passed' "$log" 2>/dev/null; then
+		echo "esctest: did not finish"
+		tail -n 20 "$DIR/mwt.log" "$log.err" "$log" 2>/dev/null
+		exit 1
+	fi
+}
+COLORS='(Change|Reset)\w*Color'
+LOGS=()
+if [ $# -gt 0 ]; then
+	run "$DIR/esctest.log" "$@"
+	LOGS=("$DIR/esctest.log")
+else
+	run "$DIR/esctest.log" --include="^(?!$COLORS)"
+	run "$DIR/colors.log" --include="^$COLORS"
+	LOGS=("$DIR/esctest.log" "$DIR/colors.log")
 fi
-python3 - "$LOG" <<'PY'
+python3 - "${LOGS[@]}" <<'PY'
 import collections, re, sys
-log = open(sys.argv[1], errors="replace").read()
 by_class = collections.Counter()
 timeouts = 0
-for block in re.split(r"\nRun test: ", log)[1:]:
-    if "FAILED:" in block:
-        by_class[block.split(".", 1)[0]] += 1
-        timeouts += "Timeout waiting to read" in block
+totals = [0, 0, 0]
+for path in sys.argv[1:]:
+    log = open(path, errors="replace").read()
+    for block in re.split(r"\nRun test: ", log)[1:]:
+        if "FAILED:" in block:
+            by_class[block.split(".", 1)[0]] += 1
+            timeouts += "Timeout waiting to read" in block
+    last = re.findall(r"^\*\*\* .*\*\*\*$", log, re.M)[-1]
+    for i, what in enumerate(("tests? passed", "known bugs?", "tests? failed")):
+        m = re.search(r"(\d+) " + what, last, re.I)
+        totals[i] += int(m.group(1)) if m else 0
 print("esctest: failures by group, " + ", ".join(f"{k} {v}" for k, v in sorted(by_class.items())))
 print(f"esctest: {timeouts} of them wait for a report mwt does not send")
-print(re.findall(r"^\*\*\* .*\*\*\*$", log, re.M)[-1])
+print(f"*** {totals[0]} tests passed, {totals[1]} known bugs, {totals[2]} TESTS FAILED ***")
 PY

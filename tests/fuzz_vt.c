@@ -36,7 +36,15 @@ static void on_bell(void *ud)
 	(void)ud;
 }
 
-static const struct vt_callbacks cb = { .write = on_write, .bell = on_bell };
+static uint32_t on_color(void *ud, uint32_t c)
+{
+	(void)ud;
+	if (c != COL_DEFAULT_FG && c != COL_DEFAULT_BG && c != COL_CURSOR && c > 255)
+		abort(); /* vt.c asked for a color that does not exist */
+	return c * 0x10101u;
+}
+
+static const struct vt_callbacks cb = { .write = on_write, .bell = on_bell, .color = on_color };
 
 static void die(const char *what, const struct vt *vt)
 {

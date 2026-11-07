@@ -11,6 +11,8 @@
 #define COL_DEFAULT_BG 257u
 #define COL_RGB        (1u << 24)
 #define COL_IS_RGB(c)  ((c) & COL_RGB)
+/* only for vt_callbacks.color: the cursor's color, OSC 12 */
+#define COL_CURSOR     258u
 
 enum {
 	ATTR_BOLD      = 1 << 0,
@@ -66,6 +68,9 @@ struct vt_callbacks {
 	void (*write)(void *ud, const char *buf, size_t len); /* reply to pty */
 	void (*title)(void *ud, const char *title);
 	void (*bell)(void *ud);
+	/* 0xRRGGBB of a palette index, COL_DEFAULT_FG, COL_DEFAULT_BG or COL_CURSOR,
+	 * for OSC 4/10/11/12 queries; without it they get no answer */
+	uint32_t (*color)(void *ud, uint32_t c);
 	void *ud;
 };
 
@@ -109,6 +114,7 @@ struct vt {
 	int ninter;
 	char osc[VT_OSC_MAX];
 	int osc_len;
+	bool osc_bel;             /* the OSC ended with BEL, a reply ends the same */
 
 	struct vt_callbacks cb;
 	bool allow_checksum;      /* answer DECRQCRA; it lets programs read the screen */

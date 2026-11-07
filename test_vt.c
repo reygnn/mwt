@@ -43,9 +43,17 @@ static void on_title(void *ud, const char *t)
 	snprintf(titlebuf, sizeof titlebuf, "%s", t);
 }
 
+/* a palette that makes each color easy to tell apart in a reply */
+static uint32_t on_color(void *ud, uint32_t c)
+{
+	(void)ud;
+	return c == COL_DEFAULT_FG ? 0xdcdccc : c == COL_DEFAULT_BG ? 0x1e1e1e :
+	       c == COL_CURSOR ? 0x00ff7f : c << 16 | 0x0102;
+}
+
 static struct vt *mk(int cols, int rows, int hist)
 {
-	struct vt_callbacks cb = { .write = on_write, .title = on_title };
+	struct vt_callbacks cb = { .write = on_write, .title = on_title, .color = on_color };
 	replybuf[0] = titlebuf[0] = 0;
 	return vt_new(cols, rows, hist, &cb);
 }
@@ -478,6 +486,21 @@ static void test_replies(void)
 	replybuf[0] = 0;
 	w(vt, "\033[4h\033[4$p\033[20$p\033[99$p\033[4l");
 	CHECK_STR(replybuf, "\033[4;1$y\033[20;2$y\033[99;0$y");
+	/* 4: modes mwt knows of but does not have, so setting them never takes */
+	replybuf[0] = 0;
+	w(vt, "\033[?3h\033[?3$p\033[?5$p\033[?12$p\033[?45$p\033[?69$p\033[?1005$p");
+	CHECK_STR(replybuf, "\033[?3;4$y\033[?5;4$y\033[?12;4$y\033[?45;4$y"
+			    "\033[?69;4$y\033[?1005;4$y");
+	replybuf[0] = 0;
+	w(vt, "\033[2$p\033[19$p\033[12$p\033[21$p");
+	CHECK_STR(replybuf, "\033[2;4$y\033[19;4$y\033[12;0$y\033[21;0$y");
+	/* DECNKM is the keypad mode of ESC = and ESC > */
+	replybuf[0] = 0;
+	w(vt, "\033[?66$p\033=\033[?66$p\033>\033[?66h");
+	CHECK(vt->mode & MODE_APPKEYPAD);
+	w(vt, "\033[?66l");
+	CHECK(!(vt->mode & MODE_APPKEYPAD));
+	CHECK_STR(replybuf, "\033[?66;2$y\033[?66;1$y");
 	/* a private mode with an intermediate is not a set or reset */
 	w(vt, "\033[?2004$h\033[?2004$l");
 	CHECK(vt->mode & MODE_BRACKETED);
@@ -485,6 +508,48 @@ static void test_replies(void)
 	/* DCS strings are swallowed without output */
 	w(vt, "\033P+q544e\033\\ok");
 	CHECK_STR(row(vt, 2), "   ok");
+	vt_free(vt);
+}
+
+/* OSC 4, 10, 11 and 12 queries: answered with the colors as drawn, in xterm's
+ * form, ended as the question was; setting a color is ignored. */
+static void test_color_queries(void)
+{
+	struct vt *vt = mk(10, 3, 0);
+	w(vt, "\033]11;?\033\\");
+	CHECK_STR(replybuf, "\033]11;rgb:1e1e/1e1e/1e1e\033\\");
+	replybuf[0] = 0;
+	w(vt, "\033]10;?\a");
+	CHECK_STR(replybuf, "\033]10;rgb:dcdc/dcdc/cccc\a");
+	/* each further entry is the next number: 10, 11, 12 */
+	replybuf[0] = 0;
+	w(vt, "\033]10;?;?;?\a");
+	CHECK_STR(replybuf, "\033]10;rgb:dcdc/dcdc/cccc\a\033]11;rgb:1e1e/1e1e/1e1e\a"
+			    "\033]12;rgb:0000/ffff/7f7f\a");
+	/* a set in the list is skipped, a query after it still answered */
+	replybuf[0] = 0;
+	w(vt, "\033]10;#ffffff;?\a");
+	CHECK_STR(replybuf, "\033]11;rgb:1e1e/1e1e/1e1e\a");
+	/* palette entries, pairs of index and spec */
+	replybuf[0] = 0;
+	w(vt, "\033]4;1;?;255;?\033\\");
+	CHECK_STR(replybuf, "\033]4;1;rgb:0101/0101/0202\033\\\033]4;255;rgb:ffff/0101/0202\033\\");
+	/* nothing for what is not a query or out of range */
+	replybuf[0] = 0;
+	w(vt, "\033]4;1;red\a\033]4;256;?\a\033]4;x;?\a\033]4;1\a\033]11;\a"
+	      "\033]13;?\a\033]104\a\033]4x;1;?\a");
+	CHECK_STR(replybuf, "");
+	/* a query does not touch the screen or the title */
+	w(vt, "\033]0;t\aok");
+	CHECK_STR(row(vt, 0), "ok");
+	CHECK_STR(titlebuf, "t");
+	vt_free(vt);
+	/* without the callback no answer */
+	struct vt_callbacks cb = { .write = on_write };
+	vt = vt_new(10, 3, 0, &cb);
+	replybuf[0] = 0;
+	w(vt, "\033]11;?\a\033]4;1;?\a");
+	CHECK_STR(replybuf, "");
 	vt_free(vt);
 }
 
@@ -734,6 +799,7 @@ int main(void)
 	test_wide_insert();
 	test_altscreen();
 	test_replies();
+	test_color_queries();
 	test_checksum();
 	test_charset_and_misc();
 	test_unsupported_vt100();
