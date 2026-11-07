@@ -1017,24 +1017,29 @@ static const struct wl_callback_listener frame_listener = { frame_done };
 
 /* A compositor may hold on to the buffer it shows, so frames alternate between two,
  * and each must start as the last one ended. Most frames change little, and the
- * whole picture is megabytes: only the rows that differ get copied. Without the
- * memory to keep track, all of them. */
+ * whole picture is megabytes: only the rows that differ get copied. Of a cell row
+ * this frame draws anew, only what lies beside the grid. Without the memory to keep
+ * track, all of it. */
 static void buffer_catch_up(struct buffer *to, const struct buffer *from)
 {
 	if (t.differ_h != to->h) {
 		memcpy(to->data, from->data, to->size);
 		return;
 	}
-	size_t stride = (size_t)to->w * sizeof *to->data;
+	const struct vt *vt = t.vt;
+	int gx0 = MIN(t.pad, to->w), gx1 = MIN(t.pad + vt->cols * t.cw, to->w);
 	for (int y = 0; y < to->h; y++) {
 		if (!t.differ[y])
 			continue;
-		int y1 = y + 1;
-		while (y1 < to->h && t.differ[y1])
-			y1++;
-		memcpy(to->data + (size_t)y * to->w, from->data + (size_t)y * to->w,
-		       (y1 - y) * stride);
-		y = y1;
+		uint32_t *d = to->data + (size_t)y * to->w;
+		const uint32_t *s = from->data + (size_t)y * to->w;
+		int r = y >= t.pad ? (y - t.pad) / t.ch : -1;
+		if (r >= 0 && r < vt->rows && vt->dirty[r]) {
+			memcpy(d, s, gx0 * sizeof *d);
+			memcpy(d + gx1, s + gx1, (to->w - gx1) * sizeof *d);
+		} else {
+			memcpy(d, s, to->w * sizeof *d);
+		}
 	}
 	memset(t.differ, 0, to->h);
 }
@@ -1061,6 +1066,19 @@ static void draw(void)
 {
 	struct vt *vt = t.vt;
 	int W = t.width * t.scale, H = t.height * t.scale;
+
+	/* first, so that buffer_catch_up knows the rows of the cursor are drawn anew */
+	bool shown = cursor_shown();
+	if (shown != t.last_shown || vt->c.x != t.last_cx || vt->c.y != t.last_cy) {
+		if (t.last_shown && t.last_cy < vt->rows)
+			vt->dirty[t.last_cy] = true;
+		if (shown)
+			vt->dirty[vt->c.y] = true;
+	}
+	t.last_shown = shown;
+	t.last_cx = vt->c.x;
+	t.last_cy = vt->c.y;
+
 	struct buffer *b = NULL;
 	if (t.last && !t.last->busy)
 		b = t.last;
@@ -1087,17 +1105,6 @@ static void draw(void)
 		vt_mark_all(vt);
 		buffers_differ_all(H);
 	}
-
-	bool shown = cursor_shown();
-	if (shown != t.last_shown || vt->c.x != t.last_cx || vt->c.y != t.last_cy) {
-		if (t.last_shown && t.last_cy < vt->rows)
-			vt->dirty[t.last_cy] = true;
-		if (shown)
-			vt->dirty[vt->c.y] = true;
-	}
-	t.last_shown = shown;
-	t.last_cx = vt->c.x;
-	t.last_cy = vt->c.y;
 
 	int64_t ba = 0, ea = 0;
 	int bc = 0, ec = 0;
