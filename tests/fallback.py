@@ -15,7 +15,7 @@ from mwtlib import Mouse, Window, check, combo, finish, settle
 from pixel import BG, RESET, Grid
 
 CJK = "漢"      # 漢, in Droid Sans Fallback
-HANGUL = "한"   # 한, the same face
+HANGUL = "한"   # 한, in Nanum: Droid Sans Fallback has no Hangul
 EMOJI = "\U0001f642"  # 🙂, a color bitmap in Noto Color Emoji, an outline in Symbola
 # A letter from each of many scripts, each of which fonts-noto-core has in a file of
 # its own, more of them than the 16 fallback faces mwt keeps.
@@ -38,7 +38,8 @@ def ink_pixels(g, col, row):
 
 
 def test_wide(win):
-    """A wide glyph from a fallback face, in both its cells, and bold."""
+    """A wide glyph from a fallback face, in both its cells, and bold; Hangul from a
+    second fallback face, as the first has none."""
     win.feed(RESET + f"{CJK} {HANGUL}\r\n\033[1m{CJK}\033[0m".encode())
     g = Grid(settle(), 80, 24)
     check(g.ink(0, 0) and g.ink(1, 0), "CJK from a fallback face fills both cells")

@@ -17,8 +17,12 @@ The three it found to fix are done, see the end.
 - Read: a character no font has costs a `FcFontMatch` the first time it is drawn, in each
   style (`find_fallback`, `font.c:212`). The empty result is cached, so the same character
   costs nothing again, but random Unicode keeps bringing new ones, and the glyph cache grows
-  without a limit. Not measured. `make fonts` (a draft, not yet run) measures it in an
-  image with fallback fonts: `tests/fallback.py` `test_missing_cost`.
+  without a limit. Measured by `make fonts` (`tests/fallback.py` `test_missing_cost`): a
+  screenful of 1919 code points no face has takes 0.37 s to show the first time, 0.02 s
+  again, against 0.02 s for ASCII; about 0.18 ms a new character.
+- Measured: after 16 fallback faces (`MAX_FALLBACK`), a script with a font on the system
+  draws nothing. `make fonts` draws 19 of 26 scripts; Tamil, Devanagari, Thai, Syriac,
+  Javanese, Balinese and Vai come too late in its list.
 - Read, partly reproduced: each OSC 0 or 2 is a `set_title` request right away
   (`vt_title`, `mwt.c:275`), tens of thousands in one round of the event loop in a flood.
   Older libwayland versions are said to end the connection when the socket is full; with
@@ -94,9 +98,10 @@ is not in the repository.
 
 ### Fonts (`font.c`)
 
-- Fallback fonts (`find_fallback`, `font.c:212`): the test image has no font beyond
-  DejaVu, so no CJK or emoji, and the search for a fallback never runs. `make fonts` has
-  an image of its own for it (`tests/Containerfile.fonts`, a draft, not yet run).
+- Fallback fonts (`find_fallback`, `font.c:212`): the image of `make evil` has no font
+  beyond DejaVu, so no CJK or emoji, and the search for a fallback never runs there.
+  `make fonts` covers it in an image of its own (`tests/Containerfile.fonts`): CJK and
+  Hangul from two fallback faces, bold, an emoji as an outline, a zoom, and many scripts.
 - A synthesized bold or italic when the family has no such face (`font.c:139`).
 - The font matrix from fontconfig (`font.c:63`), a size given in pixels (`font.c:102`), and
   the error paths: no scalable font (`font.c:134`), a size out of range (`font.c:161`), a
@@ -144,8 +149,8 @@ The three findings of the second review that were to fix (`d24ad43`):
   now; with a full table a new glyph draws nothing. Only out of memory, checked by reading,
   not run.
 
-Two of the points to decide, fixed (`9ec6f3b`, `dfe5ee9`), with tests written but not yet
-run:
+Two of the points to decide, fixed (`4c75d2d`, `d4fbc16`). Both tests pass in the
+container, and both fail with the old `mwt.c`:
 
 - Read: `drop_paste_for_signal` sent a closing `\e[201~` whenever one waited in `t.out`,
   also when the opening one had not gone out. mwt now follows the brackets in what
