@@ -52,7 +52,7 @@ profiled() {
 	PROF_OUT=$OUT/$name LD_PRELOAD=$F/sampler.so timeout 300 $MWT sh -c "$*"
 	[ -s "$OUT/$name.stat" ] || { echo "  no samples, mwt did not end by itself"; return 1; }
 	read -r wall user sys _ frames <"$OUT/$name.stat"
-	awk -v w="$wall" -v u="$user" -v s="$sys" -v f="$frames" -v n="${2:-0}" 'BEGIN {
+	awk -v w="$wall" -v u="$user" -v s="$sys" -v f="$frames" 'BEGIN {
 		c = u + s
 		printf "  %.2f s, CPU %.2f s (%.0f %%), %d frames, %.1f/s, %.2f ms CPU per frame\n",
 			w, c, 100 * c / w, f, f / w, 1000 * c / (f > 0 ? f : 1)
@@ -63,7 +63,8 @@ profiled() {
 flood() {
 	local name=$1 file=$F/$1
 	[ -f "$file" ] || { echo "=== $name: skipped, no tests/vt100 (tests/replay.sh --fetch on the host)"; return; }
-	echo "=== flood $name: MB/s from memory $("$F/bench" mem "$file"), pty alone $("$F/bench" pty "$file"), pty + VT core $("$F/bench" pty+vt "$file")"
+	local g=$PROFILE_GRID
+	echo "=== flood $name: MB/s from memory $("$F/bench" mem "$file" "$g"), pty alone $("$F/bench" pty "$file" "$g"), pty + VT core $("$F/bench" pty+vt "$file" "$g")"
 	profiled "$name" "cat '$file'"
 }
 

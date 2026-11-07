@@ -1,6 +1,6 @@
 /* profbench.c - the layers below the window, for `make profile`: what the pty passes
  * on its own, the same with the VT core reading it, and the VT core fed from memory.
- * usage: profbench mem|pty|pty+vt file */
+ * usage: profbench mem|pty|pty+vt file [COLSxROWS], 200x55 if not given */
 #define _GNU_SOURCE
 #include "vt.h"
 
@@ -30,12 +30,17 @@ static double now(void)
 
 int main(int argc, char **argv)
 {
-	if (argc != 3)
+	if (argc < 3 || argc > 4)
 		return 2;
 	const char *mode = argv[1], *file = argv[2];
+	int cols = 200, rows = 55;
+	if (argc == 4 && sscanf(argv[3], "%dx%d", &cols, &rows) != 2)
+		return 2;
 	setlocale(LC_ALL, "");
 	static const struct vt_callbacks cb = { .write = no_reply };
-	struct vt *vt = vt_new(200, 55, 5000, &cb);
+	struct vt *vt = vt_new(cols, rows, 5000, &cb);
+	if (!vt)
+		return 1;
 	size_t total = 0;
 	double t0;
 	if (!strcmp(mode, "mem")) {
@@ -54,7 +59,7 @@ int main(int argc, char **argv)
 			vt_write(vt, data + off, total - off < 65536 ? total - off : 65536);
 	} else {
 		static char buf[65536];
-		struct winsize ws = { .ws_row = 55, .ws_col = 200 };
+		struct winsize ws = { .ws_row = rows, .ws_col = cols };
 		int master;
 		t0 = now();
 		pid_t pid = forkpty(&master, NULL, NULL, &ws);

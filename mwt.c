@@ -878,14 +878,14 @@ static void blit(struct buffer *b, const struct glyph *g, int x, int y,
 	int gy0 = MAX(0, MAX(cy0, 0) - oy), gy1 = MIN(g->h, MIN(cy1, b->h) - oy);
 	fg |= 0xff000000;
 	for (int gy = gy0; gy < gy1; gy++) {
-		uint32_t *row = b->data + (size_t)(oy + gy) * b->w + ox;
+		uint32_t *row = b->data + (size_t)(oy + gy) * b->w;
 		const uint8_t *a = g->alpha + gy * g->w;
 		for (int gx = gx0; gx < gx1; gx++) {
 			unsigned v = a[gx];
 			if (v == 255)
-				row[gx] = fg;
+				row[ox + gx] = fg;
 			else if (v)
-				row[gx] = blend(row[gx], fg, v);
+				row[ox + gx] = blend(row[ox + gx], fg, v);
 		}
 	}
 }
@@ -924,7 +924,7 @@ static void draw_row(struct buffer *b, int r, bool sel, int64_t ba, int bc,
 			if (c.attr & ATTR_REVERSE) {
 				uint32_t tmp = fg; fg = bg; bg = tmp;
 			}
-			if (c.attr & ATTR_DIM)
+			if ((c.attr & ATTR_DIM) && pass == 1) /* pass 0 needs only bg */
 				fg = blend(bg, fg, 140) & 0xffffff;
 			if (sel && abs >= ba && abs <= ea &&
 			    !(abs == ba && col + span - 1 < bc) && !(abs == ea && col > ec)) {

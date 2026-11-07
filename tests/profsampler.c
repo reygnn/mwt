@@ -5,7 +5,8 @@
  * stack, and at exit it writes them for tests/profreport.py. It costs little enough
  * to leave the timing alone, and sees kernel time only as the syscall that spent it.
  *
- * It also counts the frame callbacks mwt asks for, which is the frames it drew.
+ * It also counts the callbacks mwt itself asks for, which are only the frame
+ * callbacks: the frames it drew. Those libwayland asks for, in a roundtrip, do not count.
  * Only arms in a binary called mwt, and takes itself out of the child's environment. */
 #define _GNU_SOURCE
 #include <dlfcn.h>
@@ -76,7 +77,8 @@ int wl_proxy_add_listener(void *proxy, void (**impl)(void), void *data)
 		real = dlsym(RTLD_NEXT, "wl_proxy_add_listener");
 		class = dlsym(RTLD_NEXT, "wl_proxy_get_class");
 	}
-	if (!strcmp(class(proxy), "wl_callback"))
+	uintptr_t caller = (uintptr_t)__builtin_return_address(0);
+	if (caller >= text_lo && caller < text_hi && !strcmp(class(proxy), "wl_callback"))
 		frames++;
 	return real(proxy, impl, data);
 }
