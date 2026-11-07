@@ -10,6 +10,8 @@ static const int default_rows = 24;
 static const int padding = 2;               /* pixels, logical */
 static const int histsize = 5000;           /* scrollback lines */
 static const int wheel_lines = 3;
+static const bool allow_checksum = false;  /* DECRQCRA, for esctest: lets programs
+                                             * read the screen, as xterm's GetChecksum */
 
 static const uint32_t color_fg = 0xdcdccc;
 static const uint32_t color_bg = 0x1e1e1e;

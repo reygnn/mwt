@@ -2414,6 +2414,10 @@ done:;
 	t.vt = vt_new(t.init_cols, t.init_rows, histsize, &cb);
 	if (!t.vt)
 		die("out of memory");
+	t.vt->allow_checksum = allow_checksum;
+#ifdef MWT_ALLOW_CHECKSUM
+	t.vt->allow_checksum = true; /* a build for esctest */
+#endif
 
 	t.xkb = xkb_context_new(XKB_CONTEXT_NO_FLAGS);
 	const char *loc = getenv("LC_ALL");

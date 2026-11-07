@@ -501,8 +501,11 @@ static void put(struct vt *vt, uint32_t cp)
 	struct vt_cursor *c = &vt->c;
 	if (cp >= 0x80 && cp < 0xa0)
 		return; /* C1 controls are not supported in UTF-8 mode */
-	if (c->charset[c->gl] && cp >= 0x5f && cp <= 0x7e)
+	uint16_t gfx = 0;
+	if (c->charset[c->gl] && cp >= 0x5f && cp <= 0x7e) {
 		cp = dec_graphics[cp - 0x5f];
+		gfx = ATTR_DECGFX;
+	}
 	int w = charwidth(cp);
 	if (w == 0 || w > vt->cols)
 		return; /* combining characters are dropped */
@@ -526,7 +529,7 @@ static void put(struct vt *vt, uint32_t cp)
 	} else {
 		fix_wide(vt, l, c->x, c->x + w - 1);
 	}
-	uint16_t base = c->tmpl.attr & ~(ATTR_WIDE | ATTR_WDUMMY | ATTR_WRAP);
+	uint16_t base = (c->tmpl.attr & ~(ATTR_WIDE | ATTR_WDUMMY | ATTR_WRAP)) | gfx;
 	l[c->x] = c->tmpl;
 	l[c->x].cp = cp;
 	l[c->x].attr = base | (w == 2 ? ATTR_WIDE : 0);
@@ -809,6 +812,75 @@ static int private_mode_state(const struct vt *vt, int m)
 	return vt->mode & bit ? 1 : 2;
 }
 
+/* What a cell adds to the DECRQCRA checksum, as xterm counts it: the character
+ * as a DEC 8-bit code (anything beyond Latin-1, wide halves included, as ESC;
+ * Latin-1 cut to 7 bits; DEC graphics as the code it came in as) plus a bit per
+ * video attribute. Every cell counts, an erased one as a blank: that is what
+ * esctest expects of xterm by default. Current xterm skips cells never written
+ * to unless checksumExtension says otherwise, and mwt does not tell them apart. */
+static int checksum_cell(const struct cell *c)
+{
+	uint32_t cp = c->cp;
+	int ch = 0x1b;
+	if (c->attr & ATTR_DECGFX) {
+		for (int i = 0; i < 32; i++)
+			if (dec_graphics[i] == cp)
+				ch = 0x5f + i;
+	} else if (cp == 0x7f || cp == 0xff) {
+		ch = 0;
+	} else if (cp >= 0x20 && cp <= 0xff && cp != 0xa0) {
+		ch = (int)(cp & 0x7f);
+	}
+	if (c->attr & ATTR_INVISIBLE)
+		ch += 0x08;
+	if (c->attr & ATTR_UNDERLINE)
+		ch += 0x10;
+	if (c->attr & ATTR_REVERSE)
+		ch += 0x20;
+	if (c->attr & ATTR_BLINK)
+		ch += 0x40;
+	if (c->attr & ATTR_BOLD)
+		ch += 0x80;
+	return ch;
+}
+
+/* A rectangle edge as xterm limits it: in origin mode relative to the scroll
+ * region and kept inside it, otherwise inside the screen. 1-based. */
+static int rect_edge(const struct vt *vt, int v, bool row)
+{
+	bool org = vt->c.origin && row;
+	int lo = org ? vt->top + 1 : 1;
+	int hi = row ? (org ? vt->bot + 1 : vt->rows) : vt->cols;
+	if (org)
+		v += vt->top;
+	return CLAMP(v, lo, hi);
+}
+
+/* DECRQCRA: CSI Pi ; Pg ; Pt ; Pl ; Pb ; Pr * y, answered with DCS Pi ! ~ xxxx ST.
+ * Off unless the terminal allows it, like xterm, where GetChecksum is among the
+ * disallowed window operations: it lets any program read the screen. The page is
+ * ignored, and with fewer than three parameters xterm takes the rectangle from
+ * the first ones, defaults included in origin mode; this follows it. */
+static void decrqcra(struct vt *vt)
+{
+	if (!vt->allow_checksum)
+		return;
+	int off = vt->nparams > 2 ? 2 : 0, n = vt->nparams - off;
+	bool org = vt->c.origin;
+	int dflt[4] = { org ? vt->top + 1 : 1, 1, org ? vt->bot + 1 : vt->rows, vt->cols };
+	int e[4];
+	for (int i = 0; i < 4; i++) {
+		int v = i < n && vt->params[off + i] > 0 ? vt->params[off + i] : dflt[i];
+		e[i] = rect_edge(vt, v, i % 2 == 0);
+	}
+	int sum = 0;
+	if (e[0] <= e[2] && e[1] <= e[3])
+		for (int r = e[0] - 1; r < e[2]; r++)
+			for (int x = e[1] - 1; x < e[3]; x++)
+				sum += checksum_cell(&vt->line[r][x]);
+	reply(vt, "\033P%d!~%04X\033\\", arg(vt, 0, 0), (unsigned)-sum & 0xffff);
+}
+
 static void csi_dispatch(struct vt *vt, uint32_t f)
 {
 	struct vt_cursor *c = &vt->c;
@@ -844,6 +916,8 @@ static void csi_dispatch(struct vt *vt, uint32_t f)
 			vt->dirty[c->y] = true;
 		} else if (vt->inter[0] == '!' && f == 'p') {
 			soft_reset(vt);
+		} else if (vt->inter[0] == '*' && f == 'y') {
+			decrqcra(vt);
 		} else if (vt->inter[0] == '$' && f == 'p') { /* DECRQM, ANSI modes */
 			int m = arg(vt, 0, 0);
 			unsigned bit = m == 4 ? MODE_INSERT : m == 20 ? MODE_LNM : 0;

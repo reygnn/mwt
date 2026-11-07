@@ -24,6 +24,7 @@ enum {
 	ATTR_WIDE      = 1 << 8,  /* left half of a double-width glyph */
 	ATTR_WDUMMY    = 1 << 9,  /* right half, cp is 0 */
 	ATTR_WRAP      = 1 << 10, /* set on last cell: line continues on next */
+	ATTR_DECGFX    = 1 << 11, /* cp came from DEC special graphics, for DECRQCRA */
 };
 
 struct cell {
@@ -110,6 +111,7 @@ struct vt {
 	int osc_len;
 
 	struct vt_callbacks cb;
+	bool allow_checksum;      /* answer DECRQCRA; it lets programs read the screen */
 };
 
 /* sizes are clamped to 1..VT_MAX_*; NULL when out of memory */

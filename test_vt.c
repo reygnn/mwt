@@ -485,6 +485,53 @@ static void test_replies(void)
 	vt_free(vt);
 }
 
+/* DECRQCRA. Each sum worked out by hand: the codes of the cells plus their
+ * attribute bits, negated, in 16 bits; an erased cell is a blank, 0x20. */
+static void test_checksum(void)
+{
+	struct vt *vt = mk(10, 5, 0);
+	w(vt, "AB\033[1;1;1;1;1;2*y");
+	CHECK_STR(replybuf, ""); /* off unless allowed */
+	vt->allow_checksum = true;
+	w(vt, "\033[2;1;1;1;1;2*y"); /* 'A' + 'B' = 0x83 */
+	CHECK_STR(replybuf, "\033P2!~FF7D\033\\");
+	replybuf[0] = 0;
+	w(vt, "\033[3;1;1;2;1;2*y"); /* only column 2: 'B' = 0x42 */
+	CHECK_STR(replybuf, "\033P3!~FFBE\033\\");
+	replybuf[0] = 0;
+	w(vt, "\033[1;1;3;1;2;10*y"); /* top below bottom: nothing */
+	CHECK_STR(replybuf, "\033P1!~0000\033\\");
+	replybuf[0] = 0;
+	w(vt, "\b\033[K\033[1;1;1;1;1;2*y"); /* erased is a blank: 'A' + 0x20 */
+	CHECK_STR(replybuf, "\033P1!~FF9F\033\\");
+	replybuf[0] = 0;
+	w(vt, "\033[1;1;1;1;5;10*y"); /* the whole screen: 'A' + 49 blanks = 0x661 */
+	CHECK_STR(replybuf, "\033P1!~F99F\033\\");
+	replybuf[0] = 0;
+	w(vt, "\033[2J\033[H\033[1mA\033[0m\033[1;1;1;1;1;1*y"); /* bold: 0x41 + 0x80 */
+	CHECK_STR(replybuf, "\033P1!~FF3F\033\\");
+	replybuf[0] = 0;
+	w(vt, "\033[2J\033[H\033[4;7mA\033[0m\033[1;1;1;1;1;1*y"); /* + 0x10 + 0x20 */
+	CHECK_STR(replybuf, "\033P1!~FF8F\033\\");
+	replybuf[0] = 0;
+	w(vt, "\033[2J\033[H\033(0q\033(B\033[1;1;1;1;1;1*y"); /* DEC graphics: 'q' */
+	CHECK_STR(replybuf, "\033P1!~FF8F\033\\");
+	replybuf[0] = 0;
+	w(vt, "\033[2J\033[H\xe6\xbc\xa2\033[1;1;1;1;1;2*y"); /* wide: ESC for each half */
+	CHECK_STR(replybuf, "\033P1!~FFCA\033\\");
+	replybuf[0] = 0;
+	w(vt, "\033[2J\033[H\xc3\xa4\033[1;1;1;1;1;1*y"); /* Latin-1 cut to 7 bits: 0x64 */
+	CHECK_STR(replybuf, "\033P1!~FF9C\033\\");
+	replybuf[0] = 0;
+	/* origin mode: rows count from the top margin */
+	w(vt, "\033[2J\033[2;4r\033[?6h\033[HC\033[1;1;1;1;1;1*y");
+	CHECK_STR(replybuf, "\033P1!~FFBD\033\\");
+	replybuf[0] = 0;
+	w(vt, "\033[?6l\033[r\033[1;1;1;1;1;1*y"); /* row 1 holds a blank */
+	CHECK_STR(replybuf, "\033P1!~FFE0\033\\");
+	vt_free(vt);
+}
+
 static void test_charset_and_misc(void)
 {
 	struct vt *vt = mk(10, 3, 0);
@@ -684,6 +731,7 @@ int main(void)
 	test_wide_insert();
 	test_altscreen();
 	test_replies();
+	test_checksum();
 	test_charset_and_misc();
 	test_unsupported_vt100();
 	test_resize();
