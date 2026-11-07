@@ -30,9 +30,10 @@ Without installing, `tic -x mwt.info` is enough. It puts the entry in `~/.termin
 ## Usage
 
 ```
-mwt [-f font] [-a app-id] [-T title] [-g COLSxROWS] [-e] [command [args...]]
+mwt [-v] [-f font] [-a app-id] [-T title] [-g COLSxROWS] [-e] [command [args...]]
 ```
 
+* `-v` prints the version, set in `version.h`, which XTVERSION also reports.
 * `-f "JetBrains Mono:size=12"` takes a fontconfig pattern.
 * `-a` sets the app_id, which defaults to `mwt`. The mwmrc uses it to assign colors and position.
 * `-g` takes 1x1 to 4096x2048, as long as the window buffer stays under 2 GiB. With a 9x18 pixel font, that goes up to about 1800x1800; beyond that, mwt refuses with exit code 2. The grid never gets larger than 4096x2048, even in the largest window.
@@ -66,6 +67,7 @@ Everything else, meaning colors, font, padding, and scrollback, is in `config.h`
 | `font.c` | fontconfig/FreeType, four styles, fallback fonts for missing glyphs, glyph cache |
 | `mwt.c` | Wayland (xdg-shell, xdg-decoration, wl_shm, wl_data_device, primary selection), keyboard through xkbcommon including Compose/dead keys, mouse, pty, event loop |
 | `mwt.info` | terminfo: declares only what `vt.c` can really do |
+| `version.h` | the version, for `-v` and the XTVERSION reply |
 | `test_vt.c` | Tests for the VT core |
 | `tests/replay.c` | Plays back recorded terminal output: in one piece, byte by byte, in random chunks, and with resizes. The first three must end the same, and the grid must be consistent after every write. `make replay REPORT=1` lists, per file, what mwt cannot do from it. |
 | `tests/` | Black-box tests and adversarial cases, taken over from the mt project. `MWC_DIR` names the mwc source tree and defaults to `../../mwc`. |

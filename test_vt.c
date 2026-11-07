@@ -1,6 +1,7 @@
 /* test_vt.c - headless tests for the VT core: feed sequences, check the grid */
 #define _XOPEN_SOURCE 700
 #include "vt.h"
+#include "version.h"
 
 #include <limits.h>
 #include <locale.h>
@@ -457,6 +458,9 @@ static void test_replies(void)
 	replybuf[0] = 0;
 	w(vt, "\033[c");
 	CHECK_STR(replybuf, "\033[?62;22c");
+	replybuf[0] = 0;
+	w(vt, "\033[>q");
+	CHECK_STR(replybuf, "\033P>|mwt(" MWT_VERSION ")\033\\");
 	replybuf[0] = 0;
 	w(vt, "\033[18t");
 	CHECK_STR(replybuf, "\033[8;5;10t");

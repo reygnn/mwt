@@ -3,6 +3,7 @@
  * Implements the subset of xterm's ctlseqs that current software uses. */
 #define _XOPEN_SOURCE 700
 #include "vt.h"
+#include "version.h"
 
 #include <stdarg.h>
 #include <stdio.h>
@@ -830,7 +831,7 @@ static void csi_dispatch(struct vt *vt, uint32_t f)
 		if (f == 'c')
 			reply(vt, "\033[>1;10;0c");
 		else if (f == 'q')
-			reply(vt, "\033P>|mwt\033\\");
+			reply(vt, "\033P>|mwt(" MWT_VERSION ")\033\\");
 		return;
 	}
 	if (vt->priv)

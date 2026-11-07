@@ -22,8 +22,8 @@ all: mwt
 mwt: $(OBJ)
 	$(CC) $(LDFLAGS) -o $@ $(OBJ) $(LDLIBS)
 
-mwt.o: mwt.c config.h vt.h font.h $(PROTO_H)
-vt.o: vt.c vt.h
+mwt.o: mwt.c config.h version.h vt.h font.h $(PROTO_H)
+vt.o: vt.c vt.h version.h
 font.o: font.c font.h
 
 %-client-protocol.h:
@@ -32,14 +32,14 @@ font.o: font.c font.h
 %-protocol.c:
 	$(SCANNER) private-code $($*_XML) $@
 
-test_vt: test_vt.c vt.c vt.h
+test_vt: test_vt.c vt.c vt.h version.h
 	$(CC) -std=c11 -Wall -Wextra -g -fsanitize=address,undefined \
 		-Wl,--wrap=malloc,--wrap=calloc,--wrap=realloc -o $@ test_vt.c vt.c
 
 check: test_vt
 	./test_vt
 
-test_replay: tests/replay.c vt.c vt.h
+test_replay: tests/replay.c vt.c vt.h version.h
 	$(CC) -std=c11 -Wall -Wextra -g -O1 -I. -fsanitize=address,undefined \
 		-fno-sanitize-recover=all -o $@ tests/replay.c vt.c
 
@@ -50,7 +50,7 @@ replay: test_replay
 	tests/replay.sh $(if $(REPORT),-r)
 
 # Each capability of mwt.info against the VT core. Needs python3 and ncurses.
-vtdump: tests/vtdump.c vt.c vt.h
+vtdump: tests/vtdump.c vt.c vt.h version.h
 	$(CC) -std=c11 -Wall -Wextra -g -fsanitize=address,undefined -I. -o $@ tests/vtdump.c vt.c
 
 terminfo: vtdump

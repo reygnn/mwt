@@ -38,6 +38,7 @@
 #include "primary-selection-unstable-v1-client-protocol.h"
 
 #include "config.h"
+#include "version.h"
 #include "font.h"
 #include "vt.h"
 
@@ -2323,7 +2324,7 @@ static bool parse_geometry(const char *s, int *cols, int *rows)
 
 static void usage(void)
 {
-	fprintf(stderr, "usage: mwt [-f font] [-a app-id] [-T title] [-g COLSxROWS] "
+	fprintf(stderr, "usage: mwt [-v] [-f font] [-a app-id] [-T title] [-g COLSxROWS] "
 		"[-e] [command [args...]]\n");
 	exit(2);
 }
@@ -2335,8 +2336,11 @@ int main(int argc, char **argv)
 	t.init_cols = default_cols;
 	t.init_rows = default_rows;
 	int opt;
-	while ((opt = getopt(argc, argv, "+f:a:T:g:eh")) != -1) {
+	while ((opt = getopt(argc, argv, "+f:a:T:g:ehv")) != -1) {
 		switch (opt) {
+		case 'v':
+			puts("mwt " MWT_VERSION);
+			return 0;
 		case 'f': t.font_spec = optarg; break;
 		case 'a': app_id = optarg; break;
 		case 'T': title = optarg; break;
