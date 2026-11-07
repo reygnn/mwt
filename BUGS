@@ -6,6 +6,13 @@ Offen, noch nicht bestätigt:
 
 Behoben:
 
+* Ctrl+C mitten in einer Paste schickte die schließende Klammer (ESC[201~),
+  sobald eine noch in mwt wartete, auch wenn die öffnende nie hinausgegangen
+  war: Das Programm bekam eine Klammer zu, die es nie offen gesehen hatte. Jetzt
+  merkt sich mwt an dem, was zur pty hinausgeht, ob eine Klammer offen ist. Ohne
+  NOFLSH verwirft der Kernel beim ^C ohnehin, was davor in der Eingabe stand, die
+  Klammer mit; sie zählt nur für Programme mit NOFLSH. Gefunden beim Lesen.
+  Test: tests/evil.sh paste_bracket_on_signal.
 * Der wl_registry-Proxy wurde beim Beenden nicht freigegeben, einmalig 96 Bytes.
   Das einzige Leck, das mwt selbst hatte. Test: tests/leaks.py, mit LeakSanitizer
   über Scrollback, Resizes, Zoom, Skalierung, Menü und Zwischenablage.

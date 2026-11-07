@@ -114,6 +114,8 @@ static struct {
 	int child_fd; /* pidfd: the shell can end while jobs keep the pty open */
 	char *out;
 	size_t out_len, out_cap;
+	int bracket_seen;  /* how much of "\033[200~" or "\033[201~" went out last */
+	bool bracket_open; /* a paste's opening bracket went out, its closing not */
 	bool was_alt;
 	int last_cx, last_cy;
 	bool last_shown;
@@ -188,6 +190,26 @@ static void die(const char *msg)
 #define PASTE_MAX (64 * 1024 * 1024)    /* a larger paste is dropped whole */
 #define PASTE_TURN_MAX (1024 * 1024)    /* read in one turn of the event loop */
 
+/* Follows the paste brackets in what has gone to the pty, which a write may cut
+ * anywhere: bracket_seen is 0 to 4 for that much of "\033[20", 5 for "\033[200"
+ * and 6 for "\033[201". Pasted text holds no ESC, so nothing else looks alike. */
+static void track_brackets(const char *s, size_t n)
+{
+	for (size_t i = 0; i < n; i++) {
+		char c = s[i];
+		int k = t.bracket_seen;
+		if (k < 4 && c == "\033[20"[k])
+			t.bracket_seen = k + 1;
+		else if (k == 4 && (c == '0' || c == '1'))
+			t.bracket_seen = c == '0' ? 5 : 6;
+		else {
+			if (k >= 5 && c == '~')
+				t.bracket_open = k == 5;
+			t.bracket_seen = c == '\033';
+		}
+	}
+}
+
 static void flush_out(void)
 {
 	while (t.out_len) {
@@ -199,6 +221,7 @@ static void flush_out(void)
 				t.out_len = 0;
 			return;
 		}
+		track_brackets(t.out, n);
 		memmove(t.out, t.out + n, t.out_len - n);
 		t.out_len -= n;
 	}
@@ -240,7 +263,11 @@ static void send_input(const char *s, size_t n)
  * A key that raises a signal must not wait behind a paste the program does not
  * read, here or in the kernel, whose line buffer takes no more once it is full.
  * So the rest of the paste goes first. TCSAFLUSH on the master flushes the
- * slave's input. A bracket the program has seen open gets closed.
+ * slave's input. A bracket that went out open gets closed; one still waiting
+ * here goes with the rest, and the program never sees it, so it needs no
+ * closing. What went out but was flushed in the kernel unread cannot be told
+ * apart, and gets the closing too: a stray one costs less than one missing,
+ * which would leave the program pasting whatever is typed next.
  */
 static void drop_paste_for_signal(unsigned char c)
 {
@@ -254,11 +281,12 @@ static void drop_paste_for_signal(unsigned char c)
 	}
 	if (!t.out_len)
 		return;
-	bool open_bracket = memmem(t.out, t.out_len, "\033[201~", 6) != NULL;
 	t.out_len = 0;
 	tcflush(t.pty, TCOFLUSH);
 	tcsetattr(t.pty, TCSAFLUSH, &tm);
-	if (open_bracket)
+	/* a bracket cut off halfway is ended by the ESC of the next */
+	t.bracket_seen = 0;
+	if (t.bracket_open)
 		pty_write("\033[201~", 6);
 }
 

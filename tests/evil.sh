@@ -175,6 +175,52 @@ cat >"$HOME/flip.sh" <<'EOF'
 a=$(printf 'a%.0s' {1..70}); b=$(printf 'ä%.0s' {1..70})
 while :; do printf '%s\r' "$a"; sleep 0.013; printf '%s\r' "$b"; sleep 0.017; done
 EOF
+# For paste_bracket_on_signal: a program in cbreak mode with ISIG, as readline
+# leaves the terminal, and NOFLSH, so the kernel keeps on a Ctrl+C what came
+# before it, and what mwt sent can be seen. "seen" reads the start of a
+# bracketed paste and then stops reading; "unsent" reads nothing and turns
+# bracketed paste on only once ~/go exists. After SIGINT it reads what comes
+# within a second and writes how many opening and closing brackets it got.
+cat >"$HOME/brackets.py" <<'EOF'
+import os, select, signal, sys, termios, time
+mode, out = sys.argv[1], sys.argv[2]
+old = termios.tcgetattr(0)
+a = termios.tcgetattr(0)
+a[3] = (a[3] & ~(termios.ICANON | termios.ECHO)) | termios.ISIG | termios.NOFLSH
+a[6][termios.VMIN], a[6][termios.VTIME] = 1, 0
+termios.tcsetattr(0, termios.TCSANOW, a)
+intr = []
+signal.signal(signal.SIGINT, lambda *_: intr.append(1))
+got = b""
+def read(wait):
+    global got
+    r, _, _ = select.select([0], [], [], wait)
+    if r:
+        d = os.read(0, 65536)
+        got += d
+        return len(d)
+    return 0
+if mode == "seen":
+    os.write(1, b"\033[?2004hready\r\n")
+    end = time.time() + 10
+    while time.time() < end and (b"\033[200~" not in got or
+                                 len(got) < got.index(b"\033[200~") + 100):
+        read(0.1)
+else:
+    os.write(1, b"ready\r\n")
+    while not os.path.exists(os.path.expanduser("~/go")):
+        time.sleep(0.05)
+    os.write(1, b"\033[?2004hset\r\n")
+end = time.time() + 10
+while not intr and time.time() < end:
+    time.sleep(0.05)
+while intr and read(1.0):
+    pass
+os.write(1, b"\033[?2004l")
+termios.tcsetattr(0, termios.TCSANOW, old)
+with open(out, "w") as f:
+    f.write("%d %d\n" % (got.count(b"\033[200~"), got.count(b"\033[201~")) if intr else "noint\n")
+EOF
 python3 - "$DIR" <<'EOF'
 import random, sys
 d = sys.argv[1]
@@ -600,6 +646,57 @@ raw_paste_ctrl_c() {
 	C c
 	sleep 1.5
 	if pgrep -f time.sleep >/dev/null; then gap "cbreak program: Ctrl+C stuck behind a paste"; pkill -f time.sleep; else ok "cbreak program: Ctrl+C gets through a blocked paste"; fi
+}
+# Ctrl+C drops the rest of a paste. A program that got the opening bracket must
+# get the closing one, or it pastes what is typed next; one that never got the
+# opening one must not get a closing one. brackets.py says what arrived.
+brackets_result() {
+	local i
+	for ((i = 0; i < 60; i++)); do
+		[ -s "$HOME/brackets.out" ] && break
+		sleep 0.25
+	done
+	cat "$HOME/brackets.out" 2>/dev/null
+}
+paste_bracket_on_signal() {
+	start_mwt
+	rm -f "$HOME/brackets.out" "$HOME/go"
+	T 'python3 ~/brackets.py seen ~/brackets.out' -k Return
+	sleep 1
+	wl-copy <"$DIR/colon.txt"
+	sleep 0.6
+	K v
+	sleep 1
+	C c
+	local r
+	r=$(brackets_result)
+	case $r in
+	"1 1") ok "Ctrl+C in a paste the program began to read sends the closing bracket" ;;
+	noint) info "seen: no SIGINT reached the program, nothing to judge" ;;
+	*) gap "Ctrl+C in a paste the program began to read: opening and closing brackets it got: '$r'" ;;
+	esac
+	sleep 0.5
+	# The first paste goes while bracketed paste is off, and what the kernel does not
+	# take waits in mwt; the second, bracketed, waits behind it whole.
+	rm -f "$HOME/brackets.out"
+	T 'python3 ~/brackets.py unsent ~/brackets.out' -k Return
+	sleep 1
+	K v
+	sleep 1
+	touch "$HOME/go"
+	sleep 0.5
+	printf 'zwei' | wl-copy
+	sleep 0.6
+	K v
+	sleep 0.5
+	C c
+	r=$(brackets_result)
+	case $r in
+	"0 0") ok "Ctrl+C before a bracketed paste went out sends no closing bracket" ;;
+	noint) info "unsent: no SIGINT reached the program, nothing to judge" ;;
+	*) gap "Ctrl+C before a bracketed paste went out: opening and closing brackets it got: '$r'" ;;
+	esac
+	rm -f "$HOME/go"
 }
 python_repl() {
 	start_mwt
@@ -1100,7 +1197,7 @@ for c in dcs_swallow osc_swallow_cat fuzz noncharacters \
 	mid_char_selection drag_during_flood select_history click_clusters \
 	paste_integrity paste_bidi paste_escape ctrl_c_behind_paste paste_holds_until_return line_limits paste_over_16mb \
 	snippet_typed snippet_paste snippet_paste_no_newline \
-	stty_raw_read_in_shell inlcr tcoff cyrillic_ctrl_c cyrillic_raw copy_on_ru raw_paste_ctrl_c python_repl flood_ctrl_c flood_rss soak reply_flood reply_flood_raw \
+	stty_raw_read_in_shell inlcr tcoff cyrillic_ctrl_c cyrillic_raw copy_on_ru raw_paste_ctrl_c paste_bracket_on_signal python_repl flood_ctrl_c flood_rss soak reply_flood reply_flood_raw \
 	args shells closed_stdio cwd_tricks exit_with_jobs close_ignores_hup \
 	tiny resize_storm fd_leak stalled_readers stalled_pipes silent_source plain_source flood_source fd_limit low_memory menu_abuse compositor_dies; do
 	run "$c"
