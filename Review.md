@@ -10,22 +10,7 @@ before them is done, see the end.
 
 ## Findings of the second review
 
-### To fix
-
-- Reproduced: overlong UTF-8 sequences are accepted (`vt_write`, `vt.c:1404`). Only values
-  above U+10FFFF and surrogates are refused, so `E0 80 9B` and `F0 80 80 9B` decode to
-  U+001B, a real ESC: `E0 80 9B [31m X` writes a red X. Control sequences can pass a filter
-  that strips only the byte 0x1B. The two-byte form `C0 9B` is refused, as lead bytes below
-  0xC2 are. `utf8_seq` in `mwt.c` checks these cases for pasting, the VT core does not.
-- Reproduced: REP works around the read budget (`vt.c:1079`, `read_pty` in `mwt.c`). It
-  repeats up to 65535 times per sequence, and `read_pty` looks at the clock only between
-  reads: 1024 times `CSI 65535 b`, 8 KiB, took 0.47 s in one `vt_write`. Reads from the pty
-  were at most 10 KiB, 2.2 KiB on average, so a stream of them stalls mwt for up to about
-  0.6 s per read, frames and keys included.
-- Read: the glyph cache is not checked for allocation failures (`font.c`). The `calloc` in
-  `font_open` (`font.c:166`) is not checked, and `slot()` then reads through a null
-  pointer. When growing the table fails in `font_glyph`, entries go on being added; once it
-  is full, `slot()` finds no free place and loops forever. Both only when out of memory.
+The three it found to fix are done, see the end.
 
 ### To decide
 
@@ -143,3 +128,22 @@ The eight findings of the code review of `a375b52..v0.3.3`:
   frames (`da8f22a`).
 
 `make evil` passed after these (`da8f22a`), and passes at `abafc03`.
+
+The three findings of the second review that were to fix (`d24ad43`):
+
+- Reproduced: overlong UTF-8 was accepted (`vt_write`). Only values above U+10FFFF and
+  surrogates were refused, so `E0 80 9B` and `F0 80 80 9B` decoded to a real ESC:
+  `E0 80 9B [31m X` wrote a red X, past any filter that drops the byte 0x1B. The decoder
+  now keeps the least value a sequence may encode and turns anything below into U+FFFD.
+  `test_vt` checks overlong ESC and A and the shortest valid forms.
+- Reproduced: REP worked around the read budget. It repeated up to 65535 times per
+  sequence, and `read_pty` looks at the clock only between reads: 1024 times
+  `CSI 65535 b`, 8 KiB, took 0.47 s in one `vt_write`. Reads from the pty were at most
+  10 KiB, 2.2 KiB on average, so a stream of them stalled mwt for up to about 0.6 s per
+  read. REP now repeats at most a screenful; more only added the same lines to the history.
+  xterm repeats them all.
+- Read: the glyph cache was not checked for allocation failures. `font_open` set
+  `cache_cap` before an unchecked `calloc`, and `font_glyph` went on adding entries when
+  growing failed, until `slot()` found no free place and looped forever. Both are checked
+  now; with a full table a new glyph draws nothing. Only out of memory, checked by reading,
+  not run.
