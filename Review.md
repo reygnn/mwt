@@ -25,12 +25,6 @@ The three it found to fix are done, see the end.
   Older versions were not tried. `evil.sh` has no case for it.
 - Read: `mwt.info` declares `blink`, and `vt.c` keeps `ATTR_BLINK`, but mwt never draws
   it. The principle of `mwt.info` is to declare only what mwt really does.
-- Read: `drop_paste_for_signal` (`mwt.c:257`) sends a closing `\e[201~` when one is still
-  waiting in `t.out`, without checking whether the opening `\e[200~` went out; if it did
-  not, the program sees a closing bracket it never saw opened.
-- Read: `paste_text` drops only ESC and NUL from a paste, so ^C, ^Z and ^D in pasted text
-  raise signals in the kernel, bracketed paste or not. Dropping all C0 controls but tab, CR
-  and LF would avoid it.
 
 ### Maintainability
 
@@ -147,3 +141,15 @@ The three findings of the second review that were to fix (`d24ad43`):
   growing failed, until `slot()` found no free place and looped forever. Both are checked
   now; with a full table a new glyph draws nothing. Only out of memory, checked by reading,
   not run.
+
+Two of the points to decide, fixed (`9ec6f3b`, `dfe5ee9`), with tests written but not yet
+run:
+
+- Read: `drop_paste_for_signal` sent a closing `\e[201~` whenever one waited in `t.out`,
+  also when the opening one had not gone out. mwt now follows the brackets in what
+  `flush_out` writes and closes only one that went out open. Without NOFLSH the kernel
+  flushes the input on ^C, the closing bracket sent before it included, so this only
+  matters to programs with NOFLSH. `evil.sh paste_bracket_on_signal`.
+- Read: `paste_text` dropped only ESC and NUL, so ^C, ^Z and ^D in pasted text raised
+  signals in the kernel. Now only tab, CR and LF stay of the C0 controls, and DEL goes too.
+  `evil.sh paste_controls`.
