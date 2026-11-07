@@ -1,4 +1,5 @@
-# What `make evil` runs in: mwt's and mwc's build dependencies and the test tools.
+# What `make evil` runs in: mwt's and mwc's build dependencies and the test tools,
+# clang with libFuzzer for make fuzz too.
 FROM docker.io/library/ubuntu:26.04
 ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -7,7 +8,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libcairo2-dev libpango1.0-dev \
     sway wtype wl-clipboard grim python3 vim tmux \
     fonts-dejavu-core fontconfig procps xkb-data locales \
-    libwlroots-0.19-dev libxcb1-dev libxcb-icccm4-dev libx11-dev libpixman-1-dev
+    libwlroots-0.19-dev libxcb1-dev libxcb-icccm4-dev libx11-dev libpixman-1-dev \
+    clang libclang-rt-dev
 RUN useradd -m tester
 USER tester
 WORKDIR /home/tester

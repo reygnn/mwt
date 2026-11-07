@@ -10,6 +10,7 @@ Dependencies: wayland-client, wayland-cursor, wayland-protocols, wayland-scanner
 make            # builds ./mwt
 make check      # tests for the VT core (headless, with ASan/UBSan), including a fuzzer
 make replay     # about 290 old VT100 animations and ANSI files through the VT core (fetches them from GitHub on the first run)
+make fuzz       # coverage-guided fuzzing of the VT core with libFuzzer, 10 minutes (FUZZ_TIME=seconds), needs clang
 make terminfo   # each capability in mwt.info against the VT core (needs python3 and ncurses)
 make keys       # what mwt sends for keys and the mouse, against mwt.info (under headless sway, like make test)
 make pixel      # what mwt draws, by screenshot (under headless sway, like make test)
@@ -71,6 +72,7 @@ Everything else, meaning colors, font, padding, and scrollback, is in `config.h`
 | `version.h` | the version, for `-v` and the XTVERSION reply |
 | `test_vt.c` | Tests for the VT core |
 | `tests/replay.c` | Plays back recorded terminal output: in one piece, byte by byte, in random chunks, and with resizes. The first three must end the same, and the grid must be consistent after every write. `make replay REPORT=1` lists, per file, what mwt cannot do from it. |
+| `tests/fuzz_vt.c` | libFuzzer harness for the VT core: one write against chunks cut by the input itself, must end the same; then resizes, scrolling through the history and a reset, with the grid checked after each step. Starts from the `make replay` files if they are there. |
 | `tests/` | Black-box tests and adversarial cases, taken over from the mt project. `MWC_DIR` names the mwc source tree and defaults to `../../mwc`. |
 
 Only changed rows are drawn. With double buffering, the rows that differ from the most recently shown buffer are copied first. Output is tied to frame callbacks.
