@@ -4,7 +4,7 @@
 # in the container of make evil, which has both. Either way the corpus grows in
 # tests/fuzz/corpus (FUZZ_DIR) and a finding is written to tests/fuzz/crash-* (or
 # timeout-, oom-, leak-); ./fuzz_vt FILE replays one. Starts from tests/vt100 if
-# make replay fetched it.
+# make replay fetched it, and always from the inputs kept in tests/fuzz-regress.
 set -u
 cd "$(dirname "$0")/.." || exit 1
 FUZZ_DIR=${FUZZ_DIR:-tests/fuzz}
@@ -25,7 +25,7 @@ if ! has_fuzzer; then
 		bash -c 'cp -r /src/mwt "$HOME/w" && exec "$HOME/w/tests/fuzz.sh"'
 fi
 make -s fuzz_vt || exit 1
-seeds=()
-[ -d tests/vt100/videos ] && seeds=(tests/vt100/videos)
+seeds=(tests/fuzz-regress)
+[ -d tests/vt100/videos ] && seeds+=(tests/vt100/videos)
 exec ./fuzz_vt -fork="$(nproc)" -max_total_time="${FUZZ_TIME:-600}" -max_len=4098 \
 	-dict=tests/fuzz_vt.dict -artifact_prefix="$FUZZ_DIR/" "$FUZZ_DIR/corpus" "${seeds[@]}"

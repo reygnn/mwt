@@ -12,8 +12,22 @@
  *   ./fuzz_vt tests/fuzz/crash-…  replay one finding (make fuzz_vt, needs clang)
  *
  * make fuzz runs it in the container of make evil when the host has no clang
- * with libFuzzer, see tests/fuzz.sh. It starts from tests/vt100 if `make replay`
- * fetched it. */
+ * with libFuzzer, see tests/fuzz.sh. It starts from tests/fuzz-regress and from
+ * tests/vt100 if `make replay` fetched it.
+ *
+ * Built with -DFUZZ_STANDALONE it needs no clang: a main() of its own feeds the
+ * files it is given through the same checks. `make check` runs it over
+ * tests/fuzz-regress, the findings of make fuzz kept for good. To keep one:
+ *
+ *   ./fuzz_vt -minimize_crash=1 -runs=100000 tests/fuzz/crash-…   (while it
+ *       still fails; the shortest input lands in tests/fuzz/minimized-from-…)
+ *   fix vt.c, then copy the input to tests/fuzz-regress/ under a name that
+ *   says what it was, e.g. decstbm-bottom-not-clamped
+ *
+ * The first three there come from bugs planted on purpose (parser state lost
+ * between writes, DECSTBM bottom not clamped, OSC 4 index not checked), each
+ * caught by its file. They depend on how this harness reads an input: change
+ * the header or the chunking, and they may no longer mean what they meant. */
 #define _XOPEN_SOURCE 700
 #include "vt.h"
 
@@ -179,3 +193,32 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size)
 	vt_free(b);
 	return 0;
 }
+
+#ifdef FUZZ_STANDALONE
+/* Each file once through LLVMFuzzerTestOneInput: a failed check aborts, and
+ * the name printed before it says which file it was. */
+int main(int argc, char **argv)
+{
+	int n = 0;
+	for (int i = 1; i < argc; i++) {
+		FILE *f = fopen(argv[i], "rb");
+		if (!f) {
+			perror(argv[i]);
+			return 2;
+		}
+		static uint8_t buf[1 << 20];
+		size_t len = fread(buf, 1, sizeof buf, f);
+		bool err = ferror(f) || !feof(f);
+		fclose(f);
+		if (err) {
+			fprintf(stderr, "%s: unreadable or over 1 MiB\n", argv[i]);
+			return 2;
+		}
+		fprintf(stderr, "fuzz_regress: %s\n", argv[i]);
+		LLVMFuzzerTestOneInput(buf, len);
+		n++;
+	}
+	printf("fuzz_regress: %d inputs passed\n", n);
+	return 0;
+}
+#endif

@@ -40,8 +40,16 @@ test_vt: test_vt.c vt.c vt.h version.h
 	$(CC) -std=c11 -Wall -Wextra -g -fsanitize=address,undefined \
 		-Wl,--wrap=malloc,--wrap=calloc,--wrap=realloc -o $@ test_vt.c vt.c
 
-check: test_vt
+# test_vt, then every input kept in tests/fuzz-regress through the checks of
+# tests/fuzz_vt.c; no clang needed for that.
+check: test_vt fuzz_regress
 	./test_vt
+	@./fuzz_regress tests/fuzz-regress/* 2>fuzz_regress.log || { cat fuzz_regress.log; exit 1; }
+	@rm -f fuzz_regress.log
+
+fuzz_regress: tests/fuzz_vt.c vt.c vt.h version.h
+	$(CC) -std=c11 -Wall -Wextra -g -O1 -I. -DFUZZ_STANDALONE -fsanitize=address,undefined \
+		-fno-sanitize-recover=all -o $@ tests/fuzz_vt.c vt.c
 
 test_replay: tests/replay.c vt.c vt.h version.h
 	$(CC) -std=c11 -Wall -Wextra -g -O1 -I. -fsanitize=address,undefined \
@@ -122,6 +130,6 @@ uninstall:
 	rm -f $(DESTDIR)$(PREFIX)/share/terminfo/m/mwt $(DESTDIR)$(PREFIX)/share/terminfo/6d/mwt
 
 clean:
-	rm -f mwt mwt-esctest test_vt vtdump test_replay fuzz_vt *.o $(PROTO_H) $(PROTO_C)
+	rm -f mwt mwt-esctest test_vt vtdump test_replay fuzz_vt fuzz_regress fuzz_regress.log *.o $(PROTO_H) $(PROTO_C)
 
 .PHONY: all check replay fuzz terminfo keys pixel mouse keyboard test evil width esctest profile install uninstall clean

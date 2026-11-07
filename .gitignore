@@ -6,6 +6,8 @@
 /test_replay
 /tests/vt100/
 /fuzz_vt
+/fuzz_regress
+/fuzz_regress.log
 /tests/fuzz/
 *.o
 *-client-protocol.h
