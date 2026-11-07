@@ -89,6 +89,8 @@ static struct {
 	struct zxdg_toplevel_decoration_v1 *deco;
 	struct wl_callback *frame_cb;
 	struct buffer bufs[2], *last;
+	uint8_t *differ;   /* per pixel row: may differ between the two buffers */
+	int differ_h;
 	int width, height; /* logical */
 	int scale;
 	int cfg_w, cfg_h;
@@ -1008,6 +1010,48 @@ static void frame_done(void *d, struct wl_callback *cb, uint32_t time)
 }
 static const struct wl_callback_listener frame_listener = { frame_done };
 
+/* A compositor may hold on to the buffer it shows, so frames alternate between two,
+ * and each must start as the last one ended. Most frames change little, and the
+ * whole picture is megabytes: only the rows that differ get copied. Without the
+ * memory to keep track, all of them. */
+static void buffer_catch_up(struct buffer *to, const struct buffer *from)
+{
+	if (t.differ_h != to->h) {
+		memcpy(to->data, from->data, to->size);
+		return;
+	}
+	size_t stride = (size_t)to->w * sizeof *to->data;
+	for (int y = 0; y < to->h; y++) {
+		if (!t.differ[y])
+			continue;
+		int y1 = y + 1;
+		while (y1 < to->h && t.differ[y1])
+			y1++;
+		memcpy(to->data + (size_t)y * to->w, from->data + (size_t)y * to->w,
+		       (y1 - y) * stride);
+		y = y1;
+	}
+	memset(t.differ, 0, to->h);
+}
+
+static void buffers_differ_all(int h)
+{
+	if (t.differ_h != h) {
+		free(t.differ);
+		t.differ = malloc(h);
+		t.differ_h = t.differ ? h : 0;
+	}
+	if (t.differ)
+		memset(t.differ, 1, h);
+}
+
+static void buffers_differ_rows(int y, int n)
+{
+	int end = MIN(y + n, t.differ_h);
+	if (y < end)
+		memset(t.differ + y, 1, end - y);
+}
+
 static void draw(void)
 {
 	struct vt *vt = t.vt;
@@ -1029,13 +1073,14 @@ static void draw(void)
 	}
 	if (b != t.last) {
 		if (t.last && t.last->w == W && t.last->h == H && !full)
-			memcpy(b->data, t.last->data, b->size);
+			buffer_catch_up(b, t.last);
 		else
 			full = true;
 	}
 	if (full) {
 		fill_rect(b, 0, 0, W, H, color_bg);
 		vt_mark_all(vt);
+		buffers_differ_all(H);
 	}
 
 	bool shown = cursor_shown();
@@ -1063,6 +1108,7 @@ static void draw(void)
 			draw_row(b, i, t.sel.active, ba, bc, ea, ec);
 			vt->dirty[i] = false;
 		}
+		buffers_differ_rows(t.pad + r * t.ch, (r1 - r + 1) * t.ch);
 		if (!full)
 			wl_surface_damage_buffer(t.surface, 0, t.pad + r * t.ch, W,
 						 (r1 - r + 1) * t.ch);
