@@ -856,12 +856,15 @@ static void fill_rect(struct buffer *b, int x, int y, int w, int h, uint32_t c)
 	int x1 = MIN(x + w, b->w), y1 = MIN(y + h, b->h);
 	x = MAX(x, 0);
 	y = MAX(y, 0);
+	if (x >= x1 || y >= y1)
+		return;
+	/* one row by hand, the others copied: memcpy has the wide stores */
+	uint32_t *first = b->data + (size_t)y * b->w;
 	c |= 0xff000000;
-	for (int yy = y; yy < y1; yy++) {
-		uint32_t *p = b->data + (size_t)yy * b->w;
-		for (int xx = x; xx < x1; xx++)
-			p[xx] = c;
-	}
+	for (int xx = x; xx < x1; xx++)
+		first[xx] = c;
+	for (int yy = y + 1; yy < y1; yy++)
+		memcpy(b->data + (size_t)yy * b->w + x, first + x, (x1 - x) * sizeof *first);
 }
 
 static void blit(struct buffer *b, const struct glyph *g, int x, int y,
@@ -901,59 +904,79 @@ static void draw_row(struct buffer *b, int r, bool sel, int64_t ba, int bc,
 	bool cur_row = cursor_shown() && r == vt->c.y;
 	static const struct cell blankc = { ' ', COL_DEFAULT_FG, COL_DEFAULT_BG, 0 };
 
-	for (int col = 0; col < vt->cols; col++) {
-		struct cell c = l && col < len ? l[col] : blankc;
-		if ((c.attr & ATTR_WDUMMY) && col > 0 && l && col - 1 < len &&
-		    (l[col - 1].attr & ATTR_WIDE))
-			continue; /* drawn together with its left half */
-		if (c.attr & ATTR_WDUMMY)
-			c = blankc;
-		int span = (c.attr & ATTR_WIDE) && col + 1 < vt->cols ? 2 : 1;
-		int x0 = t.pad + col * t.cw;
-		uint32_t fg = rgb(c.fg), bg = rgb(c.bg);
-		if (c.attr & ATTR_REVERSE) {
-			uint32_t tmp = fg; fg = bg; bg = tmp;
-		}
-		if (c.attr & ATTR_DIM)
-			fg = blend(bg, fg, 140) & 0xffffff;
-		if (sel && abs >= ba && abs <= ea &&
-		    !(abs == ba && col + span - 1 < bc) && !(abs == ea && col > ec)) {
-			fg = color_sel_fg;
-			bg = color_sel_bg;
-		}
-		bool cur = cur_row && (vt->c.x == col || (span == 2 && vt->c.x == col + 1));
-		bool block = cur && t.focused && vt->cursor_style == CURSOR_BLOCK;
-		if (block) {
-			fg = bg;
-			bg = color_cursor;
-		}
-		fill_rect(b, x0, y0, span * t.cw, t.ch, bg);
-		if (c.cp > ' ' && !(c.attr & ATTR_INVISIBLE)) {
-			int style = (c.attr & ATTR_BOLD ? 1 : 0) | (c.attr & ATTR_ITALIC ? 2 : 0);
-			const struct glyph *g = font_glyph(t.font, c.cp, style);
-			if (g->w)
-				blit(b, g, x0, y0 + t.ascent, x0, x0 + span * t.cw,
-				     y0, y0 + t.ch, fg);
-		}
-		int thick = MAX(1, t.scale);
-		if (c.attr & ATTR_UNDERLINE)
-			fill_rect(b, x0, y0 + t.ascent + thick, span * t.cw, thick, fg);
-		if (c.attr & ATTR_STRIKE)
-			fill_rect(b, x0, y0 + t.ascent * 2 / 3, span * t.cw, thick, fg);
-		if (cur && !block) {
-			int w = span * t.cw;
-			if (!t.focused) {
-				fill_rect(b, x0, y0, w, thick, color_cursor);
-				fill_rect(b, x0, y0 + t.ch - thick, w, thick, color_cursor);
-				fill_rect(b, x0, y0, thick, t.ch, color_cursor);
-				fill_rect(b, x0 + w - thick, y0, thick, t.ch, color_cursor);
-			} else if (vt->cursor_style == CURSOR_UNDERLINE) {
-				fill_rect(b, x0, y0 + t.ch - 2 * thick, w, 2 * thick, color_cursor);
-			} else {
-				fill_rect(b, x0, y0, 2 * thick, t.ch, color_cursor);
+	/* Backgrounds first, a run of cells of one color at a time, then what goes on
+	 * top. Each of those stays inside its own cell, so the order does not show. */
+	int run_x = 0, run_w = 0;
+	uint32_t run_bg = 0;
+	for (int pass = 0; pass < 2; pass++) {
+		for (int col = 0; col < vt->cols; col++) {
+			struct cell c = l && col < len ? l[col] : blankc;
+			if ((c.attr & ATTR_WDUMMY) && col > 0 && l && col - 1 < len &&
+			    (l[col - 1].attr & ATTR_WIDE))
+				continue; /* drawn together with its left half */
+			if (c.attr & ATTR_WDUMMY)
+				c = blankc;
+			int span = (c.attr & ATTR_WIDE) && col + 1 < vt->cols ? 2 : 1;
+			int x0 = t.pad + col * t.cw;
+			uint32_t fg = rgb(c.fg), bg = rgb(c.bg);
+			if (c.attr & ATTR_REVERSE) {
+				uint32_t tmp = fg; fg = bg; bg = tmp;
 			}
+			if (c.attr & ATTR_DIM)
+				fg = blend(bg, fg, 140) & 0xffffff;
+			if (sel && abs >= ba && abs <= ea &&
+			    !(abs == ba && col + span - 1 < bc) && !(abs == ea && col > ec)) {
+				fg = color_sel_fg;
+				bg = color_sel_bg;
+			}
+			bool cur = cur_row && (vt->c.x == col || (span == 2 && vt->c.x == col + 1));
+			bool block = cur && t.focused && vt->cursor_style == CURSOR_BLOCK;
+			if (block) {
+				fg = bg;
+				bg = color_cursor;
+			}
+			if (pass == 0) {
+				if (run_w && run_bg == bg && run_x + run_w == x0) {
+					run_w += span * t.cw;
+				} else {
+					if (run_w)
+						fill_rect(b, run_x, y0, run_w, t.ch, run_bg);
+					run_x = x0;
+					run_w = span * t.cw;
+					run_bg = bg;
+				}
+				col += span - 1;
+				continue;
+			}
+			if (c.cp > ' ' && !(c.attr & ATTR_INVISIBLE)) {
+				int style = (c.attr & ATTR_BOLD ? 1 : 0) | (c.attr & ATTR_ITALIC ? 2 : 0);
+				const struct glyph *g = font_glyph(t.font, c.cp, style);
+				if (g->w)
+					blit(b, g, x0, y0 + t.ascent, x0, x0 + span * t.cw,
+					     y0, y0 + t.ch, fg);
+			}
+			int thick = MAX(1, t.scale);
+			if (c.attr & ATTR_UNDERLINE)
+				fill_rect(b, x0, y0 + t.ascent + thick, span * t.cw, thick, fg);
+			if (c.attr & ATTR_STRIKE)
+				fill_rect(b, x0, y0 + t.ascent * 2 / 3, span * t.cw, thick, fg);
+			if (cur && !block) {
+				int w = span * t.cw;
+				if (!t.focused) {
+					fill_rect(b, x0, y0, w, thick, color_cursor);
+					fill_rect(b, x0, y0 + t.ch - thick, w, thick, color_cursor);
+					fill_rect(b, x0, y0, thick, t.ch, color_cursor);
+					fill_rect(b, x0 + w - thick, y0, thick, t.ch, color_cursor);
+				} else if (vt->cursor_style == CURSOR_UNDERLINE) {
+					fill_rect(b, x0, y0 + t.ch - 2 * thick, w, 2 * thick, color_cursor);
+				} else {
+					fill_rect(b, x0, y0, 2 * thick, t.ch, color_cursor);
+				}
+			}
+			col += span - 1;
 		}
-		col += span - 1;
+		if (pass == 0 && run_w)
+			fill_rect(b, run_x, y0, run_w, t.ch, run_bg);
 	}
 }
 
