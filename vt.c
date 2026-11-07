@@ -791,11 +791,12 @@ static void set_private_mode(struct vt *vt, int m, bool on)
 		vt->mode &= ~bit;
 }
 
-/* DECRQM answer for a private mode: 1 set, 2 reset, 4 permanently reset, 0
- * unknown. 4 is for the DEC and xterm modes mwt knows of but does not have, so
- * setting them never takes (blink, 132 columns, reverse screen, margins, other
- * mouse encodings...). 2027 stays unknown until grapheme clusters are in: see
- * TODO. */
+/* DECRQM answer for a private mode: 1 set, 2 reset, 3 permanently set, 4
+ * permanently reset, 0 unknown. 4 is for the DEC and xterm modes mwt knows of but
+ * does not have, so setting them never takes (blink, 132 columns, reverse screen,
+ * margins, other mouse encodings...). 3 is for 1035, xterm's "ignore the keypad
+ * mode with NumLock": mwt's keypad always sends what it sends without that mode,
+ * see CAVEATS. 2027 stays unknown until grapheme clusters are in: see TODO. */
 static int private_mode_state(const struct vt *vt, int m)
 {
 	unsigned bit;
@@ -804,6 +805,8 @@ static int private_mode_state(const struct vt *vt, int m)
 	case 41: case 42: case 45: case 60: case 67: case 69: case 95: case 1001:
 	case 1005: case 1015: case 1045:
 		return 4;
+	case 1035:
+		return 3;
 	case 66: bit = MODE_APPKEYPAD; break;
 	case 1: bit = MODE_APPCURSOR; break;
 	case 6: return vt->c.origin ? 1 : 2;

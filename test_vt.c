@@ -494,6 +494,11 @@ static void test_replies(void)
 	replybuf[0] = 0;
 	w(vt, "\033[2$p\033[19$p\033[12$p\033[21$p");
 	CHECK_STR(replybuf, "\033[2;4$y\033[19;4$y\033[12;0$y\033[21;0$y");
+	/* 3: 1035 is always on, the keypad sends the same in any mode; turning it
+	 * off does not take */
+	replybuf[0] = 0;
+	w(vt, "\033[?1035$p\033[?1035l\033[?1035$p\033=\033[?1035$p\033>");
+	CHECK_STR(replybuf, "\033[?1035;3$y\033[?1035;3$y\033[?1035;3$y");
 	/* DECNKM is the keypad mode of ESC = and ESC > */
 	replybuf[0] = 0;
 	w(vt, "\033[?66$p\033=\033[?66$p\033>\033[?66h");
