@@ -1417,3 +1417,60 @@ void vt_write(struct vt *vt, const char *buf, size_t len)
 		}
 	}
 }
+
+/* ---- keys ------------------------------------------------------------- */
+
+/* The xterm way: with modifiers, the parameter 1 + Shift + 2 Alt + 4 Ctrl goes
+ * into the sequence (CSI 1 ; m A, CSI n ; m ~); without, cursor keys follow
+ * DECCKM and F1 to F4 are SS3 P to S. Keys that send a byte get Alt as an ESC in
+ * front instead. The keypad mode changes nothing, see CAVEATS. */
+size_t vt_key(const struct vt *vt, enum vt_key key, unsigned mods, char *buf, size_t cap)
+{
+	static const char cursor[] = "BCDHF"; /* after A for VT_KEY_UP */
+	static const char fn[] = "PQRS";
+	static const int tilde[] = {
+		[VT_KEY_INSERT] = 2, [VT_KEY_DELETE] = 3, [VT_KEY_PAGE_UP] = 5,
+		[VT_KEY_PAGE_DOWN] = 6, [VT_KEY_F5] = 15, [VT_KEY_F6] = 17,
+		[VT_KEY_F7] = 18, [VT_KEY_F8] = 19, [VT_KEY_F9] = 20, [VT_KEY_F10] = 21,
+		[VT_KEY_F11] = 23, [VT_KEY_F12] = 24,
+	};
+	bool shift = mods & VT_MOD_SHIFT, alt = mods & VT_MOD_ALT, ctrl = mods & VT_MOD_CTRL;
+	int m = 1 + shift + 2 * alt + 4 * ctrl;
+	const char *s = NULL;
+	int n;
+	char tmp[16];
+
+	if ((unsigned)key >= VT_KEY_COUNT)
+		return 0;
+	if (key <= VT_KEY_END) {
+		char c = key == VT_KEY_UP ? 'A' : cursor[key - VT_KEY_DOWN];
+		n = m > 1 ? snprintf(tmp, sizeof tmp, "\033[1;%d%c", m, c) :
+		    snprintf(tmp, sizeof tmp, (vt->mode & MODE_APPCURSOR) ? "\033O%c" : "\033[%c", c);
+	} else if (key >= VT_KEY_F1 && key <= VT_KEY_F4) {
+		char c = fn[key - VT_KEY_F1];
+		n = m > 1 ? snprintf(tmp, sizeof tmp, "\033[1;%d%c", m, c) :
+		    snprintf(tmp, sizeof tmp, "\033O%c", c);
+	} else if (key < VT_KEY_BACKSPACE) {
+		n = m > 1 ? snprintf(tmp, sizeof tmp, "\033[%d;%d~", tilde[key], m) :
+		    snprintf(tmp, sizeof tmp, "\033[%d~", tilde[key]);
+	} else {
+		switch (key) {
+		case VT_KEY_BACKSPACE: s = ctrl ? "\b" : "\x7f"; break;
+		case VT_KEY_ENTER: s = "\r"; break;
+		case VT_KEY_TAB: s = shift ? "\033[Z" : "\t"; break;
+		case VT_KEY_BACKTAB: s = "\033[Z"; alt = false; break;
+		case VT_KEY_ESCAPE: s = "\033"; break;
+		default: return 0;
+		}
+		n = snprintf(tmp + 1, sizeof tmp - 1, "%s", s);
+		if (alt)
+			tmp[0] = '\033';
+		else
+			memmove(tmp, tmp + 1, (size_t)n);
+		n += alt;
+	}
+	if (n <= 0 || (size_t)n > cap)
+		return 0;
+	memcpy(buf, tmp, (size_t)n);
+	return (size_t)n;
+}

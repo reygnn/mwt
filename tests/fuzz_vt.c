@@ -195,6 +195,15 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size)
 	if (b->view != 0)
 		die("view does not return to live", b);
 
+	/* every key in every combination, in the modes the input left behind */
+	for (int k = 0; k < VT_KEY_COUNT; k++)
+		for (unsigned m = 0; m < 8; m++) {
+			char key[16];
+			size_t n = vt_key(a, (enum vt_key)k, m, key, sizeof key);
+			if (n == 0 || n > sizeof key)
+				die("a key without bytes", a);
+		}
+
 	vt_reset(b);
 	check(b);
 	vt_free(a);

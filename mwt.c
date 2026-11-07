@@ -1511,36 +1511,6 @@ static bool mod_active(const char *name)
 	return xkb_state_mod_name_is_active(t.xkb_state, name, XKB_STATE_MODS_EFFECTIVE) > 0;
 }
 
-static void cursor_key(char ch, int m)
-{
-	char buf[16];
-	if (m > 1)
-		snprintf(buf, sizeof buf, "\033[1;%d%c", m, ch);
-	else
-		snprintf(buf, sizeof buf, (t.vt->mode & MODE_APPCURSOR) ? "\033O%c" : "\033[%c", ch);
-	send_input(buf, strlen(buf));
-}
-
-static void tilde_key(int n, int m)
-{
-	char buf[16];
-	if (m > 1)
-		snprintf(buf, sizeof buf, "\033[%d;%d~", n, m);
-	else
-		snprintf(buf, sizeof buf, "\033[%d~", n);
-	send_input(buf, strlen(buf));
-}
-
-static void fn_key(char ch, int m)
-{
-	char buf[16];
-	if (m > 1)
-		snprintf(buf, sizeof buf, "\033[1;%d%c", m, ch);
-	else
-		snprintf(buf, sizeof buf, "\033O%c", ch);
-	send_input(buf, strlen(buf));
-}
-
 static void send_alt(bool alt, const char *s, size_t n)
 {
 	char buf[80];
@@ -1593,6 +1563,32 @@ static xkb_keysym_t ctrl_latin(xkb_keycode_t code, xkb_keysym_t sym)
 	return sym;
 }
 
+/* The keysyms that vt_key() encodes; VT_KEY_COUNT for any other. The keypad
+ * ones with NumLock off are the same keys: see CAVEATS on the keypad mode. */
+static enum vt_key vt_key_of(xkb_keysym_t sym)
+{
+	switch (sym) {
+	case XKB_KEY_Up: case XKB_KEY_KP_Up: return VT_KEY_UP;
+	case XKB_KEY_Down: case XKB_KEY_KP_Down: return VT_KEY_DOWN;
+	case XKB_KEY_Right: case XKB_KEY_KP_Right: return VT_KEY_RIGHT;
+	case XKB_KEY_Left: case XKB_KEY_KP_Left: return VT_KEY_LEFT;
+	case XKB_KEY_Home: case XKB_KEY_KP_Home: return VT_KEY_HOME;
+	case XKB_KEY_End: case XKB_KEY_KP_End: return VT_KEY_END;
+	case XKB_KEY_Insert: case XKB_KEY_KP_Insert: return VT_KEY_INSERT;
+	case XKB_KEY_Delete: case XKB_KEY_KP_Delete: return VT_KEY_DELETE;
+	case XKB_KEY_Prior: case XKB_KEY_KP_Prior: return VT_KEY_PAGE_UP;
+	case XKB_KEY_Next: case XKB_KEY_KP_Next: return VT_KEY_PAGE_DOWN;
+	case XKB_KEY_BackSpace: return VT_KEY_BACKSPACE;
+	case XKB_KEY_Return: case XKB_KEY_KP_Enter: return VT_KEY_ENTER;
+	case XKB_KEY_Tab: return VT_KEY_TAB;
+	case XKB_KEY_ISO_Left_Tab: return VT_KEY_BACKTAB;
+	case XKB_KEY_Escape: return VT_KEY_ESCAPE;
+	}
+	if (sym >= XKB_KEY_F1 && sym <= XKB_KEY_F12)
+		return (enum vt_key)(VT_KEY_F1 + (sym - XKB_KEY_F1));
+	return VT_KEY_COUNT;
+}
+
 static void key_action(xkb_keycode_t code)
 {
 	if (!t.xkb_state)
@@ -1601,7 +1597,6 @@ static void key_action(xkb_keycode_t code)
 	bool ctrl = mod_active(XKB_MOD_NAME_CTRL);
 	bool alt = mod_active(XKB_MOD_NAME_ALT);
 	bool shift = mod_active(XKB_MOD_NAME_SHIFT);
-	int m = 1 + shift + 2 * alt + 4 * ctrl;
 
 	if (ctrl && shift) {
 		switch (ctrl_latin(code, base_sym(code))) {
@@ -1648,34 +1643,15 @@ static void key_action(xkb_keycode_t code)
 		}
 	}
 
-	switch (sym) {
-	case XKB_KEY_Up: case XKB_KEY_KP_Up: cursor_key('A', m); return;
-	case XKB_KEY_Down: case XKB_KEY_KP_Down: cursor_key('B', m); return;
-	case XKB_KEY_Right: case XKB_KEY_KP_Right: cursor_key('C', m); return;
-	case XKB_KEY_Left: case XKB_KEY_KP_Left: cursor_key('D', m); return;
-	case XKB_KEY_Home: case XKB_KEY_KP_Home: cursor_key('H', m); return;
-	case XKB_KEY_End: case XKB_KEY_KP_End: cursor_key('F', m); return;
-	case XKB_KEY_Insert: case XKB_KEY_KP_Insert: tilde_key(2, m); return;
-	case XKB_KEY_Delete: case XKB_KEY_KP_Delete: tilde_key(3, m); return;
-	case XKB_KEY_Prior: case XKB_KEY_KP_Prior: tilde_key(5, m); return;
-	case XKB_KEY_Next: case XKB_KEY_KP_Next: tilde_key(6, m); return;
-	case XKB_KEY_F1: fn_key('P', m); return;
-	case XKB_KEY_F2: fn_key('Q', m); return;
-	case XKB_KEY_F3: fn_key('R', m); return;
-	case XKB_KEY_F4: fn_key('S', m); return;
-	case XKB_KEY_F5: tilde_key(15, m); return;
-	case XKB_KEY_F6: tilde_key(17, m); return;
-	case XKB_KEY_F7: tilde_key(18, m); return;
-	case XKB_KEY_F8: tilde_key(19, m); return;
-	case XKB_KEY_F9: tilde_key(20, m); return;
-	case XKB_KEY_F10: tilde_key(21, m); return;
-	case XKB_KEY_F11: tilde_key(23, m); return;
-	case XKB_KEY_F12: tilde_key(24, m); return;
-	case XKB_KEY_BackSpace: send_alt(alt, ctrl ? "\b" : "\x7f", 1); return;
-	case XKB_KEY_Return: case XKB_KEY_KP_Enter: send_alt(alt, "\r", 1); return;
-	case XKB_KEY_ISO_Left_Tab: send_input("\033[Z", 3); return;
-	case XKB_KEY_Tab: send_alt(alt, shift ? "\033[Z" : "\t", shift ? 3 : 1); return;
-	case XKB_KEY_Escape: send_alt(alt, "\033", 1); return;
+	enum vt_key key = vt_key_of(sym);
+	if (key != VT_KEY_COUNT) {
+		char seq[16];
+		size_t n = vt_key(t.vt, key, (shift ? VT_MOD_SHIFT : 0) | (alt ? VT_MOD_ALT : 0) |
+				  (ctrl ? VT_MOD_CTRL : 0), seq, sizeof seq);
+		if (n == 1)
+			drop_paste_for_signal((unsigned char)seq[0]);
+		send_input(seq, n);
+		return;
 	}
 
 	if (ctrl) {
@@ -2006,8 +1982,11 @@ static void wheel(bool down)
 	if (mouse_mode()) {
 		mouse_report(down ? 65 : 64, true);
 	} else if (t.vt->mode & MODE_ALTSCREEN) {
-		for (int i = 0; i < wheel_lines; i++)
-			cursor_key(down ? 'B' : 'A', 1);
+		for (int i = 0; i < wheel_lines; i++) {
+			char seq[16];
+			size_t n = vt_key(t.vt, down ? VT_KEY_DOWN : VT_KEY_UP, 0, seq, sizeof seq);
+			send_input(seq, n);
+		}
 	} else {
 		/* Shift: a page at a time */
 		int n = t.xkb_state && mod_active(XKB_MOD_NAME_SHIFT) ? t.vt->rows - 1 : wheel_lines;

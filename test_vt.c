@@ -587,6 +587,64 @@ static void test_replies(void)
 	vt_free(vt);
 }
 
+/* vt_key: the bytes of the keys tests/keys.py checks under sway, here without a
+ * display; plus DECCKM, all F keys and the edge cases. */
+static const char *key(struct vt *vt, enum vt_key k, unsigned mods)
+{
+	static char buf[17];
+	size_t n = vt_key(vt, k, mods, buf, 16);
+	buf[n] = 0;
+	return buf;
+}
+
+static void test_keys(void)
+{
+	struct vt *vt = mk(10, 3, 0);
+	enum { S = VT_MOD_SHIFT, A = VT_MOD_ALT, C = VT_MOD_CTRL };
+	static const struct { enum vt_key k; unsigned mods; const char *want; } cases[] = {
+		{ VT_KEY_UP, 0, "\033[A" }, { VT_KEY_DOWN, 0, "\033[B" },
+		{ VT_KEY_RIGHT, 0, "\033[C" }, { VT_KEY_LEFT, 0, "\033[D" },
+		{ VT_KEY_HOME, 0, "\033[H" }, { VT_KEY_END, 0, "\033[F" },
+		{ VT_KEY_UP, C, "\033[1;5A" }, { VT_KEY_LEFT, A, "\033[1;3D" },
+		{ VT_KEY_RIGHT, S | A, "\033[1;4C" }, { VT_KEY_DOWN, C | A, "\033[1;7B" },
+		{ VT_KEY_END, S | A | C, "\033[1;8F" },
+		{ VT_KEY_INSERT, 0, "\033[2~" }, { VT_KEY_DELETE, C, "\033[3;5~" },
+		{ VT_KEY_PAGE_UP, C, "\033[5;5~" }, { VT_KEY_PAGE_DOWN, 0, "\033[6~" },
+		{ VT_KEY_F1, 0, "\033OP" }, { VT_KEY_F1, C, "\033[1;5P" },
+		{ VT_KEY_F4, S | A, "\033[1;4S" }, { VT_KEY_F5, A, "\033[15;3~" },
+		{ VT_KEY_F6, 0, "\033[17~" }, { VT_KEY_F10, 0, "\033[21~" },
+		{ VT_KEY_F11, 0, "\033[23~" }, { VT_KEY_F12, S, "\033[24;2~" },
+		{ VT_KEY_ENTER, 0, "\r" }, { VT_KEY_ENTER, A, "\033\r" },
+		{ VT_KEY_TAB, 0, "\t" }, { VT_KEY_TAB, S, "\033[Z" }, { VT_KEY_TAB, A, "\033\t" },
+		{ VT_KEY_BACKTAB, 0, "\033[Z" }, { VT_KEY_BACKTAB, A, "\033[Z" },
+		{ VT_KEY_ESCAPE, 0, "\033" }, { VT_KEY_ESCAPE, A, "\033\033" },
+		{ VT_KEY_BACKSPACE, 0, "\x7f" }, { VT_KEY_BACKSPACE, C, "\b" },
+		{ VT_KEY_BACKSPACE, A, "\033\x7f" },
+	};
+	for (size_t i = 0; i < sizeof cases / sizeof *cases; i++)
+		CHECK_STR(key(vt, cases[i].k, cases[i].mods), cases[i].want);
+	/* DECCKM: SS3 without modifiers, CSI 1 ; m with them, as xterm */
+	w(vt, "\033[?1h");
+	CHECK_STR(key(vt, VT_KEY_UP, 0), "\033OA");
+	CHECK_STR(key(vt, VT_KEY_HOME, 0), "\033OH");
+	CHECK_STR(key(vt, VT_KEY_UP, S), "\033[1;2A");
+	CHECK_STR(key(vt, VT_KEY_INSERT, 0), "\033[2~");
+	/* the keypad mode changes nothing, see CAVEATS */
+	w(vt, "\033[?1l\033=");
+	CHECK_STR(key(vt, VT_KEY_ENTER, 0), "\r");
+	CHECK_STR(key(vt, VT_KEY_UP, 0), "\033[A");
+	/* no room, no key: nothing */
+	char small[3];
+	CHECK(vt_key(vt, VT_KEY_UP, 0, small, sizeof small) == 3);
+	CHECK(vt_key(vt, VT_KEY_UP, C, small, sizeof small) == 0);
+	CHECK(vt_key(vt, VT_KEY_COUNT, 0, small, sizeof small) == 0);
+	CHECK(vt_key(vt, (enum vt_key)-1, 0, small, sizeof small) == 0);
+	/* the longest there is, ESC [ 2 4 ; 8 ~, fits in 16 */
+	char big[16];
+	CHECK(vt_key(vt, VT_KEY_F12, S | A | C, big, sizeof big) == 7);
+	vt_free(vt);
+}
+
 /* OSC 4, 10, 11 and 12 queries: answered with the colors as drawn, in xterm's
  * form, ended as the question was; setting a color is ignored. */
 static void test_color_queries(void)
@@ -877,6 +935,7 @@ int main(void)
 	test_altscreen();
 	test_replies();
 	test_color_queries();
+	test_keys();
 	test_checksum();
 	test_charset_and_misc();
 	test_unsupported_vt100();

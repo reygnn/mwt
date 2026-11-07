@@ -139,4 +139,24 @@ int64_t vt_abs_first(const struct vt *vt); /* oldest abs line in history */
 void vt_scroll_view(struct vt *vt, int delta); /* +up into history */
 void vt_mark_all(struct vt *vt);
 
+/* Keys that send an escape sequence or a control byte rather than text. The
+ * display side maps its own key codes (xkb keysyms in mwt.c) onto these; the
+ * bytes themselves depend only on the key, the modifiers and the terminal's
+ * modes, so they are worked out here and tested without a display. */
+enum vt_key {
+	VT_KEY_UP, VT_KEY_DOWN, VT_KEY_RIGHT, VT_KEY_LEFT, VT_KEY_HOME, VT_KEY_END,
+	VT_KEY_INSERT, VT_KEY_DELETE, VT_KEY_PAGE_UP, VT_KEY_PAGE_DOWN,
+	VT_KEY_F1, VT_KEY_F2, VT_KEY_F3, VT_KEY_F4, VT_KEY_F5, VT_KEY_F6,
+	VT_KEY_F7, VT_KEY_F8, VT_KEY_F9, VT_KEY_F10, VT_KEY_F11, VT_KEY_F12,
+	VT_KEY_BACKSPACE, VT_KEY_ENTER, VT_KEY_TAB,
+	VT_KEY_BACKTAB, /* ISO_Left_Tab: what Shift+Tab gives on most layouts */
+	VT_KEY_ESCAPE,
+	VT_KEY_COUNT
+};
+enum { VT_MOD_SHIFT = 1, VT_MOD_ALT = 2, VT_MOD_CTRL = 4 };
+
+/* The bytes for a key with VT_MOD_* bits, written to buf (not terminated):
+ * their count, or 0 for no key or no room. 16 bytes are always enough. */
+size_t vt_key(const struct vt *vt, enum vt_key key, unsigned mods, char *buf, size_t cap);
+
 #endif
