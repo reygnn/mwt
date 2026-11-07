@@ -87,6 +87,13 @@ static const char *grid_problem(const struct vt *vt)
 	for (int s = 0; s < 2; s++)
 		for (int r = 0; r < vt->rows; r++) {
 			const struct cell *l = screens[s][r];
+			uint32_t used = l[vt->cols].cp; /* blank from here on */
+			if (used > (uint32_t)vt->cols)
+				return "row written past its end";
+			for (int x = (int)used; x < vt->cols; x++)
+				if (l[x].cp != ' ' || l[x].fg != COL_DEFAULT_FG ||
+				    l[x].bg != COL_DEFAULT_BG || l[x].attr)
+					return "cell after the written part of a row is not blank";
 			for (int x = 0; x < vt->cols; x++) {
 				bool wide = l[x].attr & ATTR_WIDE;
 				bool dummy = l[x].attr & ATTR_WDUMMY;

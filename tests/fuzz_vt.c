@@ -24,9 +24,9 @@
  *   fix vt.c, then copy the input to tests/fuzz-regress/ under a name that
  *   says what it was, e.g. decstbm-bottom-not-clamped
  *
- * The first three there come from bugs planted on purpose (parser state lost
- * between writes, DECSTBM bottom not clamped, OSC 4 index not checked), each
- * caught by its file. They depend on how this harness reads an input: change
+ * The first four there come from bugs planted on purpose (parser state lost
+ * between writes, DECSTBM bottom not clamped, OSC 4 index not checked, ICH not
+ * raising the row's count of written cells), each caught by its file. They depend on how this harness reads an input: change
  * the header or the chunking, and they may no longer mean what they meant. */
 #define _XOPEN_SOURCE 700
 #include "vt.h"
@@ -81,6 +81,14 @@ static void check(const struct vt *vt)
 	for (int s = 0; s < 2; s++)
 		for (int r = 0; r < vt->rows; r++) {
 			const struct cell *l = screens[s][r];
+			/* the extra cell: from its count on, only default blanks */
+			uint32_t used = l[vt->cols].cp;
+			if (used > (uint32_t)vt->cols)
+				die("row written past its end", vt);
+			for (int x = (int)used; x < vt->cols; x++)
+				if (l[x].cp != ' ' || l[x].fg != COL_DEFAULT_FG ||
+				    l[x].bg != COL_DEFAULT_BG || l[x].attr)
+					die("cell after the written part of a row is not blank", vt);
 			for (int x = 0; x < vt->cols; x++) {
 				bool wide = l[x].attr & ATTR_WIDE;
 				bool dummy = l[x].attr & ATTR_WDUMMY;

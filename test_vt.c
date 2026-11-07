@@ -171,6 +171,77 @@ static void test_scroll_history(void)
 	vt_free(vt);
 }
 
+/* The count of written cells per row (USED in vt.c): whatever changes a row must
+ * keep it at or above the last cell that is not a default blank, and the history
+ * must come out as before it existed. */
+static int used(const struct vt *vt, int r) { return (int)vt->line[r][vt->cols].cp; }
+static bool used_ok(const struct vt *vt)
+{
+	struct cell **sc[2] = { vt->pri, vt->alt };
+	for (int s = 0; s < 2; s++)
+		for (int r = 0; r < vt->rows; r++)
+			for (int x = (int)sc[s][r][vt->cols].cp; x < vt->cols; x++) {
+				struct cell c = sc[s][r][x];
+				if (c.cp != ' ' || c.fg != COL_DEFAULT_FG || c.bg != COL_DEFAULT_BG || c.attr)
+					return false;
+			}
+	return true;
+}
+
+static void test_row_extent(void)
+{
+	struct vt *vt = mk(12, 3, 10);
+	CHECK(used(vt, 0) == 0);
+	w(vt, "abc");
+	CHECK(used(vt, 0) == 3);
+	/* erasing to the end with default blanks lowers it, in the middle not */
+	w(vt, "\033[1;2H\033[K");
+	CHECK(used(vt, 0) == 1 && used_ok(vt));
+	w(vt, "\033[1;1Habcdef\033[1;2H\033[2X");
+	CHECK(used(vt, 0) == 6 && used_ok(vt));
+	/* a colored erase is written, all of it (BCE) */
+	w(vt, "\033[2;3H\033[41m\033[K\033[m");
+	CHECK(used(vt, 1) == 12 && used_ok(vt));
+	/* ICH pushes text right, DCH pulls it back, with colored blanks too */
+	w(vt, "\033[3;1Hxy\033[1;1H\033[3@");
+	CHECK(used(vt, 0) == 9 && used_ok(vt));
+	CHECK_STR(row(vt, 0), "   a  def");
+	w(vt, "\033[44m\033[2P\033[m");
+	CHECK(used(vt, 0) == 12 && used_ok(vt));
+	/* insert mode, a wide glyph, a wrap: each raises it */
+	w(vt, "\033[3;1H\033[4h\xe6\xbc\xa2\033[4l");
+	CHECK(used(vt, 2) == 4 && used_ok(vt));
+	w(vt, "\033[3;12Hzq"); /* the wrap scrolls: z's row is full, q's new */
+	CHECK(used(vt, 1) == 12 && used(vt, 2) == 1 && vt->line[2][0].cp == 'q');
+	/* the history is trimmed the same as before: short lines, colored ones not */
+	w(vt, "\033[2J\033[H1\r\n22\r\n\033[42m\033[K\033[m\r\n\n\n\n");
+	int len;
+	int64_t a = vt_abs_first(vt) + vt->hist_count - 4;
+	CHECK(vt_abs_line(vt, a, &len) && len == 1);
+	CHECK(vt_abs_line(vt, a + 1, &len) && len == 2);
+	CHECK(vt_abs_line(vt, a + 2, &len) && len == 12);
+	CHECK(vt_abs_line(vt, a + 3, &len) && len == 0);
+	CHECK(used_ok(vt));
+	/* the scroll region rotates rows, the count goes with them */
+	w(vt, "\033[H\033[2Jtop\r\nmid\033[1;2r\033[1;1H\033M\033[r");
+	CHECK(used(vt, 0) == 0 && used(vt, 1) == 3 && used(vt, 2) == 0 && used_ok(vt));
+	/* DECALN fills everything, the alternate screen has its own counts */
+	w(vt, "\033#8");
+	CHECK(used(vt, 0) == 12 && used_ok(vt));
+	w(vt, "\033[?1049h");
+	CHECK(used(vt, 0) == 0 && used_ok(vt));
+	w(vt, "alt\033[?1049l");
+	CHECK(used(vt, 0) == 12 && used_ok(vt));
+	/* resize keeps it, cut to the new width */
+	CHECK(vt_resize(vt, 5, 3));
+	CHECK(used(vt, 0) == 5 && used_ok(vt));
+	CHECK(vt_resize(vt, 20, 4));
+	CHECK(used(vt, 1) == 5 && used_ok(vt));
+	w(vt, "\033c");
+	CHECK(used(vt, 0) == 0 && used_ok(vt));
+	vt_free(vt);
+}
+
 static void test_scroll_region_ops(void)
 {
 	struct vt *vt = mk(5, 5, 0);
@@ -798,6 +869,7 @@ int main(void)
 	test_wrap();
 	test_cursor_erase();
 	test_scroll_history();
+	test_row_extent();
 	test_scroll_region_ops();
 	test_sgr();
 	test_wide();

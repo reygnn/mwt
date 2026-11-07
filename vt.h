@@ -84,6 +84,8 @@ struct vt_callbacks {
 struct vt {
 	int cols, rows;
 	struct cell **line;       /* current screen (points to pri or alt) */
+	/* rows of cols + 1 cells: the last is vt.c's own, the cp of it counts the
+	 * cells that may differ from a default blank (USED in vt.c) */
 	struct cell **pri, **alt;
 	bool *dirty;
 	bool *tabs;
