@@ -1,93 +1,93 @@
 # mwt – minimal Wayland terminal
 
-Ein kleiner Terminal-Emulator für Wayland, geschrieben in C. mwt ist ein eigenständiger xdg-shell-Client und braucht weder X11 noch Xwayland. Er läuft in mwc und in jedem anderen Compositor.
+A small terminal emulator for Wayland, written in C. mwt is a standalone xdg-shell client and needs neither X11 nor Xwayland. It runs in mwc and in any other compositor.
 
-## Bauen
+## Building
 
-Abhängigkeiten: wayland-client, wayland-cursor, wayland-protocols, wayland-scanner, xkbcommon, fontconfig, freetype2.
+Dependencies: wayland-client, wayland-cursor, wayland-protocols, wayland-scanner, xkbcommon, fontconfig, freetype2.
 
 ```sh
-make            # baut ./mwt
-make check      # Tests für den VT-Kern (headless, mit ASan/UBSan), auch ein Fuzzer
-make replay     # rund 290 alte VT100-Animationen und ANSI-Dateien durch den VT-Kern (holt sie beim ersten Mal von GitHub)
-make terminfo   # jede Fähigkeit aus mwt.info gegen den VT-Kern (braucht python3 und ncurses)
-make keys       # was mwt für Tasten und Maus sendet, gegen mwt.info (unter headless sway, wie make test)
-make pixel      # was mwt zeichnet, per Screenshot (unter headless sway, wie make test)
-make mouse      # was mwt in jedem Mausmodus meldet (unter headless sway, wie make test)
-make keyboard   # Dead Keys, Compose und Key-Repeat (unter headless sway, wie make test)
-make test       # Black-Box-Tests unter headless sway (braucht sway, wtype, wl-clipboard, grim und vinput aus mwc)
-make width      # wo mwt und bash, vim oder tmux Zeichenbreiten verschieden zählen (braucht zusätzlich vim und tmux)
-make evil       # alle Tests plus Härtefälle in einem Podman-Container, auch mit Sanitizern
-make profile    # wo mwt seine Zeit lässt, unter Last und bei 60 Hz, im selben Container (misst nur)
-sudo make install   # installiert mwt nach /usr/local und die terminfo nach /usr/share/terminfo
-sudo make uninstall # entfernt beides wieder
+make            # builds ./mwt
+make check      # tests for the VT core (headless, with ASan/UBSan), including a fuzzer
+make replay     # about 290 old VT100 animations and ANSI files through the VT core (fetches them from GitHub on the first run)
+make terminfo   # each capability in mwt.info against the VT core (needs python3 and ncurses)
+make keys       # what mwt sends for keys and the mouse, against mwt.info (under headless sway, like make test)
+make pixel      # what mwt draws, by screenshot (under headless sway, like make test)
+make mouse      # what mwt reports in each mouse mode (under headless sway, like make test)
+make keyboard   # dead keys, Compose, and key repeat (under headless sway, like make test)
+make test       # black-box tests under headless sway (needs sway, wtype, wl-clipboard, grim, and vinput from mwc)
+make width      # where mwt and bash, vim, or tmux count character widths differently (also needs vim and tmux)
+make evil       # all tests plus adversarial cases in a Podman container, also with sanitizers
+make profile    # where mwt spends its time, under load and at 60 Hz, in the same container (measures only)
+sudo make install   # installs mwt to /usr/local and the terminfo entry to /usr/share/terminfo
+sudo make uninstall # removes both again
 ```
 
-`make replay` holt die Dateien beim ersten Lauf aus dem Netz nach `tests/vt100`. Sie sind wegen ihrer unklaren Lizenz nicht im Repository. Der Container von `make evil` hat kein Netz und überspringt den Replay, wenn sie fehlen: `tests/replay.sh --fetch` einmal auf dem Host holt sie.
+On its first run, `make replay` downloads its files to `tests/vt100`. They are not in the repository because their license is unclear. The `make evil` container has no network and skips the replay if they are missing: run `tests/replay.sh --fetch` once on the host to get them.
 
-Ohne Installation genügt `tic -x mwt.info`. Das legt den Eintrag unter `~/.terminfo` ab. Fehlt der Eintrag, setzt mwt `TERM=xterm-256color` und gibt dazu eine Warnung aus.
+Without installing, `tic -x mwt.info` is enough. It puts the entry in `~/.terminfo`. If the entry is missing, mwt sets `TERM=xterm-256color` and prints a warning.
 
-## Aufruf
+## Usage
 
 ```
-mwt [-f font] [-a app-id] [-T titel] [-g SPALTENxZEILEN] [-e] [befehl [args...]]
+mwt [-f font] [-a app-id] [-T title] [-g COLSxROWS] [-e] [command [args...]]
 ```
 
-* `-f "JetBrains Mono:size=12"` übernimmt ein fontconfig-Pattern.
-* `-a` setzt die app_id, Standard ist `mwt`. Darüber ordnet die mwmrc Farben und Position zu.
-* `-g` nimmt 1x1 bis 4096x2048, solange der Fensterpuffer unter 2 GiB bleibt. Bei einer Schrift mit 9x18 Pixeln reicht das bis etwa 1800x1800, darüber lehnt mwt mit Code 2 ab. Größer als 4096x2048 wird das Raster auch im größten Fenster nicht.
-* Ohne Befehl startet mwt `$SHELL`.
+* `-f "JetBrains Mono:size=12"` takes a fontconfig pattern.
+* `-a` sets the app_id, which defaults to `mwt`. The mwmrc uses it to assign colors and position.
+* `-g` takes 1x1 to 4096x2048, as long as the window buffer stays under 2 GiB. With a 9x18 pixel font, that goes up to about 1800x1800; beyond that, mwt refuses with exit code 2. The grid never gets larger than 4096x2048, even in the largest window.
+* Without a command, mwt starts `$SHELL`.
 
-Alles Weitere, also Farben, Schrift, Padding und Scrollback, steht in `config.h` und wird beim Neubauen übernommen.
+Everything else, meaning colors, font, padding, and scrollback, is in `config.h` and takes effect when you rebuild.
 
-## Bedienung
+## Controls
 
-| Eingabe | Wirkung |
+| Input | Effect |
 |---|---|
-| Linke Maustaste ziehen | Auswahl, wird beim Loslassen in die Primary Selection kopiert |
-| Doppel-/Dreifachklick | Wort/Zeile auswählen |
-| Rechtsklick | Menü: Kopieren, Einfügen, Alles markieren. Pfeiltasten und Return gehen auch, Escape schließt es |
-| Shift+Linksklick | Auswahl erweitern |
-| Mittelklick, Shift+Insert | Primary Selection einfügen |
-| Ctrl+Shift+A | alles markieren: Scrollback und Bildschirm, im Alternate Screen nur den Bildschirm |
-| Ctrl+Shift+C / V | Zwischenablage kopieren / einfügen |
-| Shift+PgUp / PgDn | Scrollback (im Alternate Screen gehen sie ans Programm) |
-| Mausrad | Scrollback |
-| Shift+Mausrad | Scrollback seitenweise |
-| Shift+Pos1 / Ende | an den Anfang / das Ende des Scrollbacks (nicht, wenn ein Programm Alternate Screen oder Maus nutzt) |
-| Ctrl+Shift+Plus / Minus / 0 | Schrift größer / kleiner / zurücksetzen |
-| Shift + Maus | Auswahl und Menü auch dann, wenn ein Programm die Maus übernommen hat |
+| Drag with the left mouse button | Select; copied to the primary selection on release |
+| Double-/triple-click | Select word/line |
+| Right-click | Menu: Copy, Paste, Select All. Arrow keys and Return also work, Escape closes it |
+| Shift+left-click | Extend the selection |
+| Middle-click, Shift+Insert | Paste the primary selection |
+| Ctrl+Shift+A | Select all: scrollback and screen, only the screen in the alternate screen |
+| Ctrl+Shift+C / V | Copy to / paste from the clipboard |
+| Shift+PgUp / PgDn | Scrollback (in the alternate screen they go to the program) |
+| Mouse wheel | Scrollback |
+| Shift+mouse wheel | Scrollback by page |
+| Shift+Home / End | To the start / end of the scrollback (not when a program uses the alternate screen or the mouse) |
+| Ctrl+Shift+Plus / Minus / 0 | Font larger / smaller / reset |
+| Shift + mouse | Selection and menu even when a program has taken over the mouse |
 
-## Aufbau
+## Structure
 
-| Datei | Inhalt |
+| File | Contents |
 |---|---|
-| `vt.c`, `vt.h` | Parser nach Paul Williams' DEC-Zustandsautomat, Grid, Scrollback. Kein Wayland-Code, daher headless testbar. |
-| `font.c` | fontconfig/FreeType, vier Schnitte, Fallback-Fonts für fehlende Glyphen, Glyph-Cache |
-| `mwt.c` | Wayland (xdg-shell, xdg-decoration, wl_shm, wl_data_device, primary selection), Tastatur über xkbcommon inklusive Compose/Dead Keys, Maus, pty, Event-Loop |
-| `mwt.info` | terminfo: deklariert nur, was `vt.c` wirklich kann |
-| `test_vt.c` | Tests für den VT-Kern |
-| `tests/replay.c` | spielt aufgezeichnete Terminalausgabe ab: am Stück, Byte für Byte, in zufälligen Stücken und mit Größenänderungen. Die ersten drei müssen gleich enden, und nach jedem Schreiben muss das Raster stimmen. `make replay REPORT=1` listet pro Datei, was mwt davon nicht kann. |
-| `tests/` | Black-Box-Tests und Härtefälle, aus dem mt-Projekt übernommen. `MWC_DIR` nennt den mwc-Quellbaum, Standard ist `../../mwc`. |
+| `vt.c`, `vt.h` | Parser based on Paul Williams' DEC state machine, grid, scrollback. No Wayland code, so it can be tested headless. |
+| `font.c` | fontconfig/FreeType, four styles, fallback fonts for missing glyphs, glyph cache |
+| `mwt.c` | Wayland (xdg-shell, xdg-decoration, wl_shm, wl_data_device, primary selection), keyboard through xkbcommon including Compose/dead keys, mouse, pty, event loop |
+| `mwt.info` | terminfo: declares only what `vt.c` can really do |
+| `test_vt.c` | Tests for the VT core |
+| `tests/replay.c` | Plays back recorded terminal output: in one piece, byte by byte, in random chunks, and with resizes. The first three must end the same, and the grid must be consistent after every write. `make replay REPORT=1` lists, per file, what mwt cannot do from it. |
+| `tests/` | Black-box tests and adversarial cases, taken over from the mt project. `MWC_DIR` names the mwc source tree and defaults to `../../mwc`. |
 
-Gezeichnet werden nur geänderte Zeilen. Bei Doppelpufferung wird vorher der zuletzt gezeigte Puffer kopiert. Die Ausgabe ist an Frame-Callbacks gekoppelt.
+Only changed rows are drawn. With double buffering, the rows that differ from the most recently shown buffer are copied first. Output is tied to frame callbacks.
 
-## Unterstützt
+## Supported
 
-* VT100/VT220-Kern: Cursorbewegung, ED/EL/ECH, ICH/DCH, IL/DL, SU/SD, Scroll-Regionen, Origin Mode, Tabs, REP, DEC-Sondergrafik (G0/G1)
-* SGR: Bold, Dim, Italic, Underline, Reverse, Invisible, Strike; 16, 256 und Truecolor (`;` und `:`-Form)
-* Alternate Screen (47/1047/1049), Bracketed Paste, Maus (1000/1002/1003 + SGR 1006), Focus Events, DECSCUSR (Cursorform)
-* Antworten auf DA, DA2, DSR/CPR, DECRQM, XTVERSION, Fenstergröße (CSI 18 t)
-* OSC 0/2 (Fenstertitel)
-* Wide Characters (CJK, Emoji als Umriss, sofern ein Fallback-Font sie hat)
-* HiDPI über `wl_surface.preferred_buffer_scale` (Ganzzahl-Skalierung)
+* VT100/VT220 core: cursor movement, ED/EL/ECH, ICH/DCH, IL/DL, SU/SD, scroll regions, origin mode, tabs, REP, DEC special graphics (G0/G1)
+* SGR: bold, dim, italic, underline, reverse, invisible, strike; 16, 256, and truecolor (`;` and `:` forms)
+* Alternate screen (47/1047/1049), bracketed paste, mouse (1000/1002/1003 + SGR 1006), focus events, DECSCUSR (cursor shape)
+* Replies to DA, DA2, DSR/CPR, DECRQM, XTVERSION, window size (CSI 18 t)
+* OSC 0/2 (window title)
+* Wide characters (CJK, emoji as outlines, if a fallback font has them)
+* HiDPI through `wl_surface.preferred_buffer_scale` (integer scaling)
 
-## Bewusst weggelassen
+## Deliberately left out
 
-Tektronix, VT52, Sixel/ReGIS, DCS-Abfragen, Reflow beim Resize, Ligaturen, bidi, kombinierende Zeichen (werden verworfen), farbige Emoji-Bitmaps, Subpixel-AA, fraktionale Skalierung, Drag and Drop, OSC 52.
+Tektronix, VT52, Sixel/ReGIS, DCS queries, reflow on resize, ligatures, bidi, combining characters (they are discarded), color emoji bitmaps, subpixel AA, fractional scaling, drag and drop, OSC 52.
 
-## Hinweise zu mwc
+## Notes on mwc
 
-* Rahmen kommen über xdg-decoration (server-side).
-* Größenschritte: xdg-shell kennt keine Schrittweite wie `WM_NORMAL_HINTS`. Ein freies Fenster rastet mwt deshalb selbst auf ganze Zellen ein. Maximiert, im Vollbild oder gekachelt übernimmt mwt die vorgegebene Größe und füllt den Rest mit der Hintergrundfarbe. Der Resize-Umriss und die Größenanzeige von mwc zeigen deshalb Pixel statt Spalten und Zeilen.
-* Bei ssh auf Hosts ohne mwt-terminfo: `TERM=xterm-256color ssh …` verwenden oder die terminfo dort mit `infocmp -x mwt | ssh host tic -x -` installieren.
+* Frames come through xdg-decoration (server-side).
+* Size increments: xdg-shell has no size step like `WM_NORMAL_HINTS`. So mwt snaps a floating window to whole cells itself. When maximized, fullscreen, or tiled, mwt takes the given size and fills the rest with the background color. This is why mwc's resize outline and size display show pixels instead of columns and rows.
+* With ssh to hosts without the mwt terminfo entry: use `TERM=xterm-256color ssh …` or install the entry there with `infocmp -x mwt | ssh host tic -x -`.

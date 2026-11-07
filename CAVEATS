@@ -1,7 +1,7 @@
 CAVEATS
 
 Verhalten, das so gewollt ist oder das mwt nicht ändern kann. Was bewusst fehlt,
-steht im README unter "Bewusst weggelassen".
+steht im README unter "Deliberately left out".
 
 * mwt -e gibt immer 0 zurück, auch wenn der Befehl fehlschlägt oder nicht
   startet. Die Fehlermeldung landet im Fenster, das sich sofort schließt.
