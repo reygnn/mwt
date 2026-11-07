@@ -83,7 +83,7 @@ Only changed rows are drawn. With double buffering, the rows that differ from th
 * SGR: bold, dim, italic, underline, reverse, invisible, strike; 16, 256, and truecolor (`;` and `:` forms)
 * Alternate screen (47/1047/1049), bracketed paste, mouse (1000/1002/1003 + SGR 1006), focus events, DECSCUSR (cursor shape)
 * Replies to DA, DA2, DSR/CPR, DECRQM, XTVERSION, window size (CSI 18 t). DECRQM reports the modes mwt knows of but does not have as permanently reset (4)
-* Keypad application mode, by ESC = / ESC > and DECNKM (`?66`)
+* Keypad application mode (ESC = / ESC >, DECNKM `?66`) is kept and reported by DECRQM, but the keypad sends what it sends without it, as in xterm with its default mode 1035: see CAVEATS
 * DECRQCRA (checksum of a rectangle, as xterm computes it), only with `allow_checksum` in `config.h`: like xterm, off by default, since it lets any program read the screen. `make esctest` builds `mwt-esctest` with it on.
 * OSC 0/2 (window title); OSC 4, 10, 11 and 12 queries are answered with the colors from `config.h` (programs use them to tell a dark background from a light one), setting colors is ignored
 * Wide characters (CJK, emoji as outlines, if a fallback font has them)

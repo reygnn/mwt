@@ -22,6 +22,14 @@ steht im README unter "Deliberately left out".
   Programm vorher, stehen die Antworten in der Eingabezeile der Shell.
 * Ein Programm, das die Ausgabe mit tcflow(TCOOFF) anhält, kann nur selbst wieder
   starten. Das ist ein Stopp im Kernel, keine Taste hilft.
+* Der Application-Keypad-Modus (ESC =, ESC >, CSI ? 66 h/l) wird gemerkt und
+  per DECRQM gemeldet, ändert aber nichts an den Tasten: Mit NumLock senden die
+  Ziffern Ziffern und Enter \r, ohne NumLock liefert xkb KP_Home, KP_Up und so
+  weiter, und die senden die normalen Cursor- und Tilde-Sequenzen. Das ist
+  xterms Verhalten mit seinem voreingestellten Modus 1035. Wirkte der Modus,
+  sendete der Tastenblock ESC O q statt 1, sobald ein curses-Programm startet
+  (smkx in mwt.info schaltet ihn ein), und ohne ka1, kb2, kent und Co. in der
+  terminfo verstünde das kein Programm.
 * Mit Ctrl+Shift+Buchstabe auf nicht-lateinischen Layouts ohne lateinisches
   Zweitlayout gilt die QWERTY-Position der Taste.
 * Zeichenbreiten: mwt zählt wie glibc und bash, also Codepoint für Codepoint
