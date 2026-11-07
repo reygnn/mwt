@@ -2191,11 +2191,22 @@ static void spawn(char **argv)
 	t.child_fd = (int)syscall(SYS_pidfd_open, t.child, 0);
 }
 
+static int64_t now_ms(void)
+{
+	struct timespec ts;
+	clock_gettime(CLOCK_MONOTONIC, &ts);
+	return (int64_t)ts.tv_sec * 1000 + ts.tv_nsec / 1000000;
+}
+
+/* Stops after a megabyte or a while, whichever is first, so that a flood leaves room
+ * for frames and keys. Short lines scroll at each one, and a megabyte of them takes
+ * long: the bytes alone would allow a few frames a second, and Ctrl+C would wait. */
 static void read_pty(void)
 {
 	static char buf[65536];
 	size_t total = 0;
-	while (total < (1u << 20)) {
+	int64_t end = now_ms() + 16;
+	while (total < (1u << 20) && (!total || now_ms() < end)) {
 		ssize_t n = read(t.pty, buf, sizeof buf);
 		if (n > 0) {
 			vt_write(t.vt, buf, n);
@@ -2219,13 +2230,6 @@ static void read_pty(void)
 }
 
 /* ---- main ------------------------------------------------------------- */
-
-static int64_t now_ms(void)
-{
-	struct timespec ts;
-	clock_gettime(CLOCK_MONOTONIC, &ts);
-	return (int64_t)ts.tv_sec * 1000 + ts.tv_nsec / 1000000;
-}
 
 /* reap the child if it ends within ms */
 static void wait_child(int ms)
