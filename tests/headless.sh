@@ -24,6 +24,8 @@ tic -x -o "$HOME/.terminfo" mwt.info || { echo "FAIL: mwt.info does not compile"
 cat >"$DIR/sway.conf" <<'CONF'
 output HEADLESS-1 resolution 1000x700 position 0 0
 default_border none
+# sway 1.9 draws the pointer into what grim captures, over the cells under test
+seat * hide_cursor 100
 default_floating_border none
 for_window [app_id="mwt"] floating enable, move position 20 20
 for_window [app_id="other"] floating enable, move position 20 560
