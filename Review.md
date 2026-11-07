@@ -1,8 +1,64 @@
 # Open review points
 
-From a test coverage measurement with gcov at commit `abafc03`, after the code review of
-`a375b52..v0.3.3`. Line numbers are for `abafc03`. None of these is a known bug: they are
-places no test reaches, so a bug there would go unnoticed.
+Two sources, both at commit `abafc03`, to which the line numbers refer: a second review of
+the whole code base, whose findings were each checked against the code and reproduced where
+possible, and a test coverage measurement with gcov. The code review of `a375b52..v0.3.3`
+before them is done, see the end.
+
+**Reproduced** means seen by feeding the VT core or running mwt under a headless sway.
+**Read** means confirmed from the code only, not run.
+
+## Findings of the second review
+
+### To fix
+
+- Reproduced: overlong UTF-8 sequences are accepted (`vt_write`, `vt.c:1404`). Only values
+  above U+10FFFF and surrogates are refused, so `E0 80 9B` and `F0 80 80 9B` decode to
+  U+001B, a real ESC: `E0 80 9B [31m X` writes a red X. Control sequences can pass a filter
+  that strips only the byte 0x1B. The two-byte form `C0 9B` is refused, as lead bytes below
+  0xC2 are. `utf8_seq` in `mwt.c` checks these cases for pasting, the VT core does not.
+- Reproduced: REP works around the read budget (`vt.c:1079`, `read_pty` in `mwt.c`). It
+  repeats up to 65535 times per sequence, and `read_pty` looks at the clock only between
+  reads: 1024 times `CSI 65535 b`, 8 KiB, took 0.47 s in one `vt_write`. Reads from the pty
+  were at most 10 KiB, 2.2 KiB on average, so a stream of them stalls mwt for up to about
+  0.6 s per read, frames and keys included.
+- Read: the glyph cache is not checked for allocation failures (`font.c`). The `calloc` in
+  `font_open` (`font.c:166`) is not checked, and `slot()` then reads through a null
+  pointer. When growing the table fails in `font_glyph`, entries go on being added; once it
+  is full, `slot()` finds no free place and loops forever. Both only when out of memory.
+
+### To decide
+
+- Read: a character no font has costs a `FcFontMatch` the first time it is drawn, in each
+  style (`find_fallback`, `font.c:212`). The empty result is cached, so the same character
+  costs nothing again, but random Unicode keeps bringing new ones, and the glyph cache grows
+  without a limit. Not measured.
+- Read, partly reproduced: each OSC 0 or 2 is a `set_title` request right away
+  (`vt_title`, `mwt.c:275`), tens of thousands in one round of the event loop in a flood.
+  Older libwayland versions are said to end the connection when the socket is full; with
+  libwayland 1.24, mwt went through 100,000 titles in a row and its program ran to the end.
+  Older versions were not tried. `evil.sh` has no case for it.
+- Read: `mwt.info` declares `blink`, and `vt.c` keeps `ATTR_BLINK`, but mwt never draws
+  it. The principle of `mwt.info` is to declare only what mwt really does.
+- Read: `drop_paste_for_signal` (`mwt.c:257`) sends a closing `\e[201~` when one is still
+  waiting in `t.out`, without checking whether the opening `\e[200~` went out; if it did
+  not, the program sees a closing bracket it never saw opened.
+- Read: `paste_text` drops only ESC and NUL from a paste, so ^C, ^Z and ^D in pasted text
+  raise signals in the kernel, bracketed paste or not. Dropping all C0 controls but tab, CR
+  and LF would avoid it.
+
+### Maintainability
+
+Facts, not bugs: `mwt.c` has 2523 lines around the global state `t`; selection and
+clipboard (about 550 lines) and the context menu could be files of their own. `struct vt`
+is public, and `mwt.c` reads `scrolled`, `hist_count`, `mode` and `dirty` directly. The
+README and the code are in English, `BUGS`, `CAVEATS` and `TODO` in German. There is no CI:
+`make check` needs neither sway nor Podman and would be cheap to run on every push. Part of
+the tests needs the mwc repository next to this one.
+
+## Test coverage
+
+Places no test reaches, so a bug there would go unnoticed. None of them is a known bug.
 
 | File | Lines run | Branches taken | Measured with |
 |---|---|---|---|
@@ -19,7 +75,7 @@ higher; by how much was not measured. The tests end mwt with SIGTERM, and mwt ha
 handler for it, so the measuring build added one that writes the counts first; that build
 is not in the repository.
 
-## VT core (`vt.c`)
+### VT core (`vt.c`)
 
 - The mouse modes 1000, 1002, 1003, 1004 and 1006: setting them in `set_private_mode`
   (`vt.c:830`, `vt.c:836`) and reporting them in `private_mode_state` (`vt.c:869` to
@@ -34,7 +90,7 @@ is not in the repository.
 - DECRQCRA counting DEL and 0xFF as 0 (`vt.c:895`).
 - `vt_free(NULL)` (`vt.c:452`) and `vt_key` for a key that is not one (`vt.c:1463`).
 
-## Wayland side (`mwt.c`)
+### Wayland side (`mwt.c`)
 
 - Never called: `popup_repositioned` (`mwt.c:1384`), `tl_close` (`mwt.c:2123`),
   `tl_bounds` (`mwt.c:2128`), `surf_enter` and `surf_leave` (`mwt.c:2140`; the HiDPI test
@@ -56,7 +112,7 @@ is not in the repository.
   | `buffer_init` (`mwt.c:1005`) | 69 % | running out of memory |
   | `send_text` (`mwt.c:451`) | 69 % | the error paths |
 
-## Fonts (`font.c`)
+### Fonts (`font.c`)
 
 - Fallback fonts (`find_fallback`, `font.c:212`): the test image has no font beyond
   DejaVu, so no CJK or emoji, and the search for a fallback never runs.
@@ -65,7 +121,7 @@ is not in the repository.
   the error paths: no scalable font (`font.c:134`), a size out of range (`font.c:161`), a
   face that does not load (`font.c:51`).
 
-## Left open on purpose
+### Left open on purpose
 
 - The drag-and-drop handlers (`dd_*`, `ds_*`, `offer_actions`) are never called. Drag and
   drop is in the README under "Deliberately left out"; they only answer the protocol.
