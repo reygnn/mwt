@@ -594,6 +594,7 @@ static void esc_dispatch(struct vt *vt, uint32_t f)
 		case 'E': vt->c.x = 0; index_down(vt); break;
 		case 'H': vt->tabs[vt->c.x] = true; break;
 		case 'M': reverse_index(vt); break;
+		case 'Z': reply(vt, "\033[?62;22c"); break; /* DECID, the old DA */
 		case 'c': vt_reset(vt); break;
 		case '=': vt->mode |= MODE_APPKEYPAD; break;
 		case '>': vt->mode &= ~MODE_APPKEYPAD; break;

@@ -70,8 +70,9 @@ done
 export WAYLAND_DISPLAY=wayland-1
 sleep 0.3
 
-# xterm at VT420, as mwt answers DA2 like it does. A report that does not come
-# fails a test after 0.3 s instead of the default second.
+# As xterm at VT420: esctest reads the screen back only from VT level 4 on. mwt
+# answers DA and DA2 as a VT220, so those tests fail. A report that does not
+# come fails a test after 0.3 s instead of the default second.
 LOG=$DIR/esctest.log
 timeout 1800 "$MWT" -g 80x24 -e sh -c 'log=$1; shift; cd "$0/esctest" && exec python3 esctest.py \
 	--expected-terminal=xterm --max-vt-level=4 --timeout=0.3 --no-print-logs \

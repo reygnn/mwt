@@ -459,6 +459,9 @@ static void test_replies(void)
 	w(vt, "\033[c");
 	CHECK_STR(replybuf, "\033[?62;22c");
 	replybuf[0] = 0;
+	w(vt, "\033Z"); /* DECID answers as DA does */
+	CHECK_STR(replybuf, "\033[?62;22c");
+	replybuf[0] = 0;
 	w(vt, "\033[>q");
 	CHECK_STR(replybuf, "\033P>|mwt(" MWT_VERSION ")\033\\");
 	replybuf[0] = 0;
@@ -580,9 +583,9 @@ static void test_unsupported_vt100(void)
 	/* blink is kept as an attribute */
 	w(vt, "\r\n\033[5mB\033[m");
 	CHECK(vt->pri[1][0].attr & ATTR_BLINK);
-	/* DECID, DECREQTPARM, LEDs, ENQ: no answer, nothing written */
+	/* DECREQTPARM, LEDs, ENQ: no answer, nothing written (DECID answers as DA) */
 	replybuf[0] = 0;
-	w(vt, "\033Z\033[x\033[1x\033[1;2q\005C");
+	w(vt, "\033[x\033[1x\033[1;2q\005C");
 	CHECK_STR(replybuf, "");
 	CHECK_STR(row(vt, 1), "BC");
 	/* a national set (UK) and G2/G3 shifts are plain ASCII */
