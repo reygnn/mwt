@@ -22,7 +22,7 @@ build() {
 	[ -x mwt ] || { echo "mwt did not build"; exit 1; }
 }
 echo "=== make check ==="
-make check 2>&1 | tail -1
+make check 2>&1 | grep -E 'checks passed|inputs passed|FAIL|fuzz_vt:|ERROR'
 [ "${PIPESTATUS[0]}" = 0 ] || fail=1
 # No network in here: the files come with the sources if `tests/replay.sh
 # --fetch` ran on the host, otherwise this is skipped.
