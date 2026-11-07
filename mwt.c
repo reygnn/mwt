@@ -1087,6 +1087,35 @@ static void buffers_differ_rows(int y, int n)
 		memset(t.differ + y, 1, end - y);
 }
 
+#ifdef MWT_CHECK_REDRAW
+/* For the tests (make evil): each frame against the whole grid drawn from scratch.
+ * The incremental path keeps what an earlier frame drew, copies rows between the
+ * buffers and skips rows it is about to draw, and relies on draw_row covering each
+ * pixel of its row. A difference is reported on stderr, which the tests read. */
+static void check_redraw(const struct buffer *b, int64_t ba, int bc, int64_t ea, int ec)
+{
+	static struct buffer ref;
+	if (ref.size != b->size) {
+		free(ref.data);
+		ref.data = malloc(b->size);
+		ref.size = ref.data ? b->size : 0;
+	}
+	if (!ref.data)
+		return;
+	ref.w = b->w;
+	ref.h = b->h;
+	fill_rect(&ref, 0, 0, b->w, b->h, color_bg);
+	for (int r = 0; r < t.vt->rows; r++)
+		draw_row(&ref, r, t.sel.active, ba, bc, ea, ec);
+	for (size_t i = 0; i < b->size / sizeof *b->data; i++)
+		if (ref.data[i] != b->data[i]) {
+			fprintf(stderr, "mwt: redraw check failed at %zu,%zu\n",
+				i % b->w, i / b->w);
+			return;
+		}
+}
+#endif
+
 static void draw(void)
 {
 	struct vt *vt = t.vt;
@@ -1155,6 +1184,9 @@ static void draw(void)
 	if (full)
 		wl_surface_damage_buffer(t.surface, 0, 0, W, H);
 
+#ifdef MWT_CHECK_REDRAW
+	check_redraw(b, ba, bc, ea, ec);
+#endif
 	wl_surface_set_buffer_scale(t.surface, t.scale);
 	wl_surface_attach(t.surface, b->wb, 0, 0);
 	t.frame_cb = wl_surface_frame(t.surface);

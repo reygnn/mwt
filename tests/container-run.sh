@@ -61,6 +61,12 @@ tests/headless.sh tests/keyboard.py 2>&1 | grep -E '^(FAIL|PASS|info|=== )'
 [ "${PIPESTATUS[0]}" = 0 ] || fail=1
 tests/headless.sh tests/leaks.py 2>&1 | grep -E '^(FAIL|PASS|info|=== )'
 [ "${PIPESTATUS[0]}" = 0 ] || fail=1
+# A build that checks each frame against a full redraw, see check_redraw in mwt.c.
+echo "=== pixel, each frame against a full redraw ==="
+build "-O2 -g -DMWT_CHECK_REDRAW" ""
+tests/headless.sh tests/pixel.py 2>&1 | grep -E '^(FAIL|PASS|info|=== )'
+[ "${PIPESTATUS[0]}" = 0 ] || fail=1
+build "$SAN" "-fsanitize=address,undefined"
 # Known gaps in character widths are only reported. A crash or a width.sh that
 # could not run (its messages start with "width:") fails the run.
 echo "=== width, sanitizers (GAPs report only) ==="

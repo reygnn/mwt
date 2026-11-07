@@ -36,9 +36,9 @@ def finish():
     if os.path.exists(LOG):
         with open(LOG, errors="replace") as f:
             log = f.read()
-        m = re.search(r"AddressSanitizer|runtime error", log)
+        m = re.search(r"AddressSanitizer|runtime error|redraw check failed", log)
         if m:
-            fail("sanitizer report from mwt:\n" + log[m.start():m.start() + 1500])
+            fail("report from mwt:\n" + log[m.start():m.start() + 1500])
     print("PASS" if not fails else f"=== {fails} checks failed ===")
     return 1 if fails else 0
 
