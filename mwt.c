@@ -98,6 +98,8 @@ static struct {
 	bool cfg_fixed;    /* maximized, fullscreen or tiled: use size as given */
 	bool configured, focused, running, need_redraw;
 	bool need_full;    /* the grid moved in the window: next frame from scratch */
+	char title[VT_OSC_MAX]; /* the last one the program set, to send once a turn */
+	bool title_new;
 	int init_cols, init_rows;
 
 	/* font and grid, in buffer pixels */
@@ -300,11 +302,20 @@ static void vt_reply(void *ud, const char *s, size_t n)
 	pty_write(s, n);
 }
 
+/* Only noted: a program may set thousands in one read, and each would be a
+ * request; the event loop sends the last one once a turn (send_title). */
 static void vt_title(void *ud, const char *s)
 {
 	(void)ud;
-	if (t.toplevel)
-		xdg_toplevel_set_title(t.toplevel, s);
+	snprintf(t.title, sizeof t.title, "%s", s);
+	t.title_new = true;
+}
+
+static void send_title(void)
+{
+	if (t.title_new && t.toplevel)
+		xdg_toplevel_set_title(t.toplevel, t.title);
+	t.title_new = false;
 }
 
 /* ---- selection -------------------------------------------------------- */
@@ -2494,6 +2505,7 @@ done:;
 	int wlfd = wl_display_get_fd(t.display);
 
 	while (t.running) {
+		send_title();
 		if (t.need_redraw && !t.frame_cb && t.configured)
 			draw();
 		if (t.menu.popup && t.menu.configured && t.menu.dirty && menu_buffer())

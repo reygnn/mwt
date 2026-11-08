@@ -22,11 +22,6 @@ The three it found to fix are done, see the end.
   again, against 0.02 s for ASCII; about 0.18 ms a new character. Since fallback faces
   make room for each other (see the end), the search no longer stops once 16 are open;
   the measurement, in a window with none open, is not affected.
-- Read, partly reproduced: each OSC 0 or 2 is a `set_title` request right away
-  (`vt_title`, `mwt.c:275`), tens of thousands in one round of the event loop in a flood.
-  Older libwayland versions are said to end the connection when the socket is full; with
-  libwayland 1.24, mwt went through 100,000 titles in a row and its program ran to the end.
-  Older versions were not tried. `evil.sh` has no case for it.
 
 ### Maintainability
 
