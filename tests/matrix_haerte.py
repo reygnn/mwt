@@ -26,7 +26,8 @@ Laufs testet Resizes unter Last. q beendet, Ctrl+C auch.
   python3 matrix_haerte.py                  # 70 s, alle Phasen
   python3 matrix_haerte.py -s 20 -p regen   # nur eine Phase
   python3 matrix_haerte.py --fps 30         # gebremst, zum Anschauen
-  python3 matrix_haerte.py --dump -g 80x24 > out.bin   # Bytes für replay/vtdump
+  python3 matrix_haerte.py --dump -g 80x24 > out.bin   # Bytes für cat, ohne Abfragen
+  time cat out.bin                                      # mwts eigener Durchsatz
   python3 matrix_haerte.py --dump-checks -g 80x24 > c.bin  # nur die Prüfungen
 
 Exit: 0 alles gut, 1 eine Prüfung falsch, 2 mwt hängt (keine Antwort/kein
@@ -269,18 +270,25 @@ class Muell(Phase):
         "👨\u200d👩\u200d👧 ❤\ufe0f 🇩🇪 ア\u3099".encode(),
         b"\x1b(0lqqqqqk\x0ex\x0f\x1b(B", b"\x0e" + b"lqk" * 10,
         b"\x1b[3g\x1bH\t\t\t\x1b[Z\x1b[5I\x1b[9Z", "アイ\b\bx\b\b\by".encode(),
-        b"\x1b[?1;6;7;25;1049;2004;9999$p", b"\x1b[>c", b"\x1b[5n", b"\x1b[18t",
         b"\x1b[" + b";".join(b"%d" % i for i in range(40)) + b" q",
         b"\x1b[?1049h", b"\x1b#8", b"\x1b[" + b"1;" * 30 + b"1H",
         b"\x1b\x1b\x1b[[[", b"\x1b[?\x1b[>\x1b[=", b"\x1b[1\x00;\x7f2H",
     ]
 
+    # Abfragen: mwt antwortet. Live liest das Skript die Antworten; bei --dump
+    # liest sie niemand, dann landen sie in der Eingabe, und mit ECHO gibt sie
+    # die pty mitten in die Ausgabe zurück. Ein Echo-Rest "c" hinter einem ESC
+    # ergibt ESC c (RIS): Reset, raus aus dem Alternate Screen.
+    QUERIES = [b"\x1b[?1;6;7;25;1049;2004;9999$p", b"\x1b[>c", b"\x1b[5n", b"\x1b[18t"]
+    queries = True
+
     def junk(self):
         rnd = self.rnd
-        k = rnd.randrange(len(self.STATIC) + 6)
-        if k < len(self.STATIC):
-            return self.STATIC[k]
-        k -= len(self.STATIC)
+        items = self.STATIC + self.QUERIES if self.queries else self.STATIC
+        k = rnd.randrange(len(items) + 6)
+        if k < len(items):
+            return items[k]
+        k -= len(items)
         n = rnd.randint(1, 3000)
         if k == 0:
             return b"\x1b]9999;" + b"x" * n + b"\x18"        # unbekannte OSC, CAN
@@ -306,9 +314,12 @@ class Muell(Phase):
 
 class Mix(Phase):
     name = "mix"
+    queries = True
 
     def init(self, cols, rows, rnd):
-        self.subs = [Regen(), Zerreissen(), Scrollen(), Attribute(), Muell()]
+        m = Muell()
+        m.queries = self.queries
+        self.subs = [Regen(), Zerreissen(), Scrollen(), Attribute(), m]
         s = "".join(p.init(cols, rows, rnd) for p in self.subs)
         self.rnd = rnd
         return s
@@ -575,6 +586,7 @@ def dump(args):
         if args.phase and P.name not in args.phase:
             continue
         ph = P()
+        ph.queries = args.queries
         out.write((RESET + ph.init(cols, rows, rnd)).encode())
         for _ in range(args.frames):
             f = ph.frame()
@@ -593,6 +605,8 @@ def main():
     ap.add_argument("--log", help="Bericht zusätzlich in diese Datei")
     ap.add_argument("--dump", action="store_true", help="Bytes auf stdout statt live")
     ap.add_argument("--dump-checks", action="store_true", help="nur die Prüfungen; erwartete Antworten hex auf stderr")
+    ap.add_argument("--queries", action="store_true",
+                    help="bei --dump auch Abfragen (DA2, DSR, DECRQM); nur für vtdump/replay, nicht für cat")
     ap.add_argument("--frames", type=int, default=40, help="Bilder pro Phase bei --dump")
     ap.add_argument("-g", "--geometry", default="80x24", help="SPALTENxZEILEN bei --dump")
     args = ap.parse_args()
