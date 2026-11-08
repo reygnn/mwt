@@ -332,7 +332,7 @@ static void report(const char *name, const char *buf, size_t len)
 					if (np < 16)
 						params[np++] = v < 0 ? 0 : v;
 					v = -1;
-				} else
+				} else if (v < 100000) /* capped as in vt.c; only small values matter */
 					v = (v < 0 ? 0 : v * 10) + (s[j] - '0');
 				j++;
 			}
