@@ -114,8 +114,9 @@ static struct {
 	int pty;
 	pid_t child;
 	int child_fd; /* pidfd: the shell can end while jobs keep the pty open */
-	char *out;
-	size_t out_len, out_cap;
+	char *out;          /* what waits for the pty: out_len bytes from out_off */
+	size_t out_off, out_len, out_cap;
+	size_t reply_len;   /* of those, at most this many are replies (vt_reply) */
 	int bracket_seen;  /* how much of "\033[200~" or "\033[201~" went out last */
 	bool bracket_open; /* a paste's opening bracket went out, its closing not */
 	bool was_alt;
@@ -188,9 +189,18 @@ static void die(const char *msg)
 
 /* ---- pty output ------------------------------------------------------- */
 
-#define REPLY_BACKLOG_MAX (1024 * 1024) /* bytes waiting for the pty */
+#define REPLY_BACKLOG_MAX (1024 * 1024) /* replies waiting for the pty */
+#define OUT_KEEP (64 * 1024)            /* an emptied buffer larger than this goes */
 #define PASTE_MAX (64 * 1024 * 1024)    /* a larger paste is dropped whole */
 #define PASTE_TURN_MAX (1024 * 1024)    /* read in one turn of the event loop */
+
+/* The raw paste is done with: up to 64 MiB, it is not kept for the next. */
+static void paste_free(void)
+{
+	free(t.paste_buf);
+	t.paste_buf = NULL;
+	t.paste_len = t.paste_cap = 0;
+}
 
 /* Follows the paste brackets in what has gone to the pty, which a write may cut
  * anywhere: bracket_seen is 0 to 4 for that much of "\033[20", 5 for "\033[200"
@@ -212,36 +222,59 @@ static void track_brackets(const char *s, size_t n)
 	}
 }
 
+/* Nothing waits any more: a buffer a large paste grew is given back. */
+static void out_empty(void)
+{
+	t.out_off = t.out_len = t.reply_len = 0;
+	if (t.out_cap > OUT_KEEP) {
+		free(t.out);
+		t.out = NULL;
+		t.out_cap = 0;
+	}
+}
+
+/* The pty takes a few KiB a write. What it took is skipped, not moved: moving
+ * the rest after each write copied a 17 MB paste 22 GB over. */
 static void flush_out(void)
 {
 	while (t.out_len) {
-		ssize_t n = write(t.pty, t.out, t.out_len);
+		ssize_t n = write(t.pty, t.out + t.out_off, t.out_len);
 		if (n < 0) {
 			if (errno == EINTR)
 				continue;
 			if (errno != EAGAIN)
-				t.out_len = 0;
+				out_empty();
 			return;
 		}
-		track_brackets(t.out, n);
-		memmove(t.out, t.out + n, t.out_len - n);
+		track_brackets(t.out + t.out_off, n);
+		t.out_off += n;
 		t.out_len -= n;
+		t.reply_len = MIN(t.reply_len, t.out_len);
 	}
+	out_empty();
 }
 
 static void pty_write(const char *s, size_t n)
 {
 	if (t.pty < 0 || !n)
 		return;
-	if (t.out_len + n > t.out_cap) {
-		size_t cap = MAX(t.out_cap * 2, t.out_len + n + 4096);
-		char *p = realloc(t.out, cap);
-		if (!p)
-			return;
-		t.out = p;
-		t.out_cap = cap;
+	if (t.out_off + t.out_len + n > t.out_cap) {
+		/* moved to the front only when what waits is no more than what was
+		 * written, so each byte is moved a bounded number of times */
+		if (t.out_off && t.out_off >= t.out_len) {
+			memmove(t.out, t.out + t.out_off, t.out_len);
+			t.out_off = 0;
+		}
+		if (t.out_off + t.out_len + n > t.out_cap) {
+			size_t cap = MAX(t.out_cap * 2, t.out_off + t.out_len + n + 4096);
+			char *p = realloc(t.out, cap);
+			if (!p)
+				return;
+			t.out = p;
+			t.out_cap = cap;
+		}
 	}
-	memcpy(t.out + t.out_len, s, n);
+	memcpy(t.out + t.out_off + t.out_len, s, n);
 	t.out_len += n;
 	flush_out();
 }
@@ -280,10 +313,11 @@ static void drop_paste_for_signal(unsigned char c)
 	if (t.paste_fd >= 0) {
 		close(t.paste_fd);
 		t.paste_fd = -1;
+		paste_free();
 	}
 	if (!t.out_len)
 		return;
-	t.out_len = 0;
+	out_empty();
 	tcflush(t.pty, TCOFLUSH);
 	tcsetattr(t.pty, TCSAFLUSH, &tm);
 	/* a bracket cut off halfway is ended by the ESC of the next */
@@ -296,10 +330,14 @@ static void vt_reply(void *ud, const char *s, size_t n)
 {
 	(void)ud;
 	/* A program that asks and does not read would make this grow without limit.
-	 * With that much waiting it is not waiting for the answer either. */
-	if (t.out_len > REPLY_BACKLOG_MAX)
+	 * With that much waiting it is not waiting for the answer either. Only
+	 * replies count: behind a large paste the program may well read on. */
+	if (t.reply_len > REPLY_BACKLOG_MAX)
 		return;
+	size_t before = t.out_len;
 	pty_write(s, n);
+	if (t.out_len > before)
+		t.reply_len += MIN(n, t.out_len - before);
 }
 
 /* Only noted: a program may set thousands in one read, and each would be a
@@ -791,9 +829,7 @@ static void drop_paste(const char *why)
 	fprintf(stderr, "mwt: paste dropped: %s\n", why);
 	close(t.paste_fd);
 	t.paste_fd = -1;
-	free(t.paste_buf);
-	t.paste_buf = NULL;
-	t.paste_len = t.paste_cap = 0;
+	paste_free();
 }
 
 /* A source may never stop writing: the rest waits for the next turn of the event
@@ -852,11 +888,13 @@ static void read_paste(void)
 			goto nomem;
 		i++;
 	}
+	paste_free();
 	paste_text(buf ? buf : "", len);
 	free(buf);
 	return;
 nomem:
 	fputs("mwt: paste dropped: out of memory\n", stderr);
+	paste_free();
 	free(buf);
 }
 

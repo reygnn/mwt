@@ -426,6 +426,64 @@ paste_over_16mb() {
 	else ok "a paste over 16 MB is dropped whole, nothing ran ($((SECONDS - t0))s)"; fi
 	alive || gap "mwt died"
 }
+# What a large paste needed is given back once the program has read it: the
+# raw paste was kept until the next one, and the buffer to the pty never shrank,
+# some 34 MB after a 17 MB paste. SMALL_QUARANTINE, so that ASan lets go too.
+paste_memory() {
+	start_mwt "$SMALL_QUARANTINE"
+	local pid r0 r1 p=-1 s=0 i
+	pid=$(mwtpid)
+	T 'stty -echo; cat >~/mem.txt; stty echo' -k Return
+	sleep 0.5
+	r0=$(awk '/VmRSS/{print $2}' /proc/$pid/status)
+	wl-copy <"$DIR/big.txt"
+	sleep 0.8
+	K v
+	for ((i = 0; i < 200; i++)); do
+		s=$(stat -c %s "$HOME/mem.txt" 2>/dev/null || echo 0)
+		[ "$s" = "$p" ] && [ "$i" -gt 8 ] && break
+		p=$s
+		sleep 1
+	done
+	C d
+	sleep 0.5
+	r1=$(awk '/VmRSS/{print $2}' /proc/$pid/status)
+	info "RSS around a 17 MB paste: $r0 kB before, $r1 kB once it was read"
+	if [ "$r1" -gt $((r0 + 8192)) ]; then gap "a 17 MB paste, read, leaves mwt $((r1 - r0)) kB larger"; else ok "a large paste, once read, leaves mwt no larger"; fi
+}
+# A reply behind a large paste the program has not read yet: the limit on
+# replies waiting counted the paste too, and past 1 MiB of it mwt dropped
+# every reply, so a program asking for the cursor waited in vain.
+reply_behind_paste() {
+	cat >"$DIR/rbp.py" <<'PY'
+import os, re, select, termios, time, tty
+old = termios.tcgetattr(0)
+tty.setraw(0)
+open(os.path.expanduser("~/rbp.ready"), "w").close()
+time.sleep(4)  # the paste comes in meanwhile and waits, unread
+os.write(1, b"\033[6n")
+data, end = b"", time.time() + 30
+while time.time() < end:
+    r, _, _ = select.select([0], [], [], 1)
+    if r:
+        data += os.read(0, 65536)
+    elif re.search(rb"\033\[\d+;\d+R", data):
+        break
+termios.tcsetattr(0, termios.TCSAFLUSH, old)
+print("rbp-got" if re.search(rb"\033\[\d+;\d+R", data) else "rbp-none", len(data))
+PY
+	rm -f "$HOME/rbp.ready"
+	start_mwt
+	T "python3 $DIR/rbp.py" -k Return
+	local i
+	for ((i = 0; i < 20; i++)); do [ -e "$HOME/rbp.ready" ] && break; sleep 0.2; done
+	wl-copy <"$DIR/big.txt"
+	sleep 0.8
+	K v
+	for ((i = 0; i < 60; i++)); do shown | grep -q '^rbp-' && break; sleep 1; done
+	if shown | grep -q '^rbp-got'; then ok "a reply behind a 17 MB paste gets through"
+	else gap "a reply behind a 17 MB paste was dropped: $(shown | grep '^rbp-' | head -1)"; fi
+}
 paste_bidi() {
 	start_mwt
 	printf 'echo \xe2\x80\xaegnp.exe' | wl-copy
@@ -1296,7 +1354,7 @@ compositor_dies() {
 
 for c in dcs_swallow osc_swallow_cat fuzz noncharacters \
 	mid_char_selection drag_during_flood select_history click_clusters \
-	paste_integrity paste_bidi paste_escape paste_controls ctrl_c_behind_paste paste_holds_until_return line_limits paste_over_16mb \
+	paste_integrity paste_bidi paste_escape paste_controls ctrl_c_behind_paste paste_holds_until_return line_limits paste_over_16mb paste_memory reply_behind_paste \
 	snippet_typed snippet_paste snippet_paste_no_newline \
 	stty_raw_read_in_shell inlcr tcoff cyrillic_ctrl_c cyrillic_raw copy_on_ru raw_paste_ctrl_c paste_bracket_on_signal python_repl flood_ctrl_c flood_rss soak reply_flood reply_flood_raw title_flood title_flood_stalled \
 	args shells closed_stdio cwd_tricks exit_with_jobs close_ignores_hup \
