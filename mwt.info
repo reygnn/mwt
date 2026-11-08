@@ -1,10 +1,11 @@
-# terminfo for mwt: declares only what vt.c implements.
+# terminfo for mwt: declares only what mwt does. Not blink: vt.c keeps SGR 5,
+# but mwt never draws it, so it is neither a capability nor in sgr.
 # install with: tic -x mwt.info
 mwt|mwt minimal wayland terminal,
 	am, bce, mir, msgr, npc, xenl,
 	colors#256, cols#80, it#8, lines#24, pairs#0x10000,
 	acsc=``aaffggiijjkkllmmnnooppqqrrssttuuvvwwxxyyzz{{||}}~~,
-	bel=^G, blink=\E[5m, bold=\E[1m, cbt=\E[Z, civis=\E[?25l,
+	bel=^G, bold=\E[1m, cbt=\E[Z, civis=\E[?25l,
 	clear=\E[H\E[2J, cnorm=\E[?25h, cr=\r,
 	csr=\E[%i%p1%d;%p2%dr, cub=\E[%p1%dD, cub1=^H,
 	cud=\E[%p1%dB, cud1=\n, cuf=\E[%p1%dC, cuf1=\E[C,
@@ -30,7 +31,7 @@ mwt|mwt minimal wayland terminal,
 	sc=\E7,
 	setab=\E[%?%p1%{8}%<%t4%p1%d%e%p1%{16}%<%t10%p1%{8}%-%d%e48;5;%p1%d%;m,
 	setaf=\E[%?%p1%{8}%<%t3%p1%d%e%p1%{16}%<%t9%p1%{8}%-%d%e38;5;%p1%d%;m,
-	sgr=%?%p9%t\E(0%e\E(B%;\E[0%?%p6%t;1%;%?%p5%t;2%;%?%p2%t;4%;%?%p1%p3%|%t;7%;%?%p4%t;5%;%?%p7%t;8%;m,
+	sgr=%?%p9%t\E(0%e\E(B%;\E[0%?%p6%t;1%;%?%p5%t;2%;%?%p2%t;4%;%?%p1%p3%|%t;7%;%?%p7%t;8%;m,
 	sgr0=\E(B\E[m, sitm=\E[3m, smacs=\E(0, smam=\E[?7h,
 	smcup=\E[?1049h, smir=\E[4h, smkx=\E[?1h\E=, smso=\E[7m,
 	smul=\E[4m, tbc=\E[3g, u6=\E[%i%d;%dR, u7=\E[6n,

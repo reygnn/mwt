@@ -170,9 +170,10 @@ def check_acsc():
 
 
 def check_sgr():
-    # p1 standout, p2 underline, p3 reverse, p4 blink, p5 dim, p6 bold, p7 invis
-    table = {0: "reverse", 1: "underline", 2: "reverse", 3: "blink", 4: "dim", 5: "bold", 6: "invisible"}
-    all_attrs = set(table.values())
+    # p1 standout, p2 underline, p3 reverse, p4 blink, p5 dim, p6 bold, p7 invis.
+    # Blink sets nothing: mwt does not draw it, so sgr leaves it out.
+    table = {0: "reverse", 1: "underline", 2: "reverse", 3: None, 4: "dim", 5: "bold", 6: "invisible"}
+    all_attrs = {name for name in table.values() if name} | {"blink"}
     for i, name in table.items():
         params = [0] * 9
         params[i] = 1
@@ -422,7 +423,7 @@ CHECKS = {
     "colors": check_color("setaf", 1), "pairs": lambda: eq(CAPS["pairs"], CAPS["colors"] ** 2),
     "cols": check_size("cols", "default_cols"), "lines": check_size("lines", "default_rows"),
     "it": check_ht_it, "ht": check_ht_it, "acsc": check_acsc, "bel": check_bel,
-    "blink": sgr_on("blink", "blink"), "bold": sgr_on("bold", "bold"), "dim": sgr_on("dim", "dim"),
+    "bold": sgr_on("bold", "bold"), "dim": sgr_on("dim", "dim"),
     "invis": sgr_on("invis", "invisible"), "rev": sgr_on("rev", "reverse"),
     "sitm": sgr_on_off("sitm", "ritm", "italic"), "ritm": sgr_on_off("sitm", "ritm", "italic"),
     "smso": sgr_on_off("smso", "rmso", "reverse"), "rmso": sgr_on_off("smso", "rmso", "reverse"),

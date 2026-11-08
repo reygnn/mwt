@@ -27,8 +27,6 @@ The three it found to fix are done, see the end.
   Older libwayland versions are said to end the connection when the socket is full; with
   libwayland 1.24, mwt went through 100,000 titles in a row and its program ran to the end.
   Older versions were not tried. `evil.sh` has no case for it.
-- Read: `mwt.info` declares `blink`, and `vt.c` keeps `ATTR_BLINK`, but mwt never draws
-  it. The principle of `mwt.info` is to declare only what mwt really does.
 
 ### Maintainability
 
