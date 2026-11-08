@@ -177,3 +177,24 @@ Found while checking that change:
   `strdup` of `font_open` and of the fallback faces once in turn, under sanitizers:
   all 8 pass with the fix; with the old `font.c` UBSan stops at the `strcmp` in
   `find_fallback`.
+
+A search for further NULL pointers and unchecked lines, by reading (fontconfig's
+handling of NULL tried against 2.15):
+
+- Read: `buffer_init` (`mwt.c`) freed the old buffer before it had the new one. When
+  `memfd_create`, `ftruncate` or `mmap` failed after that, the buffer kept its old size
+  over freed memory, and a window back at that size drew into it. The new buffer is now
+  made whole first and the old one freed only then; `wl_shm_create_pool` and
+  `wl_shm_pool_create_buffer` are checked on the way. `evil.sh buffer_fail`, with
+  `tests/failmemfd.c` making `memfd_create` fail on demand, passes; with the old `mwt.c`
+  ASan stops mwt in `fill_rect`, writing into the freed buffer.
+- Read, tried: `font_open` and `find_fallback` did not check `FcPatternDuplicate`.
+  `FcPatternDel`, `FcPatternAdd*` and `FcConfigSubstitute` crash on a NULL pattern.
+  `tests/font_oom.c` now fails each `FcPatternDuplicate` once as well: 8 strdups and 8
+  `FcPatternDuplicate`s pass; with the old `font.c` the first run crashes in fontconfig,
+  called from `font_open`.
+
+Left as they are: `xkb_context_new` and the other Wayland constructors are not checked,
+both only out of memory; `kb_keymap` relies on the keymap ending in NUL, as the protocol
+says it does. Nothing found in `vt.c`, the selection and paste paths, the Wayland event
+handlers, the terminfo lookup or the C test tools.

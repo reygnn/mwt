@@ -1041,31 +1041,36 @@ static bool buffer_init(struct buffer *b, int w, int h)
 		told = true;
 		return false;
 	}
-	if (b->wb) {
-		wl_buffer_destroy(b->wb);
-		munmap(b->data, b->size);
-		b->wb = NULL;
-	}
-	b->size = (size_t)w * h * 4;
+	/* The new one whole first, and the old one goes only then: a failure leaves
+	 * b as it was. Freed early, it kept its old size over freed memory, and a
+	 * window back at that size drew into it. */
+	size_t size = (size_t)w * h * 4;
 	int fd = memfd_create("mwt", MFD_CLOEXEC);
 	if (fd < 0)
 		return false;
-	if (ftruncate(fd, b->size) < 0) {
-		close(fd);
-		return false;
+	void *data = MAP_FAILED;
+	struct wl_buffer *wb = NULL;
+	if (ftruncate(fd, (off_t)size) == 0)
+		data = mmap(NULL, size, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+	if (data != MAP_FAILED) {
+		struct wl_shm_pool *pool = wl_shm_create_pool(t.shm, fd, (int32_t)size);
+		if (pool) {
+			wb = wl_shm_pool_create_buffer(pool, 0, w, h, w * 4, WL_SHM_FORMAT_XRGB8888);
+			wl_shm_pool_destroy(pool);
+		}
 	}
-	b->data = mmap(NULL, b->size, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
-	if (b->data == MAP_FAILED) {
-		close(fd);
-		return false;
-	}
-	struct wl_shm_pool *pool = wl_shm_create_pool(t.shm, fd, b->size);
-	b->wb = wl_shm_pool_create_buffer(pool, 0, w, h, w * 4, WL_SHM_FORMAT_XRGB8888);
-	wl_shm_pool_destroy(pool);
 	close(fd);
-	wl_buffer_add_listener(b->wb, &buffer_listener, b);
-	b->w = w;
-	b->h = h;
+	if (!wb) {
+		if (data != MAP_FAILED)
+			munmap(data, size);
+		return false;
+	}
+	if (b->wb) {
+		wl_buffer_destroy(b->wb);
+		munmap(b->data, b->size);
+	}
+	wl_buffer_add_listener(wb, &buffer_listener, b);
+	*b = (struct buffer){ .wb = wb, .data = data, .w = w, .h = h, .size = size };
 	return true;
 }
 

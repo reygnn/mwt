@@ -6,6 +6,13 @@ Offen, noch nicht bestätigt:
 
 Behoben:
 
+* buffer_init gab den alten Puffer frei, bevor der neue stand. Scheiterte
+  danach memfd_create, ftruncate oder mmap, behielt der Puffer seine alte Größe
+  über freigegebenem Speicher: Kam das Fenster auf diese Größe zurück, zeichnete
+  mwt hinein und stürzte ab. Jetzt entsteht der neue Puffer ganz, erst dann geht
+  der alte; ein Fehler lässt ihn, wie er war. Dabei geprüft:
+  wl_shm_create_pool und wl_shm_pool_create_buffer. Gefunden beim Lesen.
+  Test: tests/evil.sh buffer_fail, mit tests/failmemfd.c als LD_PRELOAD.
 * font_open und find_fallback prüften FcPatternDuplicate nicht. Bei
   Speichermangel ging das NULL an FcPatternDel, FcPatternAdd* und
   FcConfigSubstitute, die damit abstürzen (ausprobiert mit fontconfig 2.15):

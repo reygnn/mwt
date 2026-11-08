@@ -40,6 +40,9 @@ XML=tests/wlr-data-control-unstable-v1.xml
 SRC=$DIR/stallsource
 cc -std=c11 -O1 -I"$DIR" -o "$SRC" tests/stallsource.c "$DIR/data-control.c" \
 	$(pkg-config --cflags --libs wayland-client) >>"$DIR/stall.build" 2>&1 || SRC=
+# memfd_create that fails on demand, for buffer_fail.
+FAILMEMFD=$DIR/failmemfd.so
+cc -std=c11 -O1 -shared -fPIC -o "$FAILMEMFD" tests/failmemfd.c -ldl >>"$DIR/stall.build" 2>&1 || FAILMEMFD=
 tic -x -o "$HOME/.terminfo" mwt.info || exit 1
 cat >"$DIR/sway.conf" <<'EOF'
 output HEADLESS-1 resolution 1000x700 position 0 0
@@ -1204,6 +1207,37 @@ menu_abuse() {
 	sleep 2
 	if alive; then gap "mwt stays when the shell ends behind an open menu"; else ok "the shell ends behind an open menu"; fi
 }
+# A buffer that cannot be made leaves the old one as it was. It used to be freed
+# first and keep its size: a window back at that size drew into freed memory.
+# Both buffers are in use at 80x24; with memfd_create failing, a zoom cannot get
+# a new one, and the zoom back to 80x24 finds the old size again.
+buffer_fail() {
+	[ -n "$FAILMEMFD" ] || { info "failmemfd did not build"; return 0; }
+	local fail=$DIR/fail-memfd
+	rm -f "$fail"
+	start_mwt LD_PRELOAD="$FAILMEMFD" MWT_FAIL_MEMFD="$fail" \
+		ASAN_OPTIONS=detect_leaks=0:verify_asan_link_order=0
+	T 'seq 1 200' -k Return
+	sleep 1
+	touch "$fail"
+	K plus
+	sleep 0.5
+	K 0
+	sleep 0.5
+	if ! alive; then
+		gap "a failed buffer, then the window back at the old size, killed mwt"
+		rm -f "$fail"
+		return
+	fi
+	T 'echo zurueck' -k Return
+	if try 10 'zurueck'; then ok "a failed buffer leaves the old one, mwt goes on at the old size"; else gap "after a failed buffer mwt does not go on"; fi
+	rm -f "$fail"
+	K plus
+	sleep 0.5
+	K 0
+	sleep 0.5
+	if alive; then ok "with memfd_create back, zooming works again"; else gap "with memfd_create back, a zoom killed mwt"; fi
+}
 compositor_dies() {
 	start_mwt
 	T 'sleep 777' -k Return
@@ -1222,7 +1256,7 @@ for c in dcs_swallow osc_swallow_cat fuzz noncharacters \
 	snippet_typed snippet_paste snippet_paste_no_newline \
 	stty_raw_read_in_shell inlcr tcoff cyrillic_ctrl_c cyrillic_raw copy_on_ru raw_paste_ctrl_c paste_bracket_on_signal python_repl flood_ctrl_c flood_rss soak reply_flood reply_flood_raw \
 	args shells closed_stdio cwd_tricks exit_with_jobs close_ignores_hup \
-	tiny resize_storm fd_leak stalled_readers stalled_pipes silent_source plain_source flood_source fd_limit low_memory menu_abuse compositor_dies; do
+	tiny resize_storm fd_leak stalled_readers stalled_pipes silent_source plain_source flood_source fd_limit low_memory menu_abuse buffer_fail compositor_dies; do
 	run "$c"
 done
 echo "=== $GAPS gaps, $CRASHES crashes ==="
