@@ -1,0 +1,15 @@
+# What `make oldwayland` runs in: Ubuntu 24.04, for its libwayland 1.22. Before
+# 1.23 libwayland ends the connection when its buffer of requests is full, where
+# 1.24 (the image of `make evil`) grows the buffer; a flood of requests that 1.24
+# takes shows only here. Only what mwt, vinput and evil.sh's title cases need.
+FROM docker.io/library/ubuntu:24.04
+ENV DEBIAN_FRONTEND=noninteractive
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential pkg-config libwayland-dev wayland-protocols \
+    libxkbcommon-dev libfreetype-dev libfontconfig-dev ncurses-bin \
+    sway wtype wl-clipboard grim python3 \
+    fonts-dejavu-core fontconfig procps xkb-data locales \
+    && rm -rf /var/lib/apt/lists/*
+RUN useradd -m tester
+USER tester
+WORKDIR /home/tester

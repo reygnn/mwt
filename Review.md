@@ -201,7 +201,7 @@ The rest of the second review:
   a round each without the wait. Against libwayland 1.22 (Ubuntu 24.04 in Podman, sway
   1.9): the old code and a title each round both die in `title_flood` with "Error sending
   request: Resource temporarily unavailable"; with the wait it passes, also with sway
-  stopped.
+  stopped. `make oldwayland` runs `title_flood` and `title_flood_stalled` there.
 - Read: the glyph cache grew without a limit with ever new characters. It is now emptied
   at 65536 glyphs or 64 MiB of bitmaps. A negative cache for characters no font has is not
   needed, at 0.18 ms a new one (`make fonts`). `tests/font_cache.c` builds `font.c` in with

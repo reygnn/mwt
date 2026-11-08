@@ -21,6 +21,7 @@ make width      # where mwt and bash, vim, or tmux count character widths differ
 make esctest    # esctest's escape sequence tests in mwt under headless sway, a report (fetches esctest on the first run)
 make evil       # all tests plus adversarial cases in a Podman container, also with sanitizers
 make fonts      # glyphs from fallback faces (CJK, emoji, many scripts), in a container with more fonts
+make oldwayland # the title floods against libwayland 1.22 (Ubuntu 24.04), in a container
 make profile    # where mwt spends its time, under load and at 60 Hz, in the same container (measures only)
 sudo make install   # installs mwt to /usr/local and the terminfo entry to /usr/share/terminfo
 sudo make uninstall # removes both again

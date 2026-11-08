@@ -123,6 +123,12 @@ evil:
 fonts:
 	tests/fonts.sh
 
+# The cases that flood the compositor with requests, against libwayland 1.22,
+# which ends the connection where newer ones grow their buffer; Ubuntu 24.04 in
+# Podman (tests/Containerfile.2404).
+oldwayland:
+	tests/oldwayland.sh
+
 # Where mwt and bash, vim or tmux count a character's width differently.
 # Needs what `make test` needs plus vim and tmux.
 width: mwt
@@ -153,4 +159,4 @@ uninstall:
 clean:
 	rm -f mwt mwt-esctest test_vt vtdump test_replay fuzz_vt fuzz_regress fuzz_regress.log font_oom font_cache *.o $(PROTO_H) $(PROTO_C)
 
-.PHONY: all check replay fuzz terminfo keys pixel mouse keyboard test evil fonts width esctest profile install uninstall clean
+.PHONY: all check replay fuzz terminfo keys pixel mouse keyboard test evil fonts oldwayland width esctest profile install uninstall clean

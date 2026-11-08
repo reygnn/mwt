@@ -814,6 +814,25 @@ title_flood() {
 	title=$(window_title)
 	if [ "$title" = "Titel 100000" ]; then ok "the last title is the one shown"; else gap "after 100,000 titles the window shows '$title'"; fi
 }
+# The same with the compositor stopped for 3 s in the middle: it reads nothing,
+# and a title each turn would fill libwayland's buffer. mwt waits until it has
+# read the rest; make oldwayland runs this against libwayland 1.22.
+title_flood_stalled() {
+	start_mwt
+	T 'for i in $(seq 1000000); do printf "\033]2;Titel %d\007" $i; done; echo titel-ende' -k Return
+	sleep 0.2
+	kill -STOP "$SWAY"
+	sleep 3
+	kill -CONT "$SWAY"
+	local i
+	for ((i = 0; i < 60; i++)); do alive || break; try 1 titel-ende && break; sleep 0.5; done
+	if ! alive; then gap "a million titles with the compositor stopped killed mwt"; tail -3 "$LOG" | cut -c1-110; return; fi
+	if try 6 titel-ende; then ok "a million titles with the compositor stopped, and the program ran to the end"; else gap "a million titles, compositor stopped: the program did not get to the end"; fi
+	sleep 0.5
+	local title
+	title=$(window_title)
+	if [ "$title" = "Titel 1000000" ]; then ok "after the stop the last title is the one shown"; else gap "after the stop the window shows '$title'"; fi
+}
 # All that a day does, over and over, without sanitizers: what mwt holds must not
 # grow once history and caches are full. SOAK_SECONDS sets the length.
 soak() {
@@ -1279,7 +1298,7 @@ for c in dcs_swallow osc_swallow_cat fuzz noncharacters \
 	mid_char_selection drag_during_flood select_history click_clusters \
 	paste_integrity paste_bidi paste_escape paste_controls ctrl_c_behind_paste paste_holds_until_return line_limits paste_over_16mb \
 	snippet_typed snippet_paste snippet_paste_no_newline \
-	stty_raw_read_in_shell inlcr tcoff cyrillic_ctrl_c cyrillic_raw copy_on_ru raw_paste_ctrl_c paste_bracket_on_signal python_repl flood_ctrl_c flood_rss soak reply_flood reply_flood_raw title_flood \
+	stty_raw_read_in_shell inlcr tcoff cyrillic_ctrl_c cyrillic_raw copy_on_ru raw_paste_ctrl_c paste_bracket_on_signal python_repl flood_ctrl_c flood_rss soak reply_flood reply_flood_raw title_flood title_flood_stalled \
 	args shells closed_stdio cwd_tricks exit_with_jobs close_ignores_hup \
 	tiny resize_storm fd_leak stalled_readers stalled_pipes silent_source plain_source flood_source fd_limit low_memory menu_abuse buffer_fail compositor_dies; do
 	run "$c"
