@@ -706,9 +706,11 @@ static void destroy_offer(struct wl_data_offer *o)
 static void dd_data_offer(void *d, struct wl_data_device *dd, struct wl_data_offer *o)
 {
 	(void)d; (void)dd;
+	/* out of memory the offer gets no rank and no listener: its events go
+	 * unheard, and a paste from it does nothing (paste) */
 	int *rank = malloc(sizeof *rank);
 	if (!rank)
-		die("out of memory");
+		return;
 	*rank = 99;
 	wl_data_offer_add_listener(o, &offer_listener, rank);
 }
@@ -754,9 +756,9 @@ static void pd_data_offer(void *d, struct zwp_primary_selection_device_v1 *pd,
 			  struct zwp_primary_selection_offer_v1 *o)
 {
 	(void)d; (void)pd;
-	int *rank = malloc(sizeof *rank);
+	int *rank = malloc(sizeof *rank); /* out of memory as in dd_data_offer */
 	if (!rank)
-		die("out of memory");
+		return;
 	*rank = 99;
 	zwp_primary_selection_offer_v1_add_listener(o, &poffer_listener, rank);
 }
@@ -2316,9 +2318,13 @@ static void spawn(char **argv)
 		unsetenv("LINES");
 		unsetenv("COLUMNS");
 		/* what mwt ignores or was started ignoring is not for the shell:
-		 * `mwt &` from sh ignores SIGINT and SIGQUIT */
+		 * `mwt &` from sh ignores SIGINT and SIGQUIT; nor what the program
+		 * that started mwt had blocked */
 		for (int sig = 1; sig < NSIG; sig++)
 			signal(sig, SIG_DFL);
+		sigset_t none;
+		sigemptyset(&none);
+		sigprocmask(SIG_SETMASK, &none, NULL);
 		if (argv && argv[0]) {
 			execvp(argv[0], argv);
 			perror(argv[0]);

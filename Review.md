@@ -22,6 +22,27 @@ tests needs the mwc repository next to this one. CI (`.github/workflows/check.ym
 what needs no compositor on every push: mwt built with warnings as errors, `make check`,
 `make terminfo` and `make replay`.
 
+## Findings of a third review
+
+An outside review of v0.3.5, read only, nothing run. What it found to fix is done, see the
+end; each was checked against the code first, the output buffer measured.
+
+### To decide
+
+- Read: a selection stays on text the program overwrites, and copying gives the new text;
+  xterm clears the selection then. It is cleared only on a resize and on a switch to or
+  from the alternate screen.
+- Read: dragging past the top or bottom edge scrolls the history only while the mouse
+  moves; there is no timer that goes on scrolling.
+- Maintainability: the pure logic of `mwt.c` (`paste_text`, `track_brackets`,
+  `selection_text`, `sel_range`, `to_latin1`, the UTF-8 checks) could move into a module
+  without Wayland and run in `make check`; UTF-8 is encoded or decoded in four places of
+  `mwt.c` besides the decoder of `vt.c`. A CI job under a headless sway (`make keys`,
+  `make mouse`, `make pixel`) would cover more than the VT core. The review also names the
+  mixed languages and the size of the test tools, see above.
+- By design: `make install` puts the terminfo entry in `/usr/share/terminfo` whatever
+  `PREFIX` is, as ncurses does not look under `/usr/local`.
+
 ## Test coverage
 
 Places no test reaches, so a bug there would go unnoticed. None of them is a known bug.
@@ -214,3 +235,19 @@ Run: `title_flood` passes; under libwayland 1.24 it did with the old code too, u
 only with the wait for the compositor, see above. `font_cache` passes and fails three ways with the emptying taken out.
 `terminfo.py` passes, and with the old entry reports `blink` and `sgr`. The CI steps pass
 on the host; the workflow itself runs on the first push.
+
+From the third review (v0.3.5):
+
+- Measured: `flush_out` moved what was left of the buffer to the pty to its front after
+  each write, a few KiB each: a 17 MB paste took 2424 writes and 22.2 GB of `memmove`,
+  1.2 s. An offset now; the same paste moves nothing.
+- Reproduced: what a large paste needed stayed, the raw paste and the grown buffer to the
+  pty, 35 MB after 17 MB (`evil.sh paste_memory`). Both go now.
+- Reproduced: the limit on replies waiting counted a paste too, so behind 1 MiB of paste
+  the program had not read, a cursor report was dropped (`evil.sh reply_behind_paste`).
+  Only replies count now.
+- Reproduced: the shell inherited the signal mask of whatever started mwt
+  (`evil.sh blocked_signals`, SIGINT and SIGTERM blocked). The child clears it.
+- Read: a history line that could not be kept, out of memory, was not counted as
+  scrolled off, which shifted the line numbers a selection holds; it goes in empty now
+  (`test_vt`). Out of memory, a clipboard offer ended mwt (`die`); it is ignored now.

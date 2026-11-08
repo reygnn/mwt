@@ -935,6 +935,27 @@ static void test_alloc_failures(void)
 			break;
 	}
 	CHECK(fails > 0);
+	/* a history line that cannot be kept goes in empty: it scrolled off all the
+	 * same, so the numbers of the lines after it stay */
+	{
+		struct vt *vt = mk(10, 3, 10);
+		w(vt, "a\r\nb\r\nc");
+		injected = false;
+		countdown = 0;
+		w(vt, "\r\nd");
+		countdown = -1;
+		CHECK(injected);
+		CHECK(vt->scrolled == 1 && vt->hist_count == 1);
+		int len;
+		vt_abs_line(vt, 0, &len);
+		CHECK(len == 0);
+		const struct cell *l = vt_abs_line(vt, 1, &len);
+		CHECK(l && len == 10 && l[0].cp == 'b');
+		w(vt, "\r\ne");
+		l = vt_abs_line(vt, 1, &len);
+		CHECK(l && len == 1 && l[0].cp == 'b');
+		vt_free(vt);
+	}
 	/* sizes are clamped, the largest grid still works */
 	struct vt *vt = mk(INT_MAX, INT_MAX, 0);
 	CHECK(vt && vt->cols == VT_MAX_COLS && vt->rows == VT_MAX_ROWS);

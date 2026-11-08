@@ -991,6 +991,19 @@ shells() {
 }
 # With no terminfo mwt warns on stderr. Closed at the start, fd 2 may by then be
 # the Wayland socket, and the message must not end up in it.
+# Started by a program that blocks signals, mwt must not hand the mask on: the
+# shell and what it runs would never see SIGINT or SIGTERM.
+blocked_signals() {
+	LOG=$DIR/log.$CASE
+	(cd "$HOME" && python3 -c 'import os, signal, sys
+signal.pthread_sigmask(signal.SIG_BLOCK, {signal.SIGINT, signal.SIGTERM})
+os.execv(sys.argv[1], sys.argv[1:])' "$MWT" >"$LOG" 2>&1 &)
+	sleep 1.5
+	[ -n "${CH:-}" ] || measure
+	T 'grep SigBlk /proc/self/status | tr -d "\t "' -k Return
+	if try 10 'SigBlk:0000000000000000'; then ok "a program in mwt starts with no signals blocked"
+	else gap "a program in mwt inherits a signal mask: $(shown | grep '^SigBlk' | head -1)"; fi
+}
 closed_stdio() {
 	LOG=$DIR/log.closed
 	: >"$LOG"
@@ -1357,7 +1370,7 @@ for c in dcs_swallow osc_swallow_cat fuzz noncharacters \
 	paste_integrity paste_bidi paste_escape paste_controls ctrl_c_behind_paste paste_holds_until_return line_limits paste_over_16mb paste_memory reply_behind_paste \
 	snippet_typed snippet_paste snippet_paste_no_newline \
 	stty_raw_read_in_shell inlcr tcoff cyrillic_ctrl_c cyrillic_raw copy_on_ru raw_paste_ctrl_c paste_bracket_on_signal python_repl flood_ctrl_c flood_rss soak reply_flood reply_flood_raw title_flood title_flood_stalled \
-	args shells closed_stdio cwd_tricks exit_with_jobs close_ignores_hup \
+	args shells closed_stdio blocked_signals cwd_tricks exit_with_jobs close_ignores_hup \
 	tiny resize_storm fd_leak stalled_readers stalled_pipes silent_source plain_source flood_source fd_limit low_memory menu_abuse buffer_fail compositor_dies; do
 	run "$c"
 done

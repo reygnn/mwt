@@ -190,11 +190,13 @@ static void push_hist(struct vt *vt, const struct cell *l, int len)
 	}
 	int slot = vt->hist_head;
 	struct cell *dst = realloc(vt->hist[slot], MAX(len, 1) * sizeof *dst);
-	if (!dst)
-		return;
-	memcpy(dst, l, len * sizeof *dst);
-	vt->hist[slot] = dst;
-	vt->hist_len[slot] = len;
+	/* out of memory the line goes in empty: it still scrolled off, and
+	 * skipping it would shift every line number a selection holds */
+	if (dst) {
+		memcpy(dst, l, len * sizeof *dst);
+		vt->hist[slot] = dst;
+	}
+	vt->hist_len[slot] = dst ? len : 0;
 	vt->hist_head = (slot + 1) % vt->hist_cap;
 	if (vt->hist_count < vt->hist_cap)
 		vt->hist_count++;
