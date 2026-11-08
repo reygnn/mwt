@@ -20,6 +20,14 @@ steht im README unter "Deliberately left out".
   Sequenz seines nächsten Prompts.
 * Programme können Terminal-Antworten auslösen (DA, DSR). Beendet sich das
   Programm vorher, stehen die Antworten in der Eingabezeile der Shell.
+* Liest niemand die Antworten, etwa bei cat einer aufgezeichneten Datei, gibt
+  die Line Discipline des Kernels sie per Echo zurück, mitten in die laufende
+  Ausgabe. Das zeigt sich als ^[[>1;10;0c im Bild. Endet ein Stück der Ausgabe
+  auf ESC und beginnt das Echo dahinter mit c, entsteht ESC c: ein Reset, der
+  auch den Alternate Screen verlässt. Was danach kommt, landet im normalen
+  Bildschirm und in der Historie. mwt sieht nur den gemischten Strom und kann
+  Echo nicht von Ausgabe trennen; xterm geht es genauso. Abhilfe:
+  stty -echo; cat datei; stty echo
 * Ein Programm, das die Ausgabe mit tcflow(TCOOFF) anhält, kann nur selbst wieder
   starten. Das ist ein Stopp im Kernel, keine Taste hilft.
 * Der Application-Keypad-Modus (ESC =, ESC >, CSI ? 66 h/l) wird gemerkt und
