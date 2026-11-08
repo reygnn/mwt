@@ -10,7 +10,7 @@ before them is done, see the end.
 
 ## Findings of the second review
 
-The three it found to fix are done, see the end.
+Each is fixed or decided, see the end; what is left are facts.
 
 ### Maintainability
 
@@ -25,6 +25,11 @@ what needs no compositor on every push: mwt built with warnings as errors, `make
 ## Test coverage
 
 Places no test reaches, so a bug there would go unnoticed. None of them is a known bug.
+
+Since the measurement, tests reach some of them; gcov has not been run again:
+`evil.sh buffer_fail` runs `buffer_init` out of memory, `make fonts` the fallback fonts,
+and `tests/font_oom.c` the synthesized bold or italic (a failing `strdup` in `load_face`
+falls back to it) and `font_open` giving up. They are marked below.
 
 | File | Lines run | Branches taken | Measured with |
 |---|---|---|---|
@@ -75,7 +80,7 @@ is not in the repository.
   | `ptr_axis` (`mwt.c:1998`) | 30 % | touchpad scrolling, as opposed to a wheel with notches |
   | `spawn` (`mwt.c:2214`) | 41 % | the error paths |
   | `wait_child` (`mwt.c:2292`) | 45 % | a child that does not end in time |
-  | `buffer_init` (`mwt.c:1005`) | 69 % | running out of memory |
+  | `buffer_init` (`mwt.c:1005`) | 69 % | running out of memory, since: `buffer_fail` |
   | `send_text` (`mwt.c:451`) | 69 % | the error paths |
 
 ### Fonts (`font.c`)
@@ -84,7 +89,8 @@ is not in the repository.
   beyond DejaVu, so no CJK or emoji, and the search for a fallback never runs there.
   `make fonts` covers it in an image of its own (`tests/Containerfile.fonts`): CJK and
   Hangul from two fallback faces, bold, an emoji as an outline, a zoom, and many scripts.
-- A synthesized bold or italic when the family has no such face (`font.c:139`).
+- A synthesized bold or italic when the family has no such face (`font.c:139`). Since:
+  `font_oom.c`, through a failing `strdup`, not through a family without such a face.
 - The font matrix from fontconfig (`font.c:63`), a size given in pixels (`font.c:102`), and
   the error paths: no scalable font (`font.c:134`), a size out of range (`font.c:161`), a
   face that does not load (`font.c:51`).
@@ -181,3 +187,20 @@ Left as they are: `xkb_context_new` and the other Wayland constructors are not c
 both only out of memory; `kb_keymap` relies on the keymap ending in NUL, as the protocol
 says it does. Nothing found in `vt.c`, the selection and paste paths, the Wayland event
 handlers, the terminfo lookup or the C test tools.
+
+The rest of the second review:
+
+- Read, partly reproduced: each OSC 0 or 2 was a `set_title` request right away, tens of
+  thousands in one round of the event loop in a flood. libwayland 1.24 took 100,000;
+  before 1.23, which includes the 1.22 of Ubuntu 24.04, it ends the connection when its
+  buffer is full. `vt_title` now keeps the title, and the event loop sends the last one
+  once a round. `evil.sh title_flood` sets 100,000 and wants the last one shown.
+- Read: the glyph cache grew without a limit with ever new characters. It is now emptied
+  at 65536 glyphs or 64 MiB of bitmaps. A negative cache for characters no font has is not
+  needed, at 0.18 ms a new one (`make fonts`). `tests/font_cache.c` builds `font.c` in with
+  small limits and checks both, and that a glyph comes back as it was.
+- Read: `mwt.info` declared `blink`, and `sgr` sent it, but mwt never draws it. Both are
+  gone; `vt.c` still takes SGR 5. `tests/terminfo.py` wants `sgr` to set nothing for it.
+- Maintainability: CI now runs what needs no compositor, see above.
+
+Not yet run: `title_flood`, `font_cache`, `terminfo.py` with the new entry, and the CI.
