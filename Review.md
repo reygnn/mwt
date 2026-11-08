@@ -17,9 +17,10 @@ The three it found to fix are done, see the end.
 Facts, not bugs: `mwt.c` has 2523 lines around the global state `t`; selection and
 clipboard (about 550 lines) and the context menu could be files of their own. `struct vt`
 is public, and `mwt.c` reads `scrolled`, `hist_count`, `mode` and `dirty` directly. The
-README and the code are in English, `BUGS`, `CAVEATS` and `TODO` in German. There is no CI:
-`make check` needs neither sway nor Podman and would be cheap to run on every push. Part of
-the tests needs the mwc repository next to this one.
+README and the code are in English, `BUGS`, `CAVEATS` and `TODO` in German. Part of the
+tests needs the mwc repository next to this one. CI (`.github/workflows/check.yml`) runs
+what needs no compositor on every push: mwt built with warnings as errors, `make check`,
+`make terminfo` and `make replay`.
 
 ## Test coverage
 

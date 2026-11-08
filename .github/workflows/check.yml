@@ -1,0 +1,29 @@
+# What runs without a compositor: the VT core under sanitizers (make check), the
+# terminfo entry against the VT core (make terminfo), the recorded files through
+# the VT core (make replay, which fetches them), and mwt itself built with
+# warnings as errors. The tests under sway and in Podman (make test, make evil,
+# make fonts) stay on the developer's machine.
+name: check
+on: [push, pull_request]
+jobs:
+  check:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Packages
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q --no-install-recommends libwayland-dev \
+            libxkbcommon-dev wayland-protocols libfontconfig-dev libfreetype-dev
+      # ASan of GCC 13 can crash at start with the 32 bits of mmap randomness
+      # newer kernels give; 28 is what it was made for.
+      - name: Sanitizers and ASLR
+        run: sudo sysctl -w vm.mmap_rnd_bits=28
+      - name: Build mwt, warnings as errors
+        run: CFLAGS="-O2 -g -Werror" make mwt
+      - name: make check
+        run: make check
+      - name: make terminfo
+        run: make terminfo
+      - name: make replay
+        run: make replay
