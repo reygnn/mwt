@@ -19,6 +19,17 @@
  * bitmaps and no faces, so only a glyph not drawn before loads it again. */
 #define MAX_FALLBACK 16
 
+/* The glyph cache is emptied when it holds this many glyphs or bitmap bytes:
+ * text with ever new characters, random Unicode, would grow it without end. What
+ * a screen shows is far less, and drawn again the next time it is needed. The
+ * tests build font.c with smaller ones (tests/font_cache.c). */
+#ifndef GLYPH_CACHE_MAX
+#define GLYPH_CACHE_MAX 65536
+#endif
+#ifndef GLYPH_CACHE_BYTES
+#define GLYPH_CACHE_BYTES (64u << 20)
+#endif
+
 struct face {
 	FT_Face ft;
 	bool embolden;
@@ -44,6 +55,7 @@ struct font {
 	int cw, ch, ascent;
 	struct entry *cache;
 	size_t cache_cap, cache_used;
+	size_t cache_bytes; /* of the bitmaps in it */
 };
 
 static bool load_face(struct font *f, FcPattern *match, struct face *out)
@@ -331,12 +343,25 @@ static struct entry *slot(struct entry *tab, size_t cap, uint32_t key)
 	return &tab[i];
 }
 
+static void cache_empty(struct font *f)
+{
+	for (size_t i = 0; i < f->cache_cap; i++)
+		if (f->cache[i].used)
+			free(f->cache[i].g.alpha);
+	memset(f->cache, 0, f->cache_cap * sizeof *f->cache);
+	f->cache_used = f->cache_bytes = 0;
+}
+
 const struct glyph *font_glyph(struct font *f, uint32_t cp, int style)
 {
 	uint32_t key = cp << 2 | (style & 3);
 	struct entry *e = slot(f->cache, f->cache_cap, key);
 	if (e->used)
 		return &e->g;
+	if (f->cache_used >= GLYPH_CACHE_MAX || f->cache_bytes >= GLYPH_CACHE_BYTES) {
+		cache_empty(f);
+		e = slot(f->cache, f->cache_cap, key);
+	}
 	if ((f->cache_used + 1) * 10 > f->cache_cap * 7) {
 		size_t ncap = f->cache_cap * 2;
 		struct entry *n = calloc(ncap, sizeof *n);
@@ -359,5 +384,6 @@ const struct glyph *font_glyph(struct font *f, uint32_t cp, int style)
 	e->key = key;
 	render(f, cp, style & 3, &e->g);
 	f->cache_used++;
+	f->cache_bytes += (size_t)e->g.w * e->g.h;
 	return &e->g;
 }

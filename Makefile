@@ -56,6 +56,13 @@ font_oom: tests/font_oom.c font.c font.h
 		-Wl,--wrap=strdup -Wl,--wrap=FcPatternDuplicate -o $@ tests/font_oom.c font.c \
 		$(shell pkg-config --libs fontconfig freetype2) -lm
 
+# The glyph cache emptied at small limits, font.c built into the test; under
+# sanitizers, with a font that has Latin glyphs. make fonts runs it.
+font_cache: tests/font_cache.c font.c font.h
+	$(CC) -std=c11 -Wall -Wextra -g -O1 -I. -fsanitize=address,undefined \
+		-fno-sanitize-recover=all $(shell pkg-config --cflags fontconfig freetype2) \
+		-o $@ tests/font_cache.c $(shell pkg-config --libs fontconfig freetype2) -lm
+
 fuzz_regress: tests/fuzz_vt.c vt.c vt.h version.h
 	$(CC) -std=c11 -Wall -Wextra -g -O1 -I. -DFUZZ_STANDALONE -fsanitize=address,undefined \
 		-fno-sanitize-recover=all -o $@ tests/fuzz_vt.c vt.c
@@ -144,6 +151,6 @@ uninstall:
 	rm -f $(DESTDIR)$(PREFIX)/share/terminfo/m/mwt $(DESTDIR)$(PREFIX)/share/terminfo/6d/mwt
 
 clean:
-	rm -f mwt mwt-esctest test_vt vtdump test_replay fuzz_vt fuzz_regress fuzz_regress.log font_oom *.o $(PROTO_H) $(PROTO_C)
+	rm -f mwt mwt-esctest test_vt vtdump test_replay fuzz_vt fuzz_regress fuzz_regress.log font_oom font_cache *.o $(PROTO_H) $(PROTO_C)
 
 .PHONY: all check replay fuzz terminfo keys pixel mouse keyboard test evil fonts width esctest profile install uninstall clean

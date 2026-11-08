@@ -30,6 +30,10 @@ echo "=== font.c out of memory ==="
 make -s font_oom 2>&1 | grep -E 'warning|error'
 ASAN_OPTIONS=detect_leaks=1 LSAN_OPTIONS=suppressions=$HOME/lsan.supp:print_suppressions=0 \
 	./font_oom || fail=1
+echo "=== glyph cache limits ==="
+make -s font_cache 2>&1 | grep -E 'warning|error'
+ASAN_OPTIONS=detect_leaks=1 LSAN_OPTIONS=suppressions=$HOME/lsan.supp:print_suppressions=0 \
+	./font_cache || fail=1
 build "-O2 -g" ""
 echo "=== fallback ==="
 tests/headless.sh tests/fallback.py 2>&1 | grep -E '^(FAIL|PASS|info|ok|=== )'

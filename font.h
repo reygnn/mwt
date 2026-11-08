@@ -18,6 +18,7 @@ struct font;
  * size_pt overrides the size in spec when > 0; scale is the buffer scale */
 struct font *font_open(const char *spec, double size_pt, int scale);
 void font_close(struct font *f);
+/* valid until the next font_glyph: the cache may move or empty it */
 const struct glyph *font_glyph(struct font *f, uint32_t cp, int style);
 void font_metrics(const struct font *f, int *cw, int *ch, int *ascent);
 double font_size_pt(const struct font *f);

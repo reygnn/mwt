@@ -12,17 +12,6 @@ before them is done, see the end.
 
 The three it found to fix are done, see the end.
 
-### To decide
-
-- Read: a character no font has costs a `FcFontMatch` the first time it is drawn, in each
-  style (`find_fallback`, `font.c:212`). The empty result is cached, so the same character
-  costs nothing again, but random Unicode keeps bringing new ones, and the glyph cache grows
-  without a limit. Measured by `make fonts` (`tests/fallback.py` `test_missing_cost`): a
-  screenful of 1919 code points no face has takes 0.37 s to show the first time, 0.02 s
-  again, against 0.02 s for ASCII; about 0.18 ms a new character. Since fallback faces
-  make room for each other (see the end), the search no longer stops once 16 are open;
-  the measurement, in a window with none open, is not affected.
-
 ### Maintainability
 
 Facts, not bugs: `mwt.c` has 2523 lines around the global state `t`; selection and
