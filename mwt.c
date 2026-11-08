@@ -311,11 +311,16 @@ static void vt_title(void *ud, const char *s)
 	t.title_new = true;
 }
 
-static void send_title(void)
+/* true when it sent one. Called only once the compositor has read all mwt sent
+ * before: a compositor that falls behind would otherwise get one more each turn,
+ * and libwayland before 1.23 ends the connection when its buffer is full. */
+static bool send_title(void)
 {
-	if (t.title_new && t.toplevel)
+	bool sent = t.title_new && t.toplevel;
+	if (sent)
 		xdg_toplevel_set_title(t.toplevel, t.title);
 	t.title_new = false;
+	return sent;
 }
 
 /* ---- selection -------------------------------------------------------- */
@@ -2505,7 +2510,6 @@ done:;
 	int wlfd = wl_display_get_fd(t.display);
 
 	while (t.running) {
-		send_title();
 		if (t.need_redraw && !t.frame_cb && t.configured)
 			draw();
 		if (t.menu.popup && t.menu.configured && t.menu.dirty && menu_buffer())
@@ -2513,6 +2517,8 @@ done:;
 		while (wl_display_prepare_read(t.display) != 0)
 			wl_display_dispatch_pending(t.display);
 		bool wl_out = wl_display_flush(t.display) < 0 && errno == EAGAIN;
+		if (!wl_out && send_title())
+			wl_out = wl_display_flush(t.display) < 0 && errno == EAGAIN;
 
 		struct pollfd fds[5 + MAX_XFERS] = {
 			{ wlfd, POLLIN | (wl_out ? POLLOUT : 0), 0 },

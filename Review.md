@@ -194,7 +194,14 @@ The rest of the second review:
   thousands in one round of the event loop in a flood. libwayland 1.24 took 100,000;
   before 1.23, which includes the 1.22 of Ubuntu 24.04, it ends the connection when its
   buffer is full. `vt_title` now keeps the title, and the event loop sends the last one
-  once a round. `evil.sh title_flood` sets 100,000 and wants the last one shown.
+  once a round, and only once the compositor has read all mwt sent before.
+  `evil.sh title_flood` sets 100,000 and wants the last one shown. Counted with a
+  counter in `send_title`: of 100,000 titles 37,364 go out, against 100,000 before; with
+  sway stopped for 3 s in a million titles, 272 went out meanwhile, against 476,919 from
+  a round each without the wait. Against libwayland 1.22 (Ubuntu 24.04 in Podman, sway
+  1.9): the old code and a title each round both die in `title_flood` with "Error sending
+  request: Resource temporarily unavailable"; with the wait it passes, also with sway
+  stopped.
 - Read: the glyph cache grew without a limit with ever new characters. It is now emptied
   at 65536 glyphs or 64 MiB of bitmaps. A negative cache for characters no font has is not
   needed, at 0.18 ms a new one (`make fonts`). `tests/font_cache.c` builds `font.c` in with
@@ -203,4 +210,7 @@ The rest of the second review:
   gone; `vt.c` still takes SGR 5. `tests/terminfo.py` wants `sgr` to set nothing for it.
 - Maintainability: CI now runs what needs no compositor, see above.
 
-Not yet run: `title_flood`, `font_cache`, `terminfo.py` with the new entry, and the CI.
+Run: `title_flood` passes; under libwayland 1.24 it did with the old code too, under 1.22
+only with the wait for the compositor, see above. `font_cache` passes and fails three ways with the emptying taken out.
+`terminfo.py` passes, and with the old entry reports `blink` and `sgr`. The CI steps pass
+on the host; the workflow itself runs on the first push.

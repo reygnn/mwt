@@ -791,7 +791,8 @@ reply_flood_raw() {
 }
 # A program that sets the title over and over: each was a request right away,
 # 100,000 in a few reads, and libwayland before 1.23 ends the connection when
-# its buffer is full. Now the last one goes once a turn, and must be the one shown.
+# its buffer is full. Now the last one goes once a turn, once the compositor has
+# read the rest, and must be the one shown.
 window_title() {
 	swaymsg -t get_tree | python3 -c 'import json,sys
 def walk(n):
