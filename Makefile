@@ -47,12 +47,13 @@ check: test_vt fuzz_regress
 	@./fuzz_regress tests/fuzz-regress/* 2>fuzz_regress.log || { cat fuzz_regress.log; exit 1; }
 	@rm -f fuzz_regress.log
 
-# font.c with each strdup failing once in turn, under sanitizers; needs fallback
-# fonts to mean anything, so make fonts runs it (tests/fonts-run.sh).
+# font.c with each strdup and FcPatternDuplicate failing once in turn, under
+# sanitizers; needs fallback fonts to mean anything, so make fonts runs it
+# (tests/fonts-run.sh).
 font_oom: tests/font_oom.c font.c font.h
 	$(CC) -std=c11 -Wall -Wextra -g -O1 -I. -fsanitize=address,undefined \
 		-fno-sanitize-recover=all $(shell pkg-config --cflags fontconfig freetype2) \
-		-Wl,--wrap=strdup -o $@ tests/font_oom.c font.c \
+		-Wl,--wrap=strdup -Wl,--wrap=FcPatternDuplicate -o $@ tests/font_oom.c font.c \
 		$(shell pkg-config --libs fontconfig freetype2) -lm
 
 fuzz_regress: tests/fuzz_vt.c vt.c vt.h version.h

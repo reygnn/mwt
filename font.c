@@ -125,6 +125,8 @@ struct font *font_open(const char *spec, double size_pt, int scale)
 	};
 	for (int i = 0; i < 4; i++) {
 		FcPattern *p = FcPatternDuplicate(f->base);
+		if (!p) /* FcPatternDel and FcPatternAdd* do not take NULL */
+			goto fail;
 		FcValue v;
 		/* regular keeps a weight/slant given in the spec */
 		if (i || FcPatternGet(p, FC_WEIGHT, 0, &v) != FcResultMatch) {
@@ -233,6 +235,9 @@ static struct face *find_fallback(struct font *f, uint32_t cp)
 		}
 
 	FcPattern *p = FcPatternDuplicate(f->base);
+	if (!p) /* FcPatternAdd* and FcConfigSubstitute do not take NULL */
+		return NULL;
+	/* NULL is safe here: fontconfig skips it, and the match is checked for cp */
 	FcCharSet *cs = FcCharSetCreate();
 	FcCharSetAddChar(cs, cp);
 	FcPatternAddCharSet(p, FC_CHARSET, cs);

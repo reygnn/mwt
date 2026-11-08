@@ -6,6 +6,13 @@ Offen, noch nicht bestätigt:
 
 Behoben:
 
+* font_open und find_fallback prüften FcPatternDuplicate nicht. Bei
+  Speichermangel ging das NULL an FcPatternDel, FcPatternAdd* und
+  FcConfigSubstitute, die damit abstürzen (ausprobiert mit fontconfig 2.15):
+  beim Start, bei jedem Zoom und bei jeder Suche nach einer Fallback-Schrift.
+  Jetzt gibt font_open auf und find_fallback findet nichts. Gefunden beim
+  Lesen. Test: tests/font_oom.c lässt auch jedes FcPatternDuplicate einmal
+  fehlschlagen.
 * Bei Speichermangel konnte eine Schrift ohne Pfad entstehen: load_face und das
   synthetische Fett oder Kursiv in font_open prüften ihr strdup nicht, und
   find_fallback gab den NULL-Pfad an strcmp. Jetzt schließt load_face die
