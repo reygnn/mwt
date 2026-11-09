@@ -353,6 +353,37 @@ def test_hidpi():
         check(settle() == one, "back at scale 1 the same picture")
 
 
+def test_mwtrc():
+    """Colors from $XDG_CONFIG_HOME/mwt/mwtrc over those of config.h, per app_id too."""
+    fg, bg, other_bg = 0xe5e5e5, 0x000040, 0x000060
+    d = os.path.join(os.environ["XDG_CONFIG_HOME"], "mwt")
+    os.makedirs(d, exist_ok=True)
+    rc = os.path.join(d, "mwtrc")
+    with open(rc, "w") as f:
+        f.write("! IRIS Indigo\n"
+                f"Mwt*foreground: #{fg:06x}\n"
+                f"Mwt*background: #{bg:06x}\n"
+                "Mwt*bogus: #000000\n"
+                f"Mwt*other*background: rgb:{other_bg >> 16:02x}/{other_bg >> 8 & 255:02x}/{other_bg & 255:02x}\n")
+    try:
+        with Window() as win:
+            win.feed(b"\033cHH\033[3;11H")
+            g = Grid(settle(), 80, 24)
+            check(g.corner(0, 5) == bg, "mwtrc: the background", hex6(g.corner(0, 5)))
+            check(fg in g.colors(0, 0), "mwtrc: the text color")
+            check(g.colors(10, 2) == {fg}, "mwtrc: the cursor follows the text color")
+            img = g.img
+            check(img.px(0, 0) == bg, "mwtrc: the padding takes the background")
+        with Window("sleep", "100", app_id="other", geometry="10x2"):
+            g = Grid(settle("other"), 10, 2)
+            check(g.corner(5, 1) == other_bg, "mwtrc: a line for the app_id wins",
+                  hex6(g.corner(5, 1)))
+        with open(mwtlib.LOG, errors="replace") as f:
+            check("mwtrc:4: unknown resource bogus" in f.read(), "mwtrc: a bad line is named")
+    finally:
+        os.remove(rc)
+
+
 def main():
     # Its virtual keyboard keeps one on the seat. Without one no window has focus,
     # and the cursor is only ever an outline.
@@ -367,6 +398,7 @@ def main():
     test_zoom()
     test_zoom_tiled()
     test_hidpi()
+    test_mwtrc()
     mouse.close()
     return finish()
 

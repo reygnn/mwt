@@ -38,6 +38,7 @@
 #include "primary-selection-unstable-v1-client-protocol.h"
 
 #include "config.h"
+#include "rc.h"
 #include "version.h"
 #include "font.h"
 #include "vt.h"
@@ -108,6 +109,7 @@ static struct {
 	double font_pt, font_pt0;
 	int cw, ch, ascent, pad;
 	uint32_t palette[256];
+	struct rc_colors col; /* config.h, then mwtrc */
 
 	/* terminal */
 	struct vt *vt;
@@ -902,6 +904,24 @@ nomem:
 
 /* ---- rendering -------------------------------------------------------- */
 
+/* config.h, then what mwtrc says for every window and for this app_id. */
+static void load_colors(const char *app_id)
+{
+	t.col = (struct rc_colors){ color_fg, color_bg, color_cursor, color_sel_fg,
+		color_sel_bg };
+	char path[4096];
+	if (!rc_path(path, sizeof(path)))
+		return;
+	FILE *f = fopen(path, "r");
+	if (!f) {
+		if (errno != ENOENT)
+			fprintf(stderr, "mwt: %s: %s\n", path, strerror(errno));
+		return;
+	}
+	rc_read(f, path, app_id, &t.col);
+	fclose(f);
+}
+
 static void init_palette(void)
 {
 	for (int i = 0; i < 16; i++)
@@ -921,9 +941,9 @@ static uint32_t rgb(uint32_t c)
 	if (COL_IS_RGB(c))
 		return c & 0xffffff;
 	if (c == COL_DEFAULT_FG)
-		return color_fg;
+		return t.col.fg;
 	if (c == COL_DEFAULT_BG)
-		return color_bg;
+		return t.col.bg;
 	return t.palette[c & 0xff];
 }
 
@@ -931,7 +951,7 @@ static uint32_t rgb(uint32_t c)
 static uint32_t vt_color(void *ud, uint32_t c)
 {
 	(void)ud;
-	return c == COL_CURSOR ? color_cursor : rgb(c);
+	return c == COL_CURSOR ? t.col.cursor : rgb(c);
 }
 
 /* Red and blue in one word, 16 bits each, and green on its own. A lane holds at
@@ -1021,14 +1041,14 @@ static void draw_row(struct buffer *b, int r, bool sel, int64_t ba, int bc,
 				fg = blend(bg, fg, 140) & 0xffffff;
 			if (sel && abs >= ba && abs <= ea &&
 			    !(abs == ba && col + span - 1 < bc) && !(abs == ea && col > ec)) {
-				fg = color_sel_fg;
-				bg = color_sel_bg;
+				fg = t.col.sel_fg;
+				bg = t.col.sel_bg;
 			}
 			bool cur = cur_row && (vt->c.x == col || (span == 2 && vt->c.x == col + 1));
 			bool block = cur && t.focused && vt->cursor_style == CURSOR_BLOCK;
 			if (block) {
 				fg = bg;
-				bg = color_cursor;
+				bg = t.col.cursor;
 			}
 			if (pass == 0) {
 				if (run_w && run_bg == bg && run_x + run_w == x0) {
@@ -1058,14 +1078,14 @@ static void draw_row(struct buffer *b, int r, bool sel, int64_t ba, int bc,
 			if (cur && !block) {
 				int w = span * t.cw;
 				if (!t.focused) {
-					fill_rect(b, x0, y0, w, thick, color_cursor);
-					fill_rect(b, x0, y0 + t.ch - thick, w, thick, color_cursor);
-					fill_rect(b, x0, y0, thick, t.ch, color_cursor);
-					fill_rect(b, x0 + w - thick, y0, thick, t.ch, color_cursor);
+					fill_rect(b, x0, y0, w, thick, t.col.cursor);
+					fill_rect(b, x0, y0 + t.ch - thick, w, thick, t.col.cursor);
+					fill_rect(b, x0, y0, thick, t.ch, t.col.cursor);
+					fill_rect(b, x0 + w - thick, y0, thick, t.ch, t.col.cursor);
 				} else if (vt->cursor_style == CURSOR_UNDERLINE) {
-					fill_rect(b, x0, y0 + t.ch - 2 * thick, w, 2 * thick, color_cursor);
+					fill_rect(b, x0, y0 + t.ch - 2 * thick, w, 2 * thick, t.col.cursor);
 				} else {
-					fill_rect(b, x0, y0, 2 * thick, t.ch, color_cursor);
+					fill_rect(b, x0, y0, 2 * thick, t.ch, t.col.cursor);
 				}
 			}
 			col += span - 1;
@@ -1202,7 +1222,7 @@ static void check_redraw(const struct buffer *b, int64_t ba, int bc, int64_t ea,
 		return;
 	ref.w = b->w;
 	ref.h = b->h;
-	fill_rect(&ref, 0, 0, b->w, b->h, color_bg);
+	fill_rect(&ref, 0, 0, b->w, b->h, t.col.bg);
 	for (int r = 0; r < t.vt->rows; r++)
 		draw_row(&ref, r, t.sel.active, ba, bc, ea, ec);
 	for (size_t i = 0; i < b->size / sizeof *b->data; i++)
@@ -1253,7 +1273,7 @@ static void draw(void)
 			full = true;
 	}
 	if (full) {
-		fill_rect(b, 0, 0, W, H, color_bg);
+		fill_rect(b, 0, 0, W, H, t.col.bg);
 		vt_mark_all(vt);
 		buffers_differ_all(H);
 		t.need_full = false;
@@ -1370,21 +1390,21 @@ static void menu_draw(struct buffer *b)
 		}
 	}
 	int border = t.scale;
-	fill_rect(b, 0, 0, W, H, color_sel_bg);
-	fill_rect(b, border, border, W - 2 * border, H - 2 * border, color_bg);
+	fill_rect(b, 0, 0, W, H, t.col.sel_bg);
+	fill_rect(b, border, border, W - 2 * border, H - 2 * border, t.col.bg);
 	for (int i = 0; i < (int)LEN(menu_items); i++) {
 		int y = border + i * t.menu.row_h;
 		bool on = menu_enabled(i), hover = i == t.menu.hover;
-		uint32_t fg = !on ? blend(color_bg, color_fg, 110) & 0xffffff : color_fg;
+		uint32_t fg = !on ? blend(t.col.bg, t.col.fg, 110) & 0xffffff : t.col.fg;
 		if (hover) {
-			fill_rect(b, border, y, W - 2 * border, t.menu.row_h, color_sel_bg);
-			fg = color_sel_fg;
+			fill_rect(b, border, y, W - 2 * border, t.menu.row_h, t.col.sel_bg);
+			fg = t.col.sel_fg;
 		}
 		int base = y + (t.menu.row_h - t.ch) / 2 + t.ascent;
 		menu_text(b, menu_items[i].label, border + t.cw, base, fg);
 		int n = (int)strlen(menu_items[i].keys);
 		menu_text(b, menu_items[i].keys, W - border - (n + 1) * t.cw, base,
-			  hover ? fg : blend(color_bg, fg, 150) & 0xffffff);
+			  hover ? fg : blend(t.col.bg, fg, 150) & 0xffffff);
 	}
 	wl_surface_set_buffer_scale(t.menu.surface, t.scale);
 	wl_surface_attach(t.menu.surface, b->wb, 0, 0);
@@ -2476,6 +2496,7 @@ done:;
 		setlocale(LC_CTYPE, "C.UTF-8");
 	signal(SIGPIPE, SIG_IGN);
 
+	load_colors(app_id);
 	init_palette();
 	t.font = font_open(t.font_spec, 0, 1);
 	if (!t.font)

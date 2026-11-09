@@ -45,6 +45,25 @@ mwt [-v] [-f font] [-a app-id] [-T title] [-g COLSxROWS] [-e] [command [args...]
 
 Everything else, meaning colors, font, padding, and scrollback, is in `config.h` and takes effect when you rebuild.
 
+### mwtrc
+
+The colors can also be set without rebuilding, in `$XDG_CONFIG_HOME/mwt/mwtrc` (or `~/.config/mwt/mwtrc`). mwt reads it at startup, over what `config.h` says. The syntax is that of mwc's mwmrc:
+
+```
+! IRIS Indigo winterm
+Mwt*foreground:            #e5e5e5
+Mwt*background:            #000040
+! only for mwt -a indigo
+Mwt*indigo*foreground:     #dcdcdc
+```
+
+* Resources: `foreground`, `background`, `cursorColor`, `selectionForeground`, `selectionBackground`. Without `cursorColor`, the cursor takes the foreground.
+* Colors are `#rrggbb`, `#rgb` or `rgb:rr/gg/bb`. There are no color names.
+* A line with an app_id (`-a`) wins over a global one, and later lines win over earlier ones. Names and app_ids are compared ignoring case.
+* Lines starting with `!` are comments. There are no comments after a value.
+* A bad line is skipped, and stderr names the file and line. A missing file is not an error.
+* The 16 palette colors stay those of `config.h`. On a light background, colors 7 and 15 are hard to read.
+
 ## Controls
 
 | Input | Effect |
@@ -71,8 +90,10 @@ Everything else, meaning colors, font, padding, and scrollback, is in `config.h`
 | `font.c` | fontconfig/FreeType, four styles, fallback fonts for missing glyphs, glyph cache |
 | `mwt.c` | Wayland (xdg-shell, xdg-decoration, wl_shm, wl_data_device, primary selection), keyboard through xkbcommon including Compose/dead keys, mouse, pty, event loop |
 | `mwt.info` | terminfo: declares only what `vt.c` can really do |
+| `rc.c` | the mwtrc: colors at startup, no Wayland code |
 | `version.h` | the version, for `-v` and the XTVERSION reply |
 | `test_vt.c` | Tests for the VT core |
+| `test_rc.c` | Tests for reading the mwtrc |
 | `tests/replay.c` | Plays back recorded terminal output: in one piece, byte by byte, in random chunks, and with resizes. The first three must end the same, and the grid must be consistent after every write. `make replay REPORT=1` lists, per file, what mwt cannot do from it. |
 | `tests/fuzz_vt.c` | libFuzzer harness for the VT core: one write against chunks cut by the input itself, must end the same; then resizes, scrolling through the history and a reset, with the grid checked after each step. Starts from the `make replay` files if they are there. Built without clang (`-DFUZZ_STANDALONE`) it is `fuzz_regress`, which `make check` runs over `tests/fuzz-regress`: what `make fuzz` found, kept after the fix as a regression test (how: see the head of `tests/fuzz_vt.c`). |
 | `tests/` | Black-box tests and adversarial cases, taken over from the mt project. `MWC_DIR` names the mwc source tree and defaults to `../../mwc`. |
@@ -87,7 +108,7 @@ Only changed rows are drawn. With double buffering, the rows that differ from th
 * Replies to DA, DA2, DSR/CPR, DECRQM, XTVERSION, window size (CSI 18 t). DECRQM reports the modes mwt knows of but does not have as permanently reset (4)
 * Keypad application mode (ESC = / ESC >, DECNKM `?66`) is kept and reported by DECRQM, but the keypad sends what it sends without it, as in xterm with its default mode 1035: see CAVEATS
 * DECRQCRA (checksum of a rectangle, as xterm computes it), only with `allow_checksum` in `config.h`: like xterm, off by default, since it lets any program read the screen. `make esctest` builds `mwt-esctest` with it on.
-* OSC 0/2 (window title); OSC 4, 10, 11 and 12 queries are answered with the colors from `config.h` (programs use them to tell a dark background from a light one), setting colors is ignored
+* OSC 0/2 (window title); OSC 4, 10, 11 and 12 queries are answered with the colors as drawn, from `config.h` and the mwtrc (programs use them to tell a dark background from a light one), setting colors is ignored
 * Wide characters (CJK, emoji as outlines, if a fallback font has them)
 * HiDPI through `wl_surface.preferred_buffer_scale` (integer scaling)
 

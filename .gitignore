@@ -14,3 +14,4 @@
 *.o
 *-client-protocol.h
 *-protocol.c
+/test_rc

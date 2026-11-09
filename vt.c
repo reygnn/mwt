@@ -1170,8 +1170,8 @@ static char *osc_field(char **s)
 	return f;
 }
 
-/* Colors are only answered, not changed: the palette is fixed in config.h, a
- * program setting one would not get it. OSC 4 takes pairs "N;spec"; OSC 10 to 12
+/* Colors are only answered, not changed: they come from config.h and the
+ * mwtrc, a program setting one would not get it. OSC 4 takes pairs "N;spec"; OSC 10 to 12
  * take a list in which each further entry is the next number, as in xterm, so
  * "10;?;?" asks for the foreground and the background. */
 static void osc_colors(struct vt *vt, int num, char *args)

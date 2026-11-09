@@ -8,11 +8,9 @@ TODO
   Abnahme: tests/width.sh schaltet den Modus ein, und die tmux-Fälle laufen
   ohne GAP. Die vim-Fälle (Flaggen, Jamo) zählen nicht: vim zählt selbst.
 
-* Vielleicht eine eigene mwtrc, nur falls Farben oder Schrift ohne Neubauen
-  wechseln sollen oder mehrere Farbschemata nebeneinander gebraucht werden.
-  Bis dahin reicht config.h beim Bauen, -f für die Schrift und die mwmrc, die
-  über die app_id (mwt -a) pro Fenster zuordnet. Wenn, dann ein kleiner
-  Parser beim Start, config.h bleibt die Vorgabe.
+* mwtrc: bisher nur die fünf Farben. Wenn nötig auch color0–color15, die
+  Schrift und padding; Farbnamen wie in mwc nur mit einer eigenen Tabelle,
+  mwt hat kein pango.
 
 Tests, die noch fehlen, als Kür:
 
