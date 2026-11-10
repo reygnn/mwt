@@ -1,6 +1,6 @@
 ! doc/mwtrc: an example; copy it to ~/.config/mwt/mwtrc. mwt reads it at startup,
 ! over the colors of config.h.
-! Try with: mwt -a indigo3  /  mwt -a dracula
+! Try with: mwt -a indigo3  /  mwt -a dracula  /  mwt -a paper  /  mwt -a amber
 
 ! indigo3, after the SGI IRIS Indigo winterm: its blue a little lifted (12:1
 ! instead of 15.5:1), off-white text, a palette with even lightness in OKLCH;
@@ -51,6 +51,57 @@ Mwt*dracula*color12:               #d7b5f9
 Mwt*dracula*color13:               #f9ade1
 Mwt*dracula*color14:               #b1edec
 Mwt*dracula*color15:               #f4f4ee
+
+! paper: for daylight, dark brown-grey on cream like an e-reader (11:1). On a
+! light background the bright colors are darker than the normal ones, so bold
+! text stands out instead of fading; color7 and color15 are dark too, and
+! every text color is at least 4.6:1.
+Mwt*paper*foreground:              #38322b
+Mwt*paper*background:              #f6efe3
+Mwt*paper*cursorColor:             #38322b
+Mwt*paper*selectionForeground:     #38322b
+Mwt*paper*selectionBackground:     #dfd3bb
+Mwt*paper*color0:                  #38322b
+Mwt*paper*color1:                  #a84743
+Mwt*paper*color2:                  #2a5e1e
+Mwt*paper*color3:                  #886602
+Mwt*paper*color4:                  #175d9b
+Mwt*paper*color5:                  #793974
+Mwt*paper*color6:                  #0a7575
+Mwt*paper*color7:                  #5b5752
+Mwt*paper*color8:                  #706b64
+Mwt*paper*color9:                  #9c2a2b
+Mwt*paper*color10:                 #134d01
+Mwt*paper*color11:                 #735601
+Mwt*paper*color12:                 #004c86
+Mwt*paper*color13:                 #6b1f68
+Mwt*paper*color14:                 #076262
+Mwt*paper*color15:                 #26201a
+
+! amber: amber phosphor on dark brown, as on DEC and Wyse terminals (10.7:1).
+! One family of hues, no blue; the 16 colors differ mostly in lightness, from
+! orange-red to pale yellow, so ls and diff colors are harder to tell apart.
+Mwt*amber*foreground:              #f6b663
+Mwt*amber*background:              #150f0b
+Mwt*amber*cursorColor:             #f6b663
+Mwt*amber*selectionForeground:     #150f0b
+Mwt*amber*selectionBackground:     #d79e59
+Mwt*amber*color0:                  #392b1e
+Mwt*amber*color1:                  #d26b46
+Mwt*amber*color2:                  #d4bd67
+Mwt*amber*color3:                  #fccd73
+Mwt*amber*color4:                  #977a62
+Mwt*amber*color5:                  #e08f88
+Mwt*amber*color6:                  #c49755
+Mwt*amber*color7:                  #cbb394
+Mwt*amber*color8:                  #937b64
+Mwt*amber*color9:                  #ec7f58
+Mwt*amber*color10:                 #ecd478
+Mwt*amber*color11:                 #ffde8c
+Mwt*amber*color12:                 #af8e73
+Mwt*amber*color13:                 #faa39c
+Mwt*amber*color14:                 #ddac66
+Mwt*amber*color15:                 #f4e2c8
 
 ! For every mwt window instead, without -a:
 ! Mwt*foreground:         #e5e5e5

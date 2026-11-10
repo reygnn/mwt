@@ -63,7 +63,7 @@ Mwt*indigo*foreground:     #dcdcdc
 * Lines starting with `!` are comments. There are no comments after a value.
 * A bad line is skipped, and stderr names the file and line. A missing file is not an error.
 * On a light background, set `color7` and `color15` as well: those of `config.h` are hard to read there.
-* `doc/mwtrc` is an example with two complete color sets, all 21 colors each: `indigo3`, after the SGI IRIS Indigo winterm, and `dracula`, a softened Dracula. Try them with `mwt -a indigo3` or `mwt -a dracula`.
+* `doc/mwtrc` is an example with four complete color sets, all 21 colors each: `indigo3`, after the SGI IRIS Indigo winterm; `dracula`, a softened Dracula; `paper`, dark on cream for daylight; and `amber`, after amber phosphor terminals. Try them with `mwt -a indigo3`, for example.
 
 ## Controls
 
