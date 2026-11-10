@@ -108,7 +108,7 @@ static struct {
 	const char *font_spec;
 	double font_pt, font_pt0;
 	int cw, ch, ascent, pad;
-	uint32_t palette[256];
+	uint32_t palette[256]; /* 0 to 15 from col, the rest fixed */
 	struct rc_colors col; /* config.h, then mwtrc */
 
 	/* terminal */
@@ -907,8 +907,9 @@ nomem:
 /* config.h, then what mwtrc says for every window and for this app_id. */
 static void load_colors(const char *app_id)
 {
-	t.col = (struct rc_colors){ color_fg, color_bg, color_cursor, color_sel_fg,
-		color_sel_bg };
+	t.col = (struct rc_colors){ .fg = color_fg, .bg = color_bg,
+		.cursor = color_cursor, .sel_fg = color_sel_fg, .sel_bg = color_sel_bg };
+	memcpy(t.col.palette, colors16, sizeof(t.col.palette));
 	char path[4096];
 	if (!rc_path(path, sizeof(path)))
 		return;
@@ -925,7 +926,7 @@ static void load_colors(const char *app_id)
 static void init_palette(void)
 {
 	for (int i = 0; i < 16; i++)
-		t.palette[i] = colors16[i];
+		t.palette[i] = t.col.palette[i];
 	for (int i = 0; i < 216; i++) {
 		static const uint8_t lv[6] = { 0, 95, 135, 175, 215, 255 };
 		t.palette[16 + i] = lv[i / 36] << 16 | lv[i / 6 % 6] << 8 | lv[i % 6];

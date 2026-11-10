@@ -355,7 +355,7 @@ def test_hidpi():
 
 def test_mwtrc():
     """Colors from $XDG_CONFIG_HOME/mwt/mwtrc over those of config.h, per app_id too."""
-    fg, bg, other_bg = 0xe5e5e5, 0x000040, 0x000060
+    fg, bg, other_bg, blue = 0xe5e5e5, 0x000040, 0x000060, 0x88bbe0
     d = os.path.join(os.environ["XDG_CONFIG_HOME"], "mwt")
     os.makedirs(d, exist_ok=True)
     rc = os.path.join(d, "mwtrc")
@@ -364,14 +364,16 @@ def test_mwtrc():
                 f"Mwt*foreground: #{fg:06x}\n"
                 f"Mwt*background: #{bg:06x}\n"
                 "Mwt*bogus: #000000\n"
+                f"Mwt*color4: #{blue:06x}\n"
                 f"Mwt*other*background: rgb:{other_bg >> 16:02x}/{other_bg >> 8 & 255:02x}/{other_bg & 255:02x}\n")
     try:
         with Window() as win:
-            win.feed(b"\033cHH\033[3;11H")
+            win.feed(b"\033cHH\033[2;1H\033[34mH\033[m\033[3;11H")
             g = Grid(settle(), 80, 24)
             check(g.corner(0, 5) == bg, "mwtrc: the background", hex6(g.corner(0, 5)))
             check(fg in g.colors(0, 0), "mwtrc: the text color")
             check(g.colors(10, 2) == {fg}, "mwtrc: the cursor follows the text color")
+            check(blue in g.colors(0, 1), "mwtrc: color4 for SGR 34")
             img = g.img
             check(img.px(0, 0) == bg, "mwtrc: the padding takes the background")
         with Window("sleep", "100", app_id="other", geometry="10x2"):

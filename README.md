@@ -57,12 +57,12 @@ Mwt*background:            #000040
 Mwt*indigo*foreground:     #dcdcdc
 ```
 
-* Resources: `foreground`, `background`, `cursorColor`, `selectionForeground`, `selectionBackground`. Without `cursorColor`, the cursor takes the foreground.
+* Resources: `foreground`, `background`, `cursorColor`, `selectionForeground`, `selectionBackground`, and `color0` to `color15` for the 16 palette colors, named as in xterm. Without `cursorColor`, the cursor takes the foreground. The 240 colors above them stay fixed.
 * Colors are `#rrggbb`, `#rgb` or `rgb:rr/gg/bb`. There are no color names.
 * A line with an app_id (`-a`) wins over a global one, and later lines win over earlier ones. Names and app_ids are compared ignoring case.
 * Lines starting with `!` are comments. There are no comments after a value.
 * A bad line is skipped, and stderr names the file and line. A missing file is not an error.
-* The 16 palette colors stay those of `config.h`. On a light background, colors 7 and 15 are hard to read.
+* On a light background, set `color7` and `color15` as well: those of `config.h` are hard to read there.
 
 ## Controls
 

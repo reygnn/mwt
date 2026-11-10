@@ -8,6 +8,7 @@
 
 struct rc_colors {
 	uint32_t fg, bg, cursor, sel_fg, sel_bg; /* 0xrrggbb */
+	uint32_t palette[16];                    /* color0 to color15 */
 };
 
 /* #rgb, #rrggbb or rgb:r/g/b with 1 to 4 hex digits per channel. */

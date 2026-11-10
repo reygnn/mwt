@@ -1,5 +1,5 @@
-/* config.h - compile-time configuration, edit and rebuild; the five colors
- * below can also be set in ~/.config/mwt/mwtrc (rc.c) */
+/* config.h - compile-time configuration, edit and rebuild; the colors below,
+ * the 16 of the palette too, can also be set in ~/.config/mwt/mwtrc (rc.c) */
 
 static const char *font_spec = "monospace:size=11";
 static const char *default_app_id = "mwt";

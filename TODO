@@ -8,7 +8,7 @@ TODO
   Abnahme: tests/width.sh schaltet den Modus ein, und die tmux-Fälle laufen
   ohne GAP. Die vim-Fälle (Flaggen, Jamo) zählen nicht: vim zählt selbst.
 
-* mwtrc: bisher nur die fünf Farben. Wenn nötig auch color0–color15, die
+* mwtrc: bisher nur die Farben (fünf und color0–color15). Wenn nötig die
   Schrift und padding; Farbnamen wie in mwc nur mit einer eigenen Tabelle,
   mwt hat kein pango.
 

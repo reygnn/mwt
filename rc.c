@@ -5,6 +5,7 @@
  *   Mwt*cursorColor:           #e5e5e5     default: the foreground
  *   Mwt*selectionForeground:   #000040
  *   Mwt*selectionBackground:   #a0a0a0
+ *   Mwt*color4:                #6c8fb8     the 16 palette colors, as in xterm
  *   Mwt*indigo*foreground:     #dcdcdc     only for mwt -a indigo
  *
  * Names and the app_id are compared ignoring case. Lines starting with ! are
@@ -18,11 +19,14 @@
 
 #include "rc.h"
 
-enum { FG, BG, CURSOR, SEL_FG, SEL_BG, N_RES };
+enum { FG, BG, CURSOR, SEL_FG, SEL_BG, COLOR0, N_RES = COLOR0 + 16 };
 
 static const char *const names[N_RES] = {
 	"foreground", "background", "cursorColor", "selectionForeground",
 	"selectionBackground",
+	"color0", "color1", "color2", "color3", "color4", "color5", "color6",
+	"color7", "color8", "color9", "color10", "color11", "color12", "color13",
+	"color14", "color15",
 };
 
 static char *trim(char *s)
@@ -133,6 +137,8 @@ void rc_read(FILE *f, const char *path, const char *app_id, struct rc_colors *c)
 
 	bool cursor_set = false;
 	uint32_t *out[N_RES] = { &c->fg, &c->bg, &c->cursor, &c->sel_fg, &c->sel_bg };
+	for (int i = 0; i < 16; i++)
+		out[COLOR0 + i] = &c->palette[i];
 	for (int r = 0; r < N_RES; r++) {
 		for (int lvl = 0; lvl < 2; lvl++)
 			if (set[lvl][r])
