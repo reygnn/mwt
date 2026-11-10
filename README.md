@@ -63,6 +63,7 @@ Mwt*indigo*foreground:     #dcdcdc
 * Lines starting with `!` are comments. There are no comments after a value.
 * A bad line is skipped, and stderr names the file and line. A missing file is not an error.
 * On a light background, set `color7` and `color15` as well: those of `config.h` are hard to read there.
+* `doc/mwtrc` is an example with two complete color sets, all 21 colors each: `indigo3`, after the SGI IRIS Indigo winterm, and `dracula`, a softened Dracula. Try them with `mwt -a indigo3` or `mwt -a dracula`.
 
 ## Controls
 
@@ -91,6 +92,7 @@ Mwt*indigo*foreground:     #dcdcdc
 | `mwt.c` | Wayland (xdg-shell, xdg-decoration, wl_shm, wl_data_device, primary selection), keyboard through xkbcommon including Compose/dead keys, mouse, pty, event loop |
 | `mwt.info` | terminfo: declares only what `vt.c` can really do |
 | `rc.c` | the mwtrc: colors at startup, no Wayland code |
+| `doc/mwtrc` | an example mwtrc |
 | `version.h` | the version, for `-v` and the XTVERSION reply |
 | `test_vt.c` | Tests for the VT core |
 | `test_rc.c` | Tests for reading the mwtrc |

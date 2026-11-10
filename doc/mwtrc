@@ -1,0 +1,57 @@
+! doc/mwtrc: an example; copy it to ~/.config/mwt/mwtrc. mwt reads it at startup,
+! over the colors of config.h.
+! Try with: mwt -a indigo3  /  mwt -a dracula
+
+! indigo3, after the SGI IRIS Indigo winterm: its blue a little lifted (12:1
+! instead of 15.5:1), off-white text, a palette with even lightness in OKLCH;
+! every text color at least 5:1 on the background, red and green apart in
+! lightness for red-green color blindness.
+Mwt*indigo3*foreground:            #d8dbe0
+Mwt*indigo3*background:            #111c40
+Mwt*indigo3*cursorColor:           #d8dbe0
+Mwt*indigo3*selectionForeground:   #d8dbe0
+Mwt*indigo3*selectionBackground:   #354573
+Mwt*indigo3*color0:                #2e3750
+Mwt*indigo3*color1:                #d97e77
+Mwt*indigo3*color2:                #97c98c
+Mwt*indigo3*color3:                #dbb970
+Mwt*indigo3*color4:                #88bbe0
+Mwt*indigo3*color5:                #c78fc1
+Mwt*indigo3*color6:                #84c9c8
+Mwt*indigo3*color7:                #bec1c8
+Mwt*indigo3*color8:                #878fa2
+Mwt*indigo3*color9:                #ef9a93
+Mwt*indigo3*color10:               #b4e1aa
+Mwt*indigo3*color11:               #f2d494
+Mwt*indigo3*color12:               #a9d4f3
+Mwt*indigo3*color13:               #ddabd7
+Mwt*indigo3*color14:               #a8e1e0
+Mwt*indigo3*color15:               #e6e8ec
+
+! dracula: Dracula (draculatheme.com) softened, same hues: less saturated
+! accents, even lightness, comments (color8) at 5:1, red lighter, off-white text.
+Mwt*dracula*foreground:            #eaeae2
+Mwt*dracula*background:            #282a36
+Mwt*dracula*cursorColor:           #eaeae2
+Mwt*dracula*selectionForeground:   #eaeae2
+Mwt*dracula*selectionBackground:   #44475a
+Mwt*dracula*color0:                #21222c
+Mwt*dracula*color1:                #f27973
+Mwt*dracula*color2:                #7fe390
+Mwt*dracula*color3:                #d6dd8f
+Mwt*dracula*color4:                #c1a0f2
+Mwt*dracula*color5:                #f292c6
+Mwt*dracula*color6:                #8ddaeb
+Mwt*dracula*color7:                #cecec7
+Mwt*dracula*color8:                #8a9ac8
+Mwt*dracula*color9:                #fe938f
+Mwt*dracula*color10:               #9bf5ae
+Mwt*dracula*color11:               #eeeeb0
+Mwt*dracula*color12:               #d7b5f9
+Mwt*dracula*color13:               #f9ade1
+Mwt*dracula*color14:               #b1edec
+Mwt*dracula*color15:               #f4f4ee
+
+! For every mwt window instead, without -a:
+! Mwt*foreground:         #e5e5e5
+! Mwt*background:         #000040
