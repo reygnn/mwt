@@ -58,6 +58,7 @@ Mwt*indigo*foreground:     #dcdcdc
 ```
 
 * Resources: `foreground`, `background`, `cursorColor`, `selectionForeground`, `selectionBackground`, and `color0` to `color15` for the 16 palette colors, named as in xterm. Without `cursorColor`, the cursor takes the foreground. The 240 colors above them stay fixed.
+* `minimumContrast` (default 3, from `config.h`): text whose contrast to its background is below this WCAG ratio (1 to 21) is drawn in the foreground or the background, whichever stands out more. That keeps black on a dark green or cyan bar readable in a light theme (htop's header and function keys), and white on a pastel blue in a dark one (mc's panels). The palette itself stays as set. `0` turns it off; text in the same color as its background stays hidden.
 * Colors are `#rrggbb`, `#rgb` or `rgb:rr/gg/bb`. There are no color names.
 * A line with an app_id (`-a`) wins over a global one, and later lines win over earlier ones. Names and app_ids are compared ignoring case.
 * Lines starting with `!` are comments. There are no comments after a value.
@@ -91,7 +92,7 @@ Mwt*indigo*foreground:     #dcdcdc
 | `font.c` | fontconfig/FreeType, four styles, fallback fonts for missing glyphs, glyph cache |
 | `mwt.c` | Wayland (xdg-shell, xdg-decoration, wl_shm, wl_data_device, primary selection), keyboard through xkbcommon including Compose/dead keys, mouse, pty, event loop |
 | `mwt.info` | terminfo: declares only what `vt.c` can really do |
-| `rc.c` | the mwtrc: colors at startup, no Wayland code |
+| `rc.c` | the mwtrc: colors at startup, the minimum contrast, no Wayland code |
 | `doc/mwtrc` | an example mwtrc |
 | `version.h` | the version, for `-v` and the XTVERSION reply |
 | `test_vt.c` | Tests for the VT core |

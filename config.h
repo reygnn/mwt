@@ -1,5 +1,6 @@
 /* config.h - compile-time configuration, edit and rebuild; the colors below,
- * the 16 of the palette too, can also be set in ~/.config/mwt/mwtrc (rc.c) */
+ * the 16 of the palette too, and min_contrast can also be set in
+ * ~/.config/mwt/mwtrc (rc.c) */
 
 static const char *font_spec = "monospace:size=11";
 static const char *default_app_id = "mwt";
@@ -19,6 +20,12 @@ static const uint32_t color_bg = 0x1e1e1e;
 static const uint32_t color_cursor = 0xdcdccc;
 static const uint32_t color_sel_fg = 0x1e1e1e;
 static const uint32_t color_sel_bg = 0xa0a0a0;
+
+/* Text whose contrast to its background is below this (WCAG ratio, 1 to 21)
+ * is drawn in color_fg or color_bg, whichever stands out more: black on a
+ * dark green bar of a light theme, white on a pastel blue of a dark one.
+ * 1 or less: off. */
+static const float min_contrast = 3.0f;
 
 static const uint32_t colors16[16] = {
 	0x1e1e1e, 0xcc6666, 0x8fa86a, 0xd8b45e, 0x6c8fb8, 0xa87cb0, 0x6aa8a0, 0xc8c8c8,

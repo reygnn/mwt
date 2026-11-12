@@ -386,6 +386,37 @@ def test_mwtrc():
         os.remove(rc)
 
 
+def test_contrast():
+    """minimumContrast: color0 on color2 of paper, as htop draws its header, comes
+    out in the cream of the background; at 0 it stays as it was."""
+    fg, bg, green = 0x38322b, 0xf6efe3, 0x2a5e1e
+    d = os.path.join(os.environ["XDG_CONFIG_HOME"], "mwt")
+    os.makedirs(d, exist_ok=True)
+    rc = os.path.join(d, "mwtrc")
+    with open(rc, "w") as f:
+        f.write(f"Mwt*foreground: #{fg:06x}\n"
+                f"Mwt*background: #{bg:06x}\n"
+                f"Mwt*color0: #{fg:06x}\n"
+                f"Mwt*color2: #{green:06x}\n"
+                "Mwt*off*minimumContrast: 0\n")
+    try:
+        draw = b"\033c\033[?25l\033[30;42mHH\033[m"
+        with Window() as win:
+            win.feed(draw)
+            g = Grid(settle(), 80, 24)
+            c = g.colors(0, 0)
+            check(g.corner(0, 0) == green and bg in c and fg not in c,
+                  "minimumContrast: black on green drawn in cream", " ".join(map(hex6, sorted(c))))
+        with Window(app_id="off") as win:
+            win.feed(draw)
+            g = Grid(settle("off"), 80, 24)
+            c = g.colors(0, 0)
+            check(fg in c, "minimumContrast: 0 leaves black on green",
+                  " ".join(map(hex6, sorted(c))))
+    finally:
+        os.remove(rc)
+
+
 def main():
     # Its virtual keyboard keeps one on the seat. Without one no window has focus,
     # and the cursor is only ever an outline.
@@ -401,6 +432,7 @@ def main():
     test_zoom_tiled()
     test_hidpi()
     test_mwtrc()
+    test_contrast()
     mouse.close()
     return finish()
 

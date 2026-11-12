@@ -908,7 +908,8 @@ nomem:
 static void load_colors(const char *app_id)
 {
 	t.col = (struct rc_colors){ .fg = color_fg, .bg = color_bg,
-		.cursor = color_cursor, .sel_fg = color_sel_fg, .sel_bg = color_sel_bg };
+		.cursor = color_cursor, .sel_fg = color_sel_fg, .sel_bg = color_sel_bg,
+		.min_contrast = min_contrast };
 	memcpy(t.col.palette, colors16, sizeof(t.col.palette));
 	char path[4096];
 	if (!rc_path(path, sizeof(path)))
@@ -965,6 +966,21 @@ static inline uint32_t blend(uint32_t bg, uint32_t fg, unsigned a)
 	rb = (rb + 0x10001 + (rb >> 8 & 0xff00ff)) >> 8 & 0xff00ff;
 	g = (g + 0x100 + (g >> 8 & 0xffff00)) >> 8 & 0xff00;
 	return 0xff000000 | rb | g;
+}
+
+/* rc_readable for one cell; neighbors mostly share their colors, and the
+ * colors do not change after startup, so the last answer is kept. */
+static uint32_t readable(uint32_t fg, uint32_t bg)
+{
+	static uint32_t last_fg, last_bg, last;
+	static bool have;
+	if (!have || fg != last_fg || bg != last_bg) {
+		last_fg = fg;
+		last_bg = bg;
+		last = rc_readable(fg, bg, &t.col);
+		have = true;
+	}
+	return last;
 }
 
 static void fill_rect(struct buffer *b, int x, int y, int w, int h, uint32_t c)
@@ -1038,8 +1054,11 @@ static void draw_row(struct buffer *b, int r, bool sel, int64_t ba, int bc,
 			if (c.attr & ATTR_REVERSE) {
 				uint32_t tmp = fg; fg = bg; bg = tmp;
 			}
-			if ((c.attr & ATTR_DIM) && pass == 1) /* pass 0 needs only bg */
-				fg = blend(bg, fg, 140) & 0xffffff;
+			if (pass == 1) { /* pass 0 needs only bg */
+				fg = readable(fg, bg);
+				if (c.attr & ATTR_DIM)
+					fg = blend(bg, fg, 140) & 0xffffff;
+			}
 			if (sel && abs >= ba && abs <= ea &&
 			    !(abs == ba && col + span - 1 < bc) && !(abs == ea && col > ec)) {
 				fg = t.col.sel_fg;

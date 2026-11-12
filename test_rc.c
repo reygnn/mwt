@@ -1,5 +1,6 @@
 /* test_rc.c - mwtrc parsing, without a window: make check */
 #define _POSIX_C_SOURCE 200809L
+#include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -14,7 +15,7 @@ static int fails;
 
 static const struct rc_colors defaults = { 0xdcdccc, 0x1e1e1e, 0xdcdccc, 0x1e1e1e, 0xa0a0a0, {
 	0x1e1e1e, 0xcc6666, 0x8fa86a, 0xd8b45e, 0x6c8fb8, 0xa87cb0, 0x6aa8a0, 0xc8c8c8,
-	0x5a5a5a, 0xe08080, 0xa8c88a, 0xf0d080, 0x90b0d8, 0xc89ad0, 0x8ac8c0, 0xf4f4f4 } };
+	0x5a5a5a, 0xe08080, 0xa8c88a, 0xf0d080, 0x90b0d8, 0xc89ad0, 0x8ac8c0, 0xf4f4f4 }, 3 };
 
 /* text as an mwtrc, for app_id; what stderr got lands in err */
 static struct rc_colors run(const char *text, const char *app_id, char *err, size_t errsize)
@@ -142,6 +143,24 @@ static void test_read(void)
 	CHECK(strstr(err, "mwtrc:4: unknown resource color-1"));
 	CHECK(strstr(err, "mwtrc:5: color9: not a color: \"red\""));
 
+	/* minimumContrast, a number and not a color; the app_id wins here too */
+	c = run("Mwt*minimumContrast: 4.5\n", "mwt", err, sizeof(err));
+	CHECK(c.min_contrast == 4.5f && c.fg == defaults.fg && !*err);
+	c = run("Mwt*paper*minimumcontrast: 0\nMwt*minimumContrast: 7\n", "paper", err, sizeof(err));
+	CHECK(c.min_contrast == 0 && !*err);
+	c = run("Mwt*minimumContrast: #000000\n"
+		"Mwt*minimumContrast: 22\n"
+		"Mwt*minimumContrast: -1\n"
+		"Mwt*minimumContrast: 3x\n"
+		"Mwt*minimumContrast:\n"
+		"Mwt*minimumContrast: nan\n", "mwt", err, sizeof(err));
+	CHECK(c.min_contrast == defaults.min_contrast);
+	for (int i = 1; i <= 6; i++) {
+		char want[64];
+		snprintf(want, sizeof(want), "mwtrc:%d: minimumContrast: not a number", i);
+		CHECK(strstr(err, want));
+	}
+
 	/* a line longer than any buffer, and no newline at the end */
 	char *big = malloc(70000);
 	memset(big, ' ', 70000);
@@ -150,6 +169,47 @@ static void test_read(void)
 	c = run(big, "mwt", err, sizeof(err));
 	CHECK(c.bg == 0xabcdef && !*err);
 	free(big);
+}
+
+static bool near(double a, double b)
+{
+	return a > b - 0.005 && a < b + 0.005;
+}
+
+/* paper from doc/mwtrc, where htop writes color0 on color2, color4 and color6 */
+static void test_contrast(void)
+{
+	CHECK(near(rc_contrast(0x000000, 0xffffff), 21));
+	CHECK(near(rc_contrast(0xffffff, 0x000000), 21));
+	CHECK(near(rc_contrast(0x777777, 0x777777), 1));
+	CHECK(near(rc_contrast(0x38322b, 0xf6efe3), 11.07));
+	CHECK(near(rc_contrast(0x38322b, 0x2a5e1e), 1.64));
+	CHECK(near(rc_contrast(0x38322b, 0x0a7575), 2.30));
+	CHECK(near(rc_contrast(0xf6efe3, 0x175d9b), 5.97));
+
+	struct rc_colors paper = { .fg = 0x38322b, .bg = 0xf6efe3, .min_contrast = 3 };
+	/* black on green, cyan, blue: the cream of the background */
+	CHECK(rc_readable(0x38322b, 0x2a5e1e, &paper) == 0xf6efe3);
+	CHECK(rc_readable(0x38322b, 0x0a7575, &paper) == 0xf6efe3);
+	CHECK(rc_readable(0x38322b, 0x175d9b, &paper) == 0xf6efe3);
+	/* text colors on the cream stay, color8 with 4.62 too */
+	CHECK(rc_readable(0x706b64, 0xf6efe3, &paper) == 0x706b64);
+	CHECK(rc_readable(0x38322b, 0xf6efe3, &paper) == 0x38322b);
+	/* a light yellow of the 256 colors on the cream: the dark foreground */
+	CHECK(rc_readable(0xffff5f, 0xf6efe3, &paper) == 0x38322b);
+	/* the same color on itself hides text on purpose */
+	CHECK(rc_readable(0x2a5e1e, 0x2a5e1e, &paper) == 0x2a5e1e);
+	/* neither theme color does better: fg stays */
+	struct rc_colors grey = { .fg = 0x787878, .bg = 0x767676, .min_contrast = 3 };
+	CHECK(rc_readable(0x5f5f5f, 0x777777, &grey) == 0x5f5f5f);
+	/* off at 1 and below */
+	paper.min_contrast = 1;
+	CHECK(rc_readable(0x38322b, 0x2a5e1e, &paper) == 0x38322b);
+	paper.min_contrast = 0;
+	CHECK(rc_readable(0x38322b, 0x2a5e1e, &paper) == 0x38322b);
+	/* indigo3: white on its pastel blue, as mc draws its panels */
+	struct rc_colors indigo3 = { .fg = 0xd8dbe0, .bg = 0x111c40, .min_contrast = 3 };
+	CHECK(rc_readable(0xbec1c8, 0x88bbe0, &indigo3) == 0x111c40);
 }
 
 static void test_path(void)
@@ -171,6 +231,7 @@ int main(void)
 {
 	test_color();
 	test_read();
+	test_contrast();
 	test_path();
 	if (fails) {
 		fprintf(stderr, "test_rc: %d failed\n", fails);
