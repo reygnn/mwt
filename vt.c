@@ -851,7 +851,7 @@ static void set_private_mode(struct vt *vt, int m, bool on)
  * does not have, so setting them never takes (blink, 132 columns, reverse screen,
  * margins, other mouse encodings...). 3 is for 1035, xterm's "ignore the keypad
  * mode with NumLock": mwt's keypad always sends what it sends without that mode,
- * see CAVEATS. 2027 stays unknown until grapheme clusters are in: see TODO. */
+ * see CAVEATS.md. 2027 stays unknown until grapheme clusters are in: see TODO. */
 static int private_mode_state(const struct vt *vt, int m)
 {
 	unsigned bit;
@@ -1433,7 +1433,7 @@ void vt_write(struct vt *vt, const char *buf, size_t len)
 /* The xterm way: with modifiers, the parameter 1 + Shift + 2 Alt + 4 Ctrl goes
  * into the sequence (CSI 1 ; m A, CSI n ; m ~); without, cursor keys follow
  * DECCKM and F1 to F4 are SS3 P to S. Keys that send a byte get Alt as an ESC in
- * front instead. The keypad mode changes nothing, see CAVEATS. */
+ * front instead. The keypad mode changes nothing, see CAVEATS.md. */
 size_t vt_key(const struct vt *vt, enum vt_key key, unsigned mods, char *buf, size_t cap)
 {
 	static const char cursor[] = "BCDHF"; /* after A for VT_KEY_UP */

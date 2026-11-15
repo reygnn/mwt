@@ -176,7 +176,7 @@ static bool near(double a, double b)
 	return a > b - 0.005 && a < b + 0.005;
 }
 
-/* paper from doc/mwtrc, where htop writes color0 on color2, color4 and color6 */
+/* paper from docs/mwtrc, where htop writes color0 on color2, color4 and color6 */
 static void test_contrast(void)
 {
 	CHECK(near(rc_contrast(0x000000, 0xffffff), 21));

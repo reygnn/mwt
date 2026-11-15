@@ -8,12 +8,34 @@ TODO
   Abnahme: tests/width.sh schaltet den Modus ein, und die tmux-Fälle laufen
   ohne GAP. Die vim-Fälle (Flaggen, Jamo) zählen nicht: vim zählt selbst.
 
-* mwtrc: bisher nur die Farben (fünf und color0–color15) und minimumContrast. Wenn nötig die
-  Schrift und padding; Farbnamen wie in mwc nur mit einer eigenen Tabelle,
-  mwt hat kein pango.
+* mwtrc: bisher nur die Farben (fünf und color0 bis color15) und
+  minimumContrast. Wenn nötig die Schrift und padding; Farbnamen wie in mwc
+  nur mit einer eigenen Tabelle, mwt hat kein pango.
+
+Zu entscheiden, aus der dritten Review (docs/history/Review-2026-11-08.md):
+
+* Eine Selektion bleibt auf Text stehen, den das Programm überschreibt, und
+  Kopieren liefert den neuen Text. xterm hebt die Selektion dann auf; mwt nur
+  bei einem Resize und beim Wechsel in den oder aus dem Alternate Screen.
+* Ziehen über den oberen oder unteren Rand scrollt die Historie nur, solange
+  die Maus sich bewegt; kein Timer scrollt weiter.
+* Die reine Logik aus mwt.c (paste_text, track_brackets, selection_text,
+  sel_range, to_latin1, die UTF-8-Prüfungen) in ein Modul ohne Wayland, das
+  make check testet. UTF-8 wird in mwt.c an vier Stellen kodiert oder
+  dekodiert, neben dem Decoder in vt.c. mwt.c hat gut 2500 Zeilen um den
+  globalen Zustand t; Selektion und Zwischenablage (etwa 550 Zeilen) und das
+  Kontextmenü könnten eigene Dateien sein.
 
 Tests, die noch fehlen, als Kür:
 
 * Andere Compositoren (weston, labwc), auch wegen fehlender Protokolle. vttest.
   Bildschirmvergleich gegen tmux capture-pane mit aufgezeichneten Sitzungen von
   vim oder htop.
+* Ein CI-Job unter headless sway (make keys, make mouse, make pixel); die CI
+  prüft bisher nur, was keinen Compositor braucht.
+* Was laut gcov (bei abafc03) kein Test erreicht, Liste in der Review:
+  die Mausmodi im VT-Kern ohne sway, vt_reply und vt_color unter sway, Paste
+  der Primary Selection eines anderen Clients, ctrl_latin, Touchpad-Scrollen,
+  die Fehlerpfade von spawn, wait_child und send_text, find_fallback und die
+  Fehlerpfade von font.c außerhalb von make fonts. gcov nochmal laufen
+  lassen, seitdem sind Tests dazugekommen.

@@ -3,9 +3,8 @@
 of `make evil` has DejaVu alone, and there find_fallback in font.c never finds a
 face. Screenshots as in tests/pixel.py. The timings describe rather than judge and
 print info: what a glyph no face has costs, the data for deciding on a negative
-cache (see Review.md). FALLBACK_NO_TIMING=1 leaves them out, for a sanitizer
-build. Run with
-`make fonts`, through tests/headless.sh."""
+cache (see docs/history/Review-2026-11-08.md). FALLBACK_NO_TIMING=1 leaves
+them out, for a sanitizer build. Run with `make fonts`, through tests/headless.sh."""
 import os
 import sys
 import time

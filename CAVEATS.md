@@ -1,0 +1,100 @@
+# Caveats
+
+Behaviour of mwt that is meant that way or that mwt cannot change.
+
+
+## The shell
+
+`mwt -e` always exits with 0, also when the command fails or does not start. The error
+message goes to the window, which closes at once.
+
+If `$SHELL` is not executable or not an absolute path (`SHELL=bash`), the window closes
+at once. Only an empty `$SHELL` falls back to the passwd entry.
+
+When the window closes, the shell gets SIGHUP. mwt waits two seconds for it and then
+exits. A shell that ignores the signal (nohup) or takes longer to clean up runs on
+without a terminal; mwt does not kill it.
+
+
+## Window size
+
+`-g` and the window are limited to a grid of 4096x2048 and a buffer under 2 GiB. With a
+9x18 pixel font that is about 1800x1800 cells; `-g` refuses more with exit code 2, and
+the grid stays at 4096x2048 in the largest window.
+
+There is no reflow: shrinking the window cuts off what no longer fits.
+
+
+## Selection and paste
+
+The selected text reaches only as far as the scrollback, 5000 lines (`config.h`).
+
+A paste over 64 MiB is dropped whole, with a message on stderr. Of the C0 controls only
+tab, CR and LF are pasted.
+
+With Ctrl+Shift+letter on non-Latin layouts without a Latin second layout, the key's
+QWERTY position counts.
+
+
+## Replies and the line discipline
+
+Programs can ask the terminal for replies (DA, DSR). If the program exits first, the
+replies end up on the shell's command line.
+
+If nobody reads the replies, as with `cat` of a recorded file, the kernel's line
+discipline echoes them back into the running output. That shows as `^[[>1;10;0c` on
+the screen. If a piece of output ends in ESC and the echo after it starts with `c`, the
+result is ESC c: a reset, which also leaves the alternate screen, so what follows lands
+on the normal screen and in the history. mwt only sees the mixed stream and cannot tell
+echo from output; neither can xterm. The remedy:
+
+    stty -echo; cat file; stty echo
+
+A program that stops output with `tcflow(TCOOFF)` is the only one that can start it
+again. The stop is in the kernel; no key helps.
+
+An unterminated DCS or OSC (ESC P or ESC ] without its end) swallows output up to the
+next ESC, CAN or SUB. bash usually ends it with the sequence of its next prompt.
+
+
+## Keypad mode
+
+The application keypad mode (ESC =, ESC >, CSI ? 66 h and l) is kept and reported by
+DECRQM but does not change the keys. With NumLock the digits send digits and Enter
+sends `\r`; without it xkb gives KP_Home, KP_Up and so on, which send the normal cursor
+and tilde sequences. This is xterm's behaviour with its default mode 1035. If the mode
+took effect, the keypad would send ESC O q instead of 1 as soon as a curses program
+starts (`smkx` in `mwt.info` turns it on), and without `ka1`, `kb2`, `kent` and the
+like in the terminfo no program would understand it.
+
+
+## Character widths
+
+mwt counts as glibc and bash do, code point by code point with `wcwidth()`. Characters
+without width (ZWJ, VS16, combining accents) are dropped, also when copying. tmux 3.6
+counts ❤️ (with VS16) and ZWJ sequences such as 👨‍👩‍👧 differently, vim 9.1 flags and
+Hangul jamo; there the cursor drifts. `make width` shows where. To a query for mode 2027
+(CSI ? 2027 $ p) mwt answers "unknown"; see TODO.
+
+
+## Sequences left out
+
+DECRQM reports the modes mwt knows of but does not have as permanently reset (4).
+
+Of the VT420 and xterm features esctest checks, these are left out, so most of what
+`make esctest` reports fails by design: left and right margins (DECLRMM, DECSLRM),
+rectangle operations (DECCRA, DECFRA, DECERA), inserting and deleting columns (DECIC,
+DECDC, DECBI, DECFI), protected areas and selective erase (DECSCA, SPA, EPA, DECSED,
+DECSEL), window operations beyond CSI 18 t, setting colors (OSC 4, 10 to 19, 104),
+reverse wraparound (`?45`), 132 columns (DECCOLM), reverse screen (DECSCNM), double size
+lines (`ESC # 3` to `6`), national character sets and G2 and G3, XTSAVE and XTRESTORE,
+DECSCL, and the DECDSR reports for printer, keyboard and locator.
+
+Combining characters are discarded, see Character widths. Setting colors through OSC is
+ignored; queries are answered.
+
+
+## Installation
+
+`make install` puts the terminfo entry in `/usr/share/terminfo` whatever `PREFIX` is,
+since ncurses does not look under `/usr/local`.

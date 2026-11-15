@@ -629,7 +629,7 @@ static void test_keys(void)
 	CHECK_STR(key(vt, VT_KEY_HOME, 0), "\033OH");
 	CHECK_STR(key(vt, VT_KEY_UP, S), "\033[1;2A");
 	CHECK_STR(key(vt, VT_KEY_INSERT, 0), "\033[2~");
-	/* the keypad mode changes nothing, see CAVEATS */
+	/* the keypad mode changes nothing, see CAVEATS.md */
 	w(vt, "\033[?1l\033=");
 	CHECK_STR(key(vt, VT_KEY_ENTER, 0), "\r");
 	CHECK_STR(key(vt, VT_KEY_UP, 0), "\033[A");

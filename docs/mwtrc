@@ -1,4 +1,4 @@
-! doc/mwtrc: an example; copy it to ~/.config/mwt/mwtrc. mwt reads it at startup,
+! docs/mwtrc: an example; copy it to ~/.config/mwt/mwtrc. mwt reads it at startup,
 ! over the colors of config.h.
 ! Try with: mwt -a indigo3  /  mwt -a dracula  /  mwt -a paper  /  mwt -a amber
 

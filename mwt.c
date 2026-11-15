@@ -1695,7 +1695,7 @@ static xkb_keysym_t ctrl_latin(xkb_keycode_t code, xkb_keysym_t sym)
 }
 
 /* The keysyms that vt_key() encodes; VT_KEY_COUNT for any other. The keypad
- * ones with NumLock off are the same keys: see CAVEATS on the keypad mode. */
+ * ones with NumLock off are the same keys: see CAVEATS.md on the keypad mode. */
 static enum vt_key vt_key_of(xkb_keysym_t sym)
 {
 	switch (sym) {
