@@ -8,8 +8,9 @@ CFLAGS ?= -O2 -g
 CFLAGS += -std=c11 -Wall -Wextra $(shell pkg-config --cflags $(PKGS)) -I.
 LDLIBS += $(shell pkg-config --libs $(PKGS)) -lutil -lm
 
-PROTOS = xdg-shell xdg-decoration-unstable-v1 primary-selection-unstable-v1
+PROTOS = xdg-shell xdg-decoration-unstable-v1 primary-selection-unstable-v1 viewporter
 xdg-shell_XML = $(WP)/stable/xdg-shell/xdg-shell.xml
+viewporter_XML = $(WP)/stable/viewporter/viewporter.xml
 xdg-decoration-unstable-v1_XML = $(WP)/unstable/xdg-decoration/xdg-decoration-unstable-v1.xml
 primary-selection-unstable-v1_XML = $(WP)/unstable/primary-selection/primary-selection-unstable-v1.xml
 

@@ -36,6 +36,7 @@
 #include "xdg-shell-client-protocol.h"
 #include "xdg-decoration-unstable-v1-client-protocol.h"
 #include "primary-selection-unstable-v1-client-protocol.h"
+#include "viewporter-client-protocol.h"
 
 #include "config.h"
 #include "rc.h"
@@ -83,6 +84,7 @@ static struct {
 	struct wl_data_device *ddev;
 	struct zwp_primary_selection_device_manager_v1 *psm;
 	struct zwp_primary_selection_device_v1 *pdev;
+	struct wp_viewporter *viewporter;
 
 	/* window */
 	struct wl_surface *surface;
@@ -140,6 +142,8 @@ static struct {
 	struct wl_cursor_theme *cursor_theme;
 	struct wl_cursor_image *cursor_image;
 	struct wl_surface *cursor_surface;
+	struct wp_viewport *cursor_viewport;
+	int cursor_hx, cursor_hy; /* hotspot, logical */
 	uint32_t enter_serial;
 	double px, py;
 	int mcol, mrow;
@@ -1599,10 +1603,35 @@ static void load_cursor_theme(void)
 		return;
 	if (!t.cursor_surface)
 		t.cursor_surface = wl_compositor_create_surface(t.compositor);
-	wl_surface_set_buffer_scale(t.cursor_surface, t.scale);
+	/* The theme may not have the size asked for: Adwaita gives 64 for 72 at scale 3.
+	 * A buffer scale must divide the buffer's size, or the surface is in error; take
+	 * the largest that does, and let a viewport shrink the image the rest. */
+	int w = t.cursor_image->width, h = t.cursor_image->height;
+	int bscale = t.scale;
+	while (bscale > 1 && (w % bscale || h % bscale))
+		bscale--;
+	int dw = w / bscale, dh = h / bscale;
+	if (bscale != t.scale && t.viewporter) {
+		bscale = 1;
+		dw = MAX(1, (w + t.scale / 2) / t.scale);
+		dh = MAX(1, (h + t.scale / 2) / t.scale);
+		if (!t.cursor_viewport)
+			t.cursor_viewport = wp_viewporter_get_viewport(t.viewporter, t.cursor_surface);
+		wp_viewport_set_destination(t.cursor_viewport, dw, dh);
+	} else if (t.cursor_viewport) {
+		wp_viewport_destroy(t.cursor_viewport);
+		t.cursor_viewport = NULL;
+	}
+	t.cursor_hx = (int)t.cursor_image->hotspot_x * dw / w;
+	t.cursor_hy = (int)t.cursor_image->hotspot_y * dh / h;
+	wl_surface_set_buffer_scale(t.cursor_surface, bscale);
 	wl_surface_attach(t.cursor_surface, wl_cursor_image_get_buffer(t.cursor_image), 0, 0);
 	wl_surface_damage_buffer(t.cursor_surface, 0, 0, INT32_MAX, INT32_MAX);
 	wl_surface_commit(t.cursor_surface);
+	/* The hotspot changes with the image; set it now, not on the next enter. */
+	if (t.ptr_surface && t.pointer)
+		wl_pointer_set_cursor(t.pointer, t.enter_serial, t.cursor_surface,
+				      t.cursor_hx, t.cursor_hy);
 }
 
 static void reload_font(double pt, int scale)
@@ -1981,9 +2010,7 @@ static void ptr_enter(void *d, struct wl_pointer *p, uint32_t serial,
 	t.enter_serial = serial;
 	t.ptr_surface = s;
 	if (t.cursor_image)
-		wl_pointer_set_cursor(p, serial, t.cursor_surface,
-				      t.cursor_image->hotspot_x / t.scale,
-				      t.cursor_image->hotspot_y / t.scale);
+		wl_pointer_set_cursor(p, serial, t.cursor_surface, t.cursor_hx, t.cursor_hy);
 	if (in_menu()) {
 		menu_pointer(wl_fixed_to_double(y));
 		return;
@@ -2304,6 +2331,8 @@ static void reg_global(void *d, struct wl_registry *r, uint32_t name,
 	} else if (!strcmp(iface, zwp_primary_selection_device_manager_v1_interface.name)) {
 		t.psm = wl_registry_bind(r, name,
 			&zwp_primary_selection_device_manager_v1_interface, 1);
+	} else if (!strcmp(iface, wp_viewporter_interface.name)) {
+		t.viewporter = wl_registry_bind(r, name, &wp_viewporter_interface, 1);
 	}
 }
 static void reg_remove(void *d, struct wl_registry *r, uint32_t name) { (void)d; (void)r; (void)name; }

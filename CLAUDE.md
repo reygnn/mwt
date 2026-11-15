@@ -47,7 +47,7 @@ esctest is GPL. The containers have no network, so fetch on the host first with
 |---|---|
 | `vt.c`, `vt.h` | parser after Paul Williams' DEC state machine, grid, scrollback; no Wayland, so testable headless |
 | `font.c` | fontconfig and FreeType, four styles, fallback faces, glyph cache |
-| `mwt.c` | Wayland (xdg-shell, xdg-decoration, wl_shm, data device, primary selection), xkbcommon with Compose, mouse, pty, event loop |
+| `mwt.c` | Wayland (xdg-shell, xdg-decoration, viewporter, wl_shm, data device, primary selection), xkbcommon with Compose, mouse, pty, event loop |
 | `rc.c` | the mwtrc and the minimum contrast; no Wayland |
 | `mwt.info` | terminfo; declares only what `vt.c` really does |
 | `config.h`, `version.h` | defaults; the version for `-v` and XTVERSION |

@@ -104,7 +104,7 @@ def settle(app_id="mwt", scale=1, quiet=0.25, limit=6.0):
 class Window:
     """mwt with a program in raw mode that writes what feed() gets, unchanged."""
 
-    def __init__(self, *args, app_id="mwt", geometry="80x24", font=None):
+    def __init__(self, *args, app_id="mwt", geometry="80x24", font=None, env=None, stderr=None):
         global _count
         _count += 1
         self.app_id = app_id
@@ -112,9 +112,13 @@ class Window:
         os.mkfifo(self.fifo)
         log = open(LOG, "a")
         prog = args or ("sh", "-c", f"stty raw -echo; exec cat '{self.fifo}'")
+        err = open(stderr, "w") if stderr else log
         self.proc = subprocess.Popen([MWT, "-a", app_id, "-g", geometry, *(["-f", font] if font else []), "-e", *prog],
-                                     stdout=log, stderr=log, cwd=os.environ["HOME"])
+                                     stdout=log, stderr=err, cwd=os.environ["HOME"],
+                                     env={**os.environ, **env} if env else None)
         log.close()
+        if stderr:
+            err.close()
         self.out = None
         if not args:
             self.out = open(self.fifo, "wb", buffering=0)
