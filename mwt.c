@@ -77,6 +77,7 @@ static struct {
 	struct wl_shm *shm;
 	struct xdg_wm_base *wm_base;
 	struct wl_seat *seat;
+	uint32_t seat_name;        /* its registry name, for global_remove */
 	struct wl_keyboard *keyboard;
 	struct wl_pointer *pointer;
 	struct zxdg_decoration_manager_v1 *deco_mgr;
@@ -144,6 +145,7 @@ static struct {
 	struct wl_surface *cursor_surface;
 	struct wp_viewport *cursor_viewport;
 	int cursor_hx, cursor_hy; /* hotspot, logical */
+	bool cursor_retry;        /* the last load failed: try again on the next enter */
 	uint32_t enter_serial;
 	double px, py;
 	int mcol, mrow;
@@ -1583,30 +1585,44 @@ static void update_grid(void)
 	t.need_redraw = true;
 }
 
+/* XCURSOR_SIZE, at most 256: no theme has more, and size * scale stays an int. */
+static int cursor_size(void)
+{
+	const char *s = getenv("XCURSOR_SIZE");
+	char *end;
+	errno = 0;
+	long n = s ? strtol(s, &end, 10) : 0;
+	if (!s || end == s || *end || n <= 0)
+		return 24;
+	return errno == ERANGE || n > 256 ? 256 : (int)n;
+}
+
+/* The new theme is loaded before the old one goes, so the cursor surface never holds
+ * a buffer of a destroyed theme; if it fails, the old one stays. */
 static void load_cursor_theme(void)
 {
-	if (t.cursor_theme)
-		wl_cursor_theme_destroy(t.cursor_theme);
-	const char *sz = getenv("XCURSOR_SIZE");
-	int size = sz && atoi(sz) > 0 ? atoi(sz) : 24;
-	t.cursor_theme = wl_cursor_theme_load(getenv("XCURSOR_THEME"), size * t.scale, t.shm);
-	t.cursor_image = NULL;
-	if (!t.cursor_theme)
-		return;
+	int px = (int)MIN((long)cursor_size() * t.scale, 4096);
+	struct wl_cursor_theme *theme = wl_cursor_theme_load(getenv("XCURSOR_THEME"), px, t.shm);
+	struct wl_cursor_image *img = NULL;
 	static const char *names[] = { "text", "xterm", "left_ptr", "default" };
-	for (size_t i = 0; i < LEN(names) && !t.cursor_image; i++) {
-		struct wl_cursor *c = wl_cursor_theme_get_cursor(t.cursor_theme, names[i]);
+	for (size_t i = 0; theme && i < LEN(names) && !img; i++) {
+		struct wl_cursor *c = wl_cursor_theme_get_cursor(theme, names[i]);
 		if (c && c->image_count)
-			t.cursor_image = c->images[0];
+			img = c->images[0];
 	}
-	if (!t.cursor_image)
+	struct wl_buffer *wb = img ? wl_cursor_image_get_buffer(img) : NULL;
+	t.cursor_retry = !wb;
+	if (!wb) {
+		if (theme)
+			wl_cursor_theme_destroy(theme);
 		return;
+	}
 	if (!t.cursor_surface)
 		t.cursor_surface = wl_compositor_create_surface(t.compositor);
 	/* The theme may not have the size asked for: Adwaita gives 64 for 72 at scale 3.
 	 * A buffer scale must divide the buffer's size, or the surface is in error; take
 	 * the largest that does, and let a viewport shrink the image the rest. */
-	int w = t.cursor_image->width, h = t.cursor_image->height;
+	int w = img->width, h = img->height;
 	int bscale = t.scale;
 	while (bscale > 1 && (w % bscale || h % bscale))
 		bscale--;
@@ -1622,16 +1638,20 @@ static void load_cursor_theme(void)
 		wp_viewport_destroy(t.cursor_viewport);
 		t.cursor_viewport = NULL;
 	}
-	t.cursor_hx = (int)t.cursor_image->hotspot_x * dw / w;
-	t.cursor_hy = (int)t.cursor_image->hotspot_y * dh / h;
+	t.cursor_hx = (int)(img->hotspot_x * dw + w / 2) / w;
+	t.cursor_hy = (int)(img->hotspot_y * dh + h / 2) / h;
 	wl_surface_set_buffer_scale(t.cursor_surface, bscale);
-	wl_surface_attach(t.cursor_surface, wl_cursor_image_get_buffer(t.cursor_image), 0, 0);
+	wl_surface_attach(t.cursor_surface, wb, 0, 0);
 	wl_surface_damage_buffer(t.cursor_surface, 0, 0, INT32_MAX, INT32_MAX);
 	wl_surface_commit(t.cursor_surface);
 	/* The hotspot changes with the image; set it now, not on the next enter. */
 	if (t.ptr_surface && t.pointer)
 		wl_pointer_set_cursor(t.pointer, t.enter_serial, t.cursor_surface,
 				      t.cursor_hx, t.cursor_hy);
+	if (t.cursor_theme)
+		wl_cursor_theme_destroy(t.cursor_theme);
+	t.cursor_theme = theme;
+	t.cursor_image = img;
 }
 
 static void reload_font(double pt, int scale)
@@ -1873,7 +1893,8 @@ static void kb_keymap(void *d, struct wl_keyboard *kb, uint32_t fmt, int fd, uin
 	close(fd);
 	if (map == MAP_FAILED)
 		return;
-	struct xkb_keymap *km = xkb_keymap_new_from_string(t.xkb, map,
+	/* not past the mapping, should the compositor's NUL be missing */
+	struct xkb_keymap *km = xkb_keymap_new_from_buffer(t.xkb, map, strnlen(map, size),
 		XKB_KEYMAP_FORMAT_TEXT_V1, XKB_KEYMAP_COMPILE_NO_FLAGS);
 	munmap(map, size);
 	if (!km)
@@ -2009,7 +2030,9 @@ static void ptr_enter(void *d, struct wl_pointer *p, uint32_t serial,
 	(void)d;
 	t.enter_serial = serial;
 	t.ptr_surface = s;
-	if (t.cursor_image)
+	if (t.cursor_retry)
+		load_cursor_theme(); /* sets the cursor if it works now */
+	else if (t.cursor_image)
 		wl_pointer_set_cursor(p, serial, t.cursor_surface, t.cursor_hx, t.cursor_hy);
 	if (in_menu()) {
 		menu_pointer(wl_fixed_to_double(y));
@@ -2212,16 +2235,63 @@ static void seat_caps(void *d, struct wl_seat *s, uint32_t caps)
 		t.keyboard = wl_seat_get_keyboard(s);
 		wl_keyboard_add_listener(t.keyboard, &kb_listener, NULL);
 	} else if (!(caps & WL_SEAT_CAPABILITY_KEYBOARD) && t.keyboard) {
-		wl_keyboard_release(t.keyboard);
+		stop_repeat();
+		if (wl_keyboard_get_version(t.keyboard) >= WL_KEYBOARD_RELEASE_SINCE_VERSION)
+			wl_keyboard_release(t.keyboard);
+		else
+			wl_keyboard_destroy(t.keyboard);
 		t.keyboard = NULL;
 	}
 	if ((caps & WL_SEAT_CAPABILITY_POINTER) && !t.pointer) {
 		t.pointer = wl_seat_get_pointer(s);
 		wl_pointer_add_listener(t.pointer, &ptr_listener, NULL);
 	} else if (!(caps & WL_SEAT_CAPABILITY_POINTER) && t.pointer) {
-		wl_pointer_release(t.pointer);
+		if (wl_pointer_get_version(t.pointer) >= WL_POINTER_RELEASE_SINCE_VERSION)
+			wl_pointer_release(t.pointer);
+		else
+			wl_pointer_destroy(t.pointer);
 		t.pointer = NULL;
+		t.ptr_surface = NULL;
 	}
+}
+
+/* The clipboard and primary selection devices, once there are a seat and managers. */
+static void seat_devices(void)
+{
+	if (t.seat && t.ddm && !t.ddev) {
+		t.ddev = wl_data_device_manager_get_data_device(t.ddm, t.seat);
+		wl_data_device_add_listener(t.ddev, &dd_listener, NULL);
+	}
+	if (t.seat && t.psm && !t.pdev) {
+		t.pdev = zwp_primary_selection_device_manager_v1_get_device(t.psm, t.seat);
+		zwp_primary_selection_device_v1_add_listener(t.pdev, &pd_listener, NULL);
+	}
+}
+
+/* The seat went away: let go of it and all that hangs on it, so a later one binds. */
+static void seat_gone(void)
+{
+	menu_close();
+	seat_caps(NULL, t.seat, 0);
+	dd_leave(NULL, NULL);
+	dd_selection(NULL, NULL, NULL);
+	pd_selection(NULL, NULL, NULL);
+	if (t.ddev) {
+		if (wl_data_device_get_version(t.ddev) >= WL_DATA_DEVICE_RELEASE_SINCE_VERSION)
+			wl_data_device_release(t.ddev);
+		else
+			wl_data_device_destroy(t.ddev);
+		t.ddev = NULL;
+	}
+	if (t.pdev) {
+		zwp_primary_selection_device_v1_destroy(t.pdev);
+		t.pdev = NULL;
+	}
+	if (wl_seat_get_version(t.seat) >= WL_SEAT_RELEASE_SINCE_VERSION)
+		wl_seat_release(t.seat);
+	else
+		wl_seat_destroy(t.seat);
+	t.seat = NULL;
 }
 static void seat_name(void *d, struct wl_seat *s, const char *n) { (void)d; (void)s; (void)n; }
 static const struct wl_seat_listener seat_listener = { seat_caps, seat_name };
@@ -2323,6 +2393,7 @@ static void reg_global(void *d, struct wl_registry *r, uint32_t name,
 		xdg_wm_base_add_listener(t.wm_base, &wm_listener, NULL);
 	} else if (!strcmp(iface, wl_seat_interface.name) && !t.seat) {
 		t.seat = wl_registry_bind(r, name, &wl_seat_interface, MIN(ver, 5));
+		t.seat_name = name;
 		wl_seat_add_listener(t.seat, &seat_listener, NULL);
 	} else if (!strcmp(iface, zxdg_decoration_manager_v1_interface.name)) {
 		t.deco_mgr = wl_registry_bind(r, name, &zxdg_decoration_manager_v1_interface, 1);
@@ -2334,8 +2405,14 @@ static void reg_global(void *d, struct wl_registry *r, uint32_t name,
 	} else if (!strcmp(iface, wp_viewporter_interface.name)) {
 		t.viewporter = wl_registry_bind(r, name, &wp_viewporter_interface, 1);
 	}
+	seat_devices();
 }
-static void reg_remove(void *d, struct wl_registry *r, uint32_t name) { (void)d; (void)r; (void)name; }
+static void reg_remove(void *d, struct wl_registry *r, uint32_t name)
+{
+	(void)d; (void)r;
+	if (t.seat && name == t.seat_name)
+		seat_gone();
+}
 static const struct wl_registry_listener reg_listener = { reg_global, reg_remove };
 
 /* ---- pty and child ---------------------------------------------------- */
@@ -2593,14 +2670,6 @@ done:;
 	wl_display_roundtrip(t.display);
 	if (!t.compositor || !t.shm || !t.wm_base)
 		die("compositor lacks wl_compositor, wl_shm or xdg_wm_base");
-	if (t.seat && t.ddm) {
-		t.ddev = wl_data_device_manager_get_data_device(t.ddm, t.seat);
-		wl_data_device_add_listener(t.ddev, &dd_listener, NULL);
-	}
-	if (t.seat && t.psm) {
-		t.pdev = zwp_primary_selection_device_manager_v1_get_device(t.psm, t.seat);
-		zwp_primary_selection_device_v1_add_listener(t.pdev, &pd_listener, NULL);
-	}
 	load_cursor_theme();
 
 	t.surface = wl_compositor_create_surface(t.compositor);

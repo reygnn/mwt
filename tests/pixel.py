@@ -354,103 +354,185 @@ def test_hidpi():
 
 
 def xcursor(path, sizes):
-    """An Xcursor file with one square image per size, hotspot at a quarter."""
+    """An Xcursor file with one square image per size, hotspot just past a quarter,
+    where rounding and cutting off differ once a viewport scales it."""
     import struct
     toc = 16 + 12 * len(sizes)
     head, body = struct.pack("<4sIII", b"Xcur", 16, 0x10000, len(sizes)), b""
     for n in sizes:
         head += struct.pack("<III", 0xfffd0002, n, toc + len(body))
-        body += struct.pack("<9I", 36, 0xfffd0002, n, 1, n, n, n // 4, n // 4, 0)
+        body += struct.pack("<9I", 36, 0xfffd0002, n, 1, n, n, n // 4 + 1, n // 4 + 1, 0)
         body += b"\xff\x00\x00\xff" * (n * n)
     with open(path, "wb") as f:
         f.write(head + body)
 
 
+def cursor_env(theme, size="24"):
+    return {"XCURSOR_PATH": os.path.join(mwtlib.DIR, "icons"), "XCURSOR_THEME": theme,
+            "XCURSOR_SIZE": size, "WAYLAND_DEBUG": "client"}
+
+
+def cursor_theme(name, cursors):
+    d = os.path.join(mwtlib.DIR, "icons", name, "cursors")
+    os.makedirs(d, exist_ok=True)
+    for c in cursors:
+        xcursor(os.path.join(d, c), [24, 48, 64, 96])
+    return d
+
+
 def cursor_state(log):
-    """What the cursor surface (the last one given to set_cursor) holds after each
-    commit, from WAYLAND_DEBUG: (buffer size, buffer scale, viewport destination,
-    hotspot, preferred scales seen before it)."""
-    bufs, scale, view, surf_of_view, attached = {}, {}, {}, {}, {}
-    cursor, hot, states, seen = None, None, [], []
-    for line in open(log, errors="replace"):
-        if "preferred_buffer_scale(" in line and " -> " not in line:
-            seen.append(int(re.search(r"\((\d+)\)", line)[1]))
-            states.append(("scale", seen[-1]))
-        if (m := re.search(r"wl_pointer#\d+\.(enter|leave)\(", line)) and " -> " not in line:
-            states.append((m[1],))
+    """From WAYLAND_DEBUG, in order: preferred scales, pointer enter and leave,
+    set_cursor with its hotspot, and each commit of the cursor surface (the last one
+    given to set_cursor) with what it holds: buffer size, buffer scale, viewport
+    destination. Also a buffer destroyed while the cursor surface holds it, and a
+    NULL attached to it."""
+    lines = open(log, errors="replace").read().splitlines()
+    cursor = None
+    for line in lines:
+        if " -> " in line and (m := re.search(r"set_cursor\(\d+, wl_surface#(\d+),", line)):
+            cursor = m[1]
+    bufs, scale, view, surf_of_view = {}, 1, None, {}
+    held, states = None, []
+    for line in lines:
         if " -> " not in line:
+            if "preferred_buffer_scale(" in line:
+                states.append(("scale", int(re.search(r"\((\d+)\)", line)[1])))
+            elif m := re.search(r"wl_pointer#\d+\.(enter|leave)\(", line):
+                states.append((m[1],))
             continue
         if m := re.search(r"create_buffer\(new id wl_buffer#(\d+), -?\d+, (\d+), (\d+),", line):
             bufs[m[1]] = (int(m[2]), int(m[3]))
+        elif m := re.search(r"wl_buffer#(\d+)\.destroy\(\)", line):
+            if m[1] == held:
+                states.append(("destroyed_held", bufs.get(m[1])))
         elif m := re.search(r"wl_surface#(\d+)\.set_buffer_scale\((\d+)\)", line):
-            scale[m[1]] = int(m[2])
+            if m[1] == cursor:
+                scale = int(m[2])
         elif m := re.search(r"get_viewport\(new id wp_viewport#(\d+), wl_surface#(\d+)\)", line):
             surf_of_view[m[1]] = m[2]
         elif m := re.search(r"wp_viewport#(\d+)\.set_destination\((-?\d+), (-?\d+)\)", line):
-            view[surf_of_view[m[1]]] = (int(m[2]), int(m[3]))
+            if surf_of_view.get(m[1]) == cursor:
+                view = (int(m[2]), int(m[3]))
         elif m := re.search(r"wp_viewport#(\d+)\.destroy\(\)", line):
-            view.pop(surf_of_view.pop(m[1], None), None)
-        elif m := re.search(r"wl_surface#(\d+)\.attach\(wl_buffer#(\d+)", line):
-            attached[m[1]] = bufs.get(m[2])
-        elif m := re.search(r"set_cursor\(\d+, wl_surface#(\d+), (-?\d+), (-?\d+)\)", line):
-            cursor, hot = m[1], (int(m[2]), int(m[3]))
-            states.append(("set_cursor", hot))
-        elif cursor and (m := re.search(r"wl_surface#(\d+)\.commit\(\)", line)) and m[1] == cursor:
-            states.append(("commit", attached.get(cursor), scale.get(cursor, 1), view.get(cursor)))
+            if surf_of_view.pop(m[1], None) == cursor:
+                view = None
+        elif m := re.search(r"wl_surface#(\d+)\.attach\((nil|wl_buffer#(\d+))", line):
+            if m[1] == cursor:
+                held = m[3]
+                if m[2] == "nil":
+                    states.append(("attach_nil",))
+        elif m := re.search(r"set_cursor\(\d+, wl_surface#\d+, (-?\d+), (-?\d+)\)", line):
+            states.append(("set_cursor", (int(m[1]), int(m[2]))))
+        elif (m := re.search(r"wl_surface#(\d+)\.commit\(\)", line)) and m[1] == cursor:
+            states.append(("commit", bufs.get(held), scale, view))
     return states
 
 
 def test_cursor_scale():
     """The cursor at scale 3 from a theme that has 24, 48, 64 and 96 pixels, as Adwaita:
-    a buffer scale must divide the buffer, or the surface is in error. And it is set
-    anew when the scale changes, not only on the next enter."""
-    theme = os.path.join(mwtlib.DIR, "icons", "squares", "cursors")
-    os.makedirs(theme)
-    xcursor(os.path.join(theme, "text"), [24, 48, 64, 96])
+    a buffer scale must divide the buffer, or the surface is in error. It is set anew
+    when the scale changes, not only on the next enter, and the cursor surface never
+    holds a buffer of a theme already destroyed, with the pointer on the window or
+    away from it."""
+    cursor_theme("squares", ["text"])
     log = os.path.join(mwtlib.DIR, "wayland-debug")
-    env = {"XCURSOR_PATH": os.path.join(mwtlib.DIR, "icons"), "XCURSOR_THEME": "squares",
-           "XCURSOR_SIZE": "24", "WAYLAND_DEBUG": "client"}
     mouse = Mouse()
-    with Window(geometry="30x8", env=env, stderr=log):
+    with Window(geometry="30x8", env=cursor_env("squares"), stderr=log):
         x, y, w, h = rect()
         mouse.send("move", x + w // 2, y + h // 2)
         time.sleep(0.3)
         for s in (2, 3, 1):
             swaymsg("output", "HEADLESS-1", "scale", str(s))
             time.sleep(0.8)
+        mouse.send("move", 999, 699)
+        time.sleep(0.3)
+        for s in (2, 1):
+            swaymsg("output", "HEADLESS-1", "scale", str(s))
+            time.sleep(0.8)
         settle()
-    mouse.send("move", 999, 699)
     mouse.close()
     swaymsg("output", "HEADLESS-1", "scale", "1")
     states = cursor_state(log)
     commits = [st for st in states if st[0] == "commit"]
     bad = [st for st in commits if st[1] and st[3] is None and (st[1][0] % st[2] or st[1][1] % st[2])]
     check(commits and not bad, "the cursor's buffer scale divides its buffer", f"{bad or states}")
+    gone = [st for st in states if st[0] == "destroyed_held"]
+    check(not gone, "the cursor surface never holds a destroyed buffer", f"{gone} in {states}")
+    first = next((i for i, st in enumerate(states) if st[0] == "scale" and st[1] != 1), len(states))
+    nil = [st for st in states[first:] if st[0] == "attach_nil"]
+    check(not nil, "the cursor surface is not emptied at a scale change", f"{states}")
     # After each preferred scale: a commit of the new image, and with the pointer
     # inside, a set_cursor for the new hotspot before any new enter.
-    inside, cur, after = False, None, {}
+    inside, after = False, []
     for st in states:
         if st[0] in ("enter", "leave"):
             inside = st[0] == "enter"
         if st[0] == "scale":
-            cur = st[1]
-            after[cur] = []
-        elif cur is not None:
-            after[cur].append((*st, inside) if st[0] == "commit" else st)
-    for s, want in ((2, ((48, 48), 2, None, (6, 6))), (3, ((64, 64), 1, (21, 21), (5, 5))),
-                    (1, ((24, 24), 1, None, (6, 6)))):
-        got = after.get(s, [])
+            after.append((st[1], []))
+        elif after:
+            after[-1][1].append((*st, inside) if st[0] == "commit" else st)
+    want = [(2, (48, 48), 2, None, (7, 7)), (3, (64, 64), 1, (21, 21), (6, 6)),
+            (1, (24, 24), 1, None, (7, 7)), (2, (48, 48), 2, None, None), (1, (24, 24), 1, None, None)]
+    if not check(len(after) >= len(want) and [a[0] for a in after[-5:]] == [w[0] for w in want],
+                 "the scale changes arrive", f"{[a[0] for a in after]}"):
+        return
+    for (s, got), (_, size, bscale, dest, hot) in zip(after[-5:], want):
         ci = [i for i, st in enumerate(got) if st[0] == "commit"]
+        where = "on the window" if hot else "away"
         if not ci:
-            fail(f"scale {s}: the cursor is not loaded anew: {got}")
+            fail(f"scale {s}, pointer {where}: the cursor is not loaded anew: {got}")
             continue
         commit, rest = got[ci[-1]], got[ci[-1] + 1:]
         if commit[4]:
             rest = rest[:next((i for i, st in enumerate(rest) if st[0] == "enter"), len(rest))]
         hs = [st[1] for st in rest if st[0] == "set_cursor"]
-        check(commit[1:4] == want[:3] and hs and hs[0] == want[3],
-              f"scale {s}: the cursor is {want[0][0]} pixels at scale {want[1]}, hotspot {want[3]}, at once",
-              f"{got}")
+        check(commit[1:4] == (size, bscale, dest) and (hot is None or hs and hs[0] == hot),
+              f"scale {s}, pointer {where}: the cursor is {size[0]} pixels at scale {bscale}"
+              + (f", hotspot {hot}, at once" if hot else ""), f"{got}")
+
+
+def test_cursor_size():
+    """A huge XCURSOR_SIZE gives the largest cursor, also at scale 3, where size times
+    scale would overflow an int."""
+    cursor_theme("squares", ["text"])
+    log = os.path.join(mwtlib.DIR, "wayland-debug-size")
+    mouse = Mouse()
+    with Window(geometry="30x8", env=cursor_env("squares", "1000000000"), stderr=log):
+        x, y, w, h = rect()
+        mouse.send("move", x + w // 2, y + h // 2)
+        time.sleep(0.3)
+        swaymsg("output", "HEADLESS-1", "scale", "3")
+        time.sleep(0.8)
+        settle(scale=3)
+        mouse.send("move", 999, 699)
+    mouse.close()
+    swaymsg("output", "HEADLESS-1", "scale", "1")
+    time.sleep(0.5)
+    commits = [st for st in cursor_state(log) if st[0] == "commit"]
+    check(commits and commits[-1][1] == (96, 96), "XCURSOR_SIZE=1000000000 at scale 3: the largest cursor",
+          f"{commits}")
+
+
+def test_cursor_retry():
+    """A theme without a text cursor at the start; once it has one, the next enter
+    loads it."""
+    d = cursor_theme("partial", ["wait"])
+    log = os.path.join(mwtlib.DIR, "wayland-debug-retry")
+    mouse = Mouse()
+    mouse.send("move", 999, 699)
+    with Window(geometry="30x8", env=cursor_env("partial"), stderr=log):
+        xcursor(os.path.join(d, "text"), [24, 48, 64, 96])
+        x, y, w, h = rect()
+        mouse.send("move", x + w // 2, y + h // 2)
+        time.sleep(0.5)
+        mouse.send("move", 999, 699)
+        time.sleep(0.2)
+    mouse.close()
+    states = cursor_state(log)
+    commits = [st for st in states if st[0] == "commit"]
+    sets = [st for st in states if st[0] == "set_cursor"]
+    check(commits and commits[-1][1] == (24, 24) and sets and sets[-1][1] == (7, 7),
+          "a failed cursor load is tried again on the next enter", f"{states}")
 
 
 def test_mwtrc():
@@ -532,6 +614,8 @@ def main():
     test_zoom_tiled()
     test_hidpi()
     test_cursor_scale()
+    test_cursor_size()
+    test_cursor_retry()
     test_mwtrc()
     test_contrast()
     mouse.close()
