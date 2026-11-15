@@ -113,6 +113,26 @@ drag and drop, OSC 52, and most VT420 and xterm extensions that esctest checks. 
 list and other limits are in CAVEATS.md.
 
 
+## How this is built
+
+mwt is developed with Claude (Anthropic) as a coding assistant. I set the scope and the
+architecture and review the changes; Claude writes most of the code and the tests. The
+checks:
+
+* `make check` runs the VT core's unit tests and the kept fuzz findings under ASan and
+  UBSan; `make fuzz` searches for new ones with libFuzzer, and `make replay` plays
+  about 290 recorded terminal files through the core.
+* `make test`, `make keys`, `make pixel`, `make mouse` and `make keyboard` drive mwt
+  under a headless sway with a simulated mouse and keyboard, and check what it sends to
+  the program and what it draws.
+* `make evil` runs all of it in a container, with sanitizers, leak checks and
+  adversarial cases such as floods, stalled pipes and running out of memory.
+* `make terminfo` checks that `mwt.info` promises only what mwt does.
+* Every fix comes with a test that fails without it, checked by taking the fix out.
+* What is left open is written down rather than hidden: see CAVEATS.md, TODO, and the
+  reviews in `docs/history`.
+
+
 ## In mwc
 
 Frames come through xdg-decoration. xdg-shell has no size step, so mwt snaps a floating
