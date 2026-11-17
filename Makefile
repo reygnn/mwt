@@ -46,11 +46,13 @@ test_rc: test_rc.c rc.c rc.h
 	$(CC) -std=c11 -Wall -Wextra -g -fsanitize=address,undefined -fno-sanitize-recover=all \
 		-o $@ test_rc.c rc.c -lm
 
-# test_vt and test_rc, then every input kept in tests/fuzz-regress through the checks of
-# tests/fuzz_vt.c; no clang needed for that.
-check: test_vt test_rc fuzz_regress
+# test_vt and test_rc, mwt's command line without a compositor (tests/args.sh), then
+# every input kept in tests/fuzz-regress through the checks of tests/fuzz_vt.c; no
+# clang needed for that.
+check: test_vt test_rc fuzz_regress mwt
 	./test_vt
 	./test_rc
+	tests/args.sh
 	@./fuzz_regress tests/fuzz-regress/* 2>fuzz_regress.log || { cat fuzz_regress.log; exit 1; }
 	@rm -f fuzz_regress.log
 

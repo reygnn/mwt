@@ -13,7 +13,7 @@ use mwc's `vinput` need `MWC_DIR`, which defaults to `../../mwc`:
 | Target | |
 |---|---|
 | `make` | mwt |
-| `make check` | `test_vt`, `test_rc` and the kept fuzz findings in `tests/fuzz-regress`, under ASan and UBSan, headless |
+| `make check` | `test_vt`, `test_rc` and the kept fuzz findings in `tests/fuzz-regress`, under ASan and UBSan, and mwt's command line (`tests/args.sh`), headless |
 | `make replay` | about 290 recorded VT100 animations and ANSI files through the VT core; `REPORT=1` lists what mwt lacks |
 | `make fuzz` | libFuzzer on the VT core, `FUZZ_TIME` seconds (600); clang on the host or the `make evil` container |
 | `make terminfo` | each capability of `mwt.info` against the VT core; python3 and ncurses |
