@@ -12,10 +12,9 @@ TODO
   minimumContrast. Wenn nötig die Schrift und padding; Farbnamen wie in mwc
   nur mit einer eigenen Tabelle, mwt hat kein pango.
 
-* find_fallback hält eine Schrift für schon geöffnet, wenn ihr Pfad gleich
-  ist, und übersieht den Index: eine andere Schrift aus derselben .ttc wird
-  abgelehnt. Pfad und Index vergleichen; der Test braucht eine .ttc im Image
-  von make fonts.
+* find_fallback vergleicht Pfad und Index (seit der FcFontSort-Liste), eine
+  andere Schrift aus derselben .ttc wird also genommen. Ein Test fehlt: er
+  braucht eine .ttc im Image von make fonts, aus der zwei Schriften nötig sind.
 
 Zu entscheiden, aus der dritten Review (docs/history/Review-2026-11-08.md):
 
@@ -33,6 +32,15 @@ Zu entscheiden, aus der dritten Review (docs/history/Review-2026-11-08.md):
 
 Tests, die noch fehlen, als Kür:
 
+* make rediwm: keys.py, mouse.py, keyboard.py und pixel.py unter RediWM
+  (github.com/oxydizer/rediwm), headless in einem eigenen Podman-Image wie
+  make oldwayland. RediWM baut auf wlroots 0.20, sway und mwc auf 0.19; es hat
+  virtual-keyboard, virtual-pointer und screencopy. Es braucht Zig 0.17 und
+  wlroots 0.20 aus scripts/build-wlroots.sh, beides nicht in Ubuntu 26.04, und
+  in mwtlib.py eine Schicht, die die Fenstergröße über rediwm-msg statt
+  swaymsg liest. Fälle mit sway-Befehlen (floating_maximum_size, input,
+  seat) entfallen dort. Zu sehen: ob ein abgezogenes Gerät dort Release und
+  Leave schickt (mouse.py test_device_gone).
 * Andere Compositoren (weston, labwc), auch wegen fehlender Protokolle. vttest.
   Bildschirmvergleich gegen tmux capture-pane mit aufgezeichneten Sitzungen von
   vim oder htop.
