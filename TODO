@@ -12,6 +12,11 @@ TODO
   minimumContrast. Wenn nötig die Schrift und padding; Farbnamen wie in mwc
   nur mit einer eigenen Tabelle, mwt hat kein pango.
 
+* find_fallback hält eine Schrift für schon geöffnet, wenn ihr Pfad gleich
+  ist, und übersieht den Index: eine andere Schrift aus derselben .ttc wird
+  abgelehnt. Pfad und Index vergleichen; der Test braucht eine .ttc im Image
+  von make fonts.
+
 Zu entscheiden, aus der dritten Review (docs/history/Review-2026-11-08.md):
 
 * Eine Selektion bleibt auf Text stehen, den das Programm überschreibt, und
