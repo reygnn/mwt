@@ -950,12 +950,12 @@ static void decrqcra(struct vt *vt)
 		int v = i < n && vt->params[off + i] > 0 ? vt->params[off + i] : dflt[i];
 		e[i] = rect_edge(vt, v, i % 2 == 0);
 	}
-	int sum = 0;
+	unsigned sum = 0; /* 4096x2048 cells of up to 374 each pass INT_MAX */
 	if (e[0] <= e[2] && e[1] <= e[3])
 		for (int r = e[0] - 1; r < e[2]; r++)
 			for (int x = e[1] - 1; x < e[3]; x++)
 				sum += checksum_cell(&vt->line[r][x]);
-	reply(vt, "\033P%d!~%04X\033\\", arg(vt, 0, 0), (unsigned)-sum & 0xffff);
+	reply(vt, "\033P%d!~%04X\033\\", arg(vt, 0, 0), -sum & 0xffff);
 }
 
 static void csi_dispatch(struct vt *vt, uint32_t f)
@@ -1400,7 +1400,8 @@ static void feed(struct vt *vt, uint32_t cp)
 			vt->osc_bel = true;
 			osc_dispatch(vt);
 			vt->state = ST_GROUND;
-		} else if (cp >= 0x20) {
+		} else if (cp >= 0x20 && cp != 0x7f && (cp < 0x80 || cp >= 0xa0)) {
+			/* titles go on to the compositor and its bars: no controls */
 			osc_put(vt, cp);
 		}
 		break;

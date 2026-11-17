@@ -20,7 +20,8 @@ without a terminal; mwt does not kill it.
 
 `-g` and the window are limited to a grid of 4096x2048 and a buffer under 2 GiB. With a
 9x18 pixel font that is about 1800x1800 cells; `-g` refuses more with exit code 2, and
-the grid stays at 4096x2048 in the largest window.
+the grid stays at 4096x2048 in the largest window. A zoom that would pass 2 GiB is
+refused, with a message on stderr.
 
 There is no reflow: shrinking the window cuts off what no longer fits.
 
@@ -94,6 +95,12 @@ DECSCL, and the DECDSR reports for printer, keyboard and locator.
 
 Combining characters are discarded, see Character widths. Setting colors through OSC is
 ignored; queries are answered.
+
+
+## Input
+
+mwt binds the first seat the compositor announces. Should that seat go away, another one
+it announced already is not taken up; only a seat announced later is.
 
 
 ## Installation

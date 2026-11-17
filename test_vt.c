@@ -734,6 +734,37 @@ static void test_checksum(void)
 	vt_free(vt);
 }
 
+/* The sum over a large screen passes INT_MAX: 4096x1500 cells of 374 each */
+static void test_checksum_large(void)
+{
+	struct vt *vt = mk(4096, 1500, 0);
+	vt->allow_checksum = true;
+	size_t n = (size_t)4096 * 1500;
+	char *s = malloc(n + 1);
+	CHECK(s != NULL);
+	if (!s) {
+		vt_free(vt);
+		return;
+	}
+	memset(s, '~', n);
+	s[n] = 0;
+	w(vt, "\033[1;4;5;7;8m"); /* '~' 0x7e plus 0x08 0x10 0x20 0x40 0x80 */
+	w(vt, s);
+	w(vt, "\033[0m\033[1*y");
+	CHECK_STR(replybuf, "\033P1!~8000\033\\");
+	free(s);
+	vt_free(vt);
+}
+
+static void test_osc_controls(void)
+{
+	/* DEL and C1 never get into a title, which goes on to the compositor */
+	struct vt *vt = mk(10, 2, 0);
+	w(vt, "\033]2;a\x7f" "b\xc2\x85" "c\xc2\x9b" "d\xc3\xa4\a");
+	CHECK_STR(titlebuf, "abcd\xc3\xa4");
+	vt_free(vt);
+}
+
 static void test_charset_and_misc(void)
 {
 	struct vt *vt = mk(10, 3, 0);
@@ -1065,6 +1096,8 @@ int main(void)
 	test_color_queries();
 	test_keys();
 	test_checksum();
+	test_checksum_large();
+	test_osc_controls();
 	test_charset_and_misc();
 	test_unsupported_vt100();
 	test_resize();

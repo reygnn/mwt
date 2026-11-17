@@ -39,11 +39,12 @@ rc.o: rc.c rc.h
 	$(SCANNER) private-code $($*_XML) $@
 
 test_vt: test_vt.c vt.c vt.h version.h
-	$(CC) -std=c11 -Wall -Wextra -g -fsanitize=address,undefined \
+	$(CC) -std=c11 -Wall -Wextra -g -fsanitize=address,undefined -fno-sanitize-recover=all \
 		-Wl,--wrap=malloc,--wrap=calloc,--wrap=realloc -o $@ test_vt.c vt.c
 
 test_rc: test_rc.c rc.c rc.h
-	$(CC) -std=c11 -Wall -Wextra -g -fsanitize=address,undefined -o $@ test_rc.c rc.c -lm
+	$(CC) -std=c11 -Wall -Wextra -g -fsanitize=address,undefined -fno-sanitize-recover=all \
+		-o $@ test_rc.c rc.c -lm
 
 # test_vt and test_rc, then every input kept in tests/fuzz-regress through the checks of
 # tests/fuzz_vt.c; no clang needed for that.

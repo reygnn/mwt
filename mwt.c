@@ -612,6 +612,8 @@ static void copy_clipboard(void)
 	if (t.clip_src)
 		wl_data_source_destroy(t.clip_src);
 	t.clip_src = wl_data_device_manager_create_data_source(t.ddm);
+	if (!t.clip_src) /* out of memory: the text stays, pasted here from it */
+		return;
 	for (size_t i = 0; i < LEN(mimes); i++)
 		wl_data_source_offer(t.clip_src, mimes[i]);
 	wl_data_source_add_listener(t.clip_src, &ds_listener, NULL);
@@ -630,6 +632,8 @@ static void copy_primary(void)
 	if (t.prim_src)
 		zwp_primary_selection_source_v1_destroy(t.prim_src);
 	t.prim_src = zwp_primary_selection_device_manager_v1_create_source(t.psm);
+	if (!t.prim_src)
+		return;
 	for (size_t i = 0; i < LEN(mimes); i++)
 		zwp_primary_selection_source_v1_offer(t.prim_src, mimes[i]);
 	zwp_primary_selection_source_v1_add_listener(t.prim_src, &ps_listener, NULL);
@@ -1151,6 +1155,15 @@ static bool buffer_fits(int w, int h)
 	return (size_t)w * h * 4 <= INT32_MAX;
 }
 
+/* Once until a buffer is made again: a failing one fails each frame. */
+static bool buffer_told;
+static void buffer_failed(int w, int h, const char *what)
+{
+	if (!buffer_told)
+		fprintf(stderr, "mwt: no %dx%d buffer: %s: %s\n", w, h, what, strerror(errno));
+	buffer_told = true;
+}
+
 static bool buffer_init(struct buffer *b, int w, int h)
 {
 	if (!buffer_fits(w, h)) {
@@ -1165,25 +1178,34 @@ static bool buffer_init(struct buffer *b, int w, int h)
 	 * window back at that size drew into it. */
 	size_t size = (size_t)w * h * 4;
 	int fd = memfd_create("mwt", MFD_CLOEXEC);
-	if (fd < 0)
+	if (fd < 0) {
+		buffer_failed(w, h, "memfd_create");
 		return false;
+	}
 	void *data = MAP_FAILED;
 	struct wl_buffer *wb = NULL;
-	if (ftruncate(fd, (off_t)size) == 0)
+	const char *what = "ftruncate";
+	if (ftruncate(fd, (off_t)size) == 0) {
+		what = "mmap";
 		data = mmap(NULL, size, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+	}
 	if (data != MAP_FAILED) {
+		what = "wl_shm";
 		struct wl_shm_pool *pool = wl_shm_create_pool(t.shm, fd, (int32_t)size);
 		if (pool) {
 			wb = wl_shm_pool_create_buffer(pool, 0, w, h, w * 4, WL_SHM_FORMAT_XRGB8888);
 			wl_shm_pool_destroy(pool);
 		}
 	}
+	if (!wb)
+		buffer_failed(w, h, what);
 	close(fd);
 	if (!wb) {
 		if (data != MAP_FAILED)
 			munmap(data, size);
 		return false;
 	}
+	buffer_told = false;
 	if (b->wb) {
 		wl_buffer_destroy(b->wb);
 		munmap(b->data, b->size);
@@ -1305,8 +1327,13 @@ static void draw(void)
 
 	bool full = t.need_full;
 	if (b->w != W || b->h != H) {
-		if (!buffer_init(b, W, H))
+		if (!buffer_init(b, W, H)) {
+			/* nothing shown yet: the window would never appear, the
+			 * shell would run unseen */
+			if (!t.last)
+				die("no buffer for the first frame");
 			return;
+		}
 		full = true;
 	}
 	if (b != t.last) {
@@ -1351,7 +1378,8 @@ static void draw(void)
 	wl_surface_set_buffer_scale(t.surface, t.scale);
 	wl_surface_attach(t.surface, b->wb, 0, 0);
 	t.frame_cb = wl_surface_frame(t.surface);
-	wl_callback_add_listener(t.frame_cb, &frame_listener, NULL);
+	if (t.frame_cb) /* out of memory: no pacing, the next change draws */
+		wl_callback_add_listener(t.frame_cb, &frame_listener, NULL);
 	wl_surface_commit(t.surface);
 	b->busy = true;
 	t.last = b;
@@ -1543,6 +1571,13 @@ static const struct xdg_popup_listener popup_listener = {
 	popup_configure, popup_done, popup_repositioned,
 };
 
+static void stop_repeat(void)
+{
+	struct itimerspec its = { 0 };
+	timerfd_settime(t.repeat_fd, 0, &its, NULL);
+	t.repeat_key = 0;
+}
+
 /* opens at the pointer; needs the serial of the button press in t.serial */
 static void menu_open(void)
 {
@@ -1553,11 +1588,22 @@ static void menu_open(void)
 	t.menu.w = (MENU_COLS * t.cw + 2 * t.scale + t.scale - 1) / t.scale;
 	t.menu.h = ((int)LEN(menu_items) * t.menu.row_h + 2 * t.scale + t.scale - 1) / t.scale;
 
+	stop_repeat(); /* the menu takes the keys, the release may never come here */
 	t.menu.surface = wl_compositor_create_surface(t.compositor);
-	t.menu.xsurface = xdg_wm_base_get_xdg_surface(t.wm_base, t.menu.surface);
+	t.menu.xsurface = t.menu.surface ?
+		xdg_wm_base_get_xdg_surface(t.wm_base, t.menu.surface) : NULL;
+	struct xdg_positioner *pos = t.menu.xsurface ?
+		xdg_wm_base_create_positioner(t.wm_base) : NULL;
+	if (!pos) { /* out of memory: no menu */
+		if (t.menu.xsurface)
+			xdg_surface_destroy(t.menu.xsurface);
+		if (t.menu.surface)
+			wl_surface_destroy(t.menu.surface);
+		t.menu.xsurface = NULL;
+		t.menu.surface = NULL;
+		return;
+	}
 	xdg_surface_add_listener(t.menu.xsurface, &menu_xs_listener, NULL);
-
-	struct xdg_positioner *pos = xdg_wm_base_create_positioner(t.wm_base);
 	xdg_positioner_set_size(pos, t.menu.w, t.menu.h);
 	xdg_positioner_set_anchor_rect(pos, MIN(MAX((int)t.px, 0), t.width - 1),
 				       MIN(MAX((int)t.py, 0), t.height - 1), 1, 1);
@@ -1570,6 +1616,13 @@ static void menu_open(void)
 		XDG_POSITIONER_CONSTRAINT_ADJUSTMENT_SLIDE_Y);
 	t.menu.popup = xdg_surface_get_popup(t.menu.xsurface, t.xsurface, pos);
 	xdg_positioner_destroy(pos);
+	if (!t.menu.popup) {
+		xdg_surface_destroy(t.menu.xsurface);
+		wl_surface_destroy(t.menu.surface);
+		t.menu.xsurface = NULL;
+		t.menu.surface = NULL;
+		return;
+	}
 	xdg_popup_add_listener(t.menu.popup, &popup_listener, NULL);
 	xdg_popup_grab(t.menu.popup, t.seat, t.serial);
 	wl_surface_commit(t.menu.surface);
@@ -1677,6 +1730,18 @@ static void reload_font(double pt, int scale)
 	struct font *f = font_open(t.font_spec, pt, scale);
 	if (!f)
 		return;
+	/* A floating window keeps its grid and grows with the font: refuse a zoom
+	 * past what a buffer holds, as -g is refused, rather than stop drawing. */
+	int cw, ch, asc;
+	font_metrics(f, &cw, &ch, &asc);
+	if (scale == t.scale && t.configured && !t.cfg_fixed &&
+	    !buffer_fits(t.vt->cols * cw + 2 * padding * scale + scale,
+			 t.vt->rows * ch + 2 * padding * scale + scale)) {
+		fprintf(stderr, "mwt: %g pt would need a buffer over 2 GiB, staying at %g pt\n",
+			font_size_pt(f), t.font_pt);
+		font_close(f);
+		return;
+	}
 	font_close(t.font);
 	t.font = f;
 	t.font_pt = font_size_pt(f);
@@ -1916,10 +1981,16 @@ static void kb_keymap(void *d, struct wl_keyboard *kb, uint32_t fmt, int fd, uin
 	munmap(map, size);
 	if (!km)
 		return;
+	/* the old pair stays unless the new one is whole: keys keep working */
+	struct xkb_state *st = xkb_state_new(km);
+	if (!st) {
+		xkb_keymap_unref(km);
+		return;
+	}
 	xkb_state_unref(t.xkb_state);
 	xkb_keymap_unref(t.keymap);
 	t.keymap = km;
-	t.xkb_state = xkb_state_new(km);
+	t.xkb_state = st;
 }
 
 static void kb_enter(void *d, struct wl_keyboard *kb, uint32_t serial,
@@ -1934,13 +2005,6 @@ static void kb_enter(void *d, struct wl_keyboard *kb, uint32_t serial,
 	t.need_redraw = true;
 	if (t.vt->mode & MODE_FOCUS)
 		pty_puts("\033[I");
-}
-
-static void stop_repeat(void)
-{
-	struct itimerspec its = { 0 };
-	timerfd_settime(t.repeat_fd, 0, &its, NULL);
-	t.repeat_key = 0;
 }
 
 static void kb_leave(void *d, struct wl_keyboard *kb, uint32_t serial, struct wl_surface *s)
@@ -1965,6 +2029,9 @@ static void kb_key(void *d, struct wl_keyboard *kb, uint32_t serial, uint32_t ti
 	(void)d; (void)kb; (void)time;
 	t.serial = serial;
 	xkb_keycode_t code = key + 8;
+	/* before the menu takes keys: a release while it is open ends the repeat */
+	if (state != WL_KEYBOARD_KEY_STATE_PRESSED && code == t.repeat_key)
+		stop_repeat();
 	if (t.menu.popup) {
 		if (state == WL_KEYBOARD_KEY_STATE_PRESSED && t.xkb_state)
 			menu_key(xkb_state_key_get_one_sym(t.xkb_state, code));
@@ -1975,14 +2042,14 @@ static void kb_key(void *d, struct wl_keyboard *kb, uint32_t serial, uint32_t ti
 		if (t.repeat_rate > 0 && t.keymap && xkb_keymap_key_repeats(t.keymap, code)) {
 			t.repeat_key = code;
 			long iv = 1000000000L / t.repeat_rate;
+			/* a zero it_value disarms the timer: delay 0 would mean no repeat */
+			int delay = MAX(t.repeat_delay, 1);
 			struct itimerspec its = {
 				.it_interval = { iv / 1000000000L, iv % 1000000000L },
-				.it_value = { t.repeat_delay / 1000, (t.repeat_delay % 1000) * 1000000L },
+				.it_value = { delay / 1000, (delay % 1000) * 1000000L },
 			};
 			timerfd_settime(t.repeat_fd, 0, &its, NULL);
 		}
-	} else if (code == t.repeat_key) {
-		stop_repeat();
 	}
 }
 
@@ -2252,7 +2319,8 @@ static void seat_caps(void *d, struct wl_seat *s, uint32_t caps)
 		t.keyboard = wl_seat_get_keyboard(s);
 		wl_keyboard_add_listener(t.keyboard, &kb_listener, NULL);
 	} else if (!(caps & WL_SEAT_CAPABILITY_KEYBOARD) && t.keyboard) {
-		stop_repeat();
+		/* no leave comes for a keyboard that is gone: the focus goes with it */
+		kb_leave(NULL, t.keyboard, t.serial, NULL);
 		if (wl_keyboard_get_version(t.keyboard) >= WL_KEYBOARD_RELEASE_SINCE_VERSION)
 			wl_keyboard_release(t.keyboard);
 		else
@@ -2263,6 +2331,13 @@ static void seat_caps(void *d, struct wl_seat *s, uint32_t caps)
 		t.pointer = wl_seat_get_pointer(s);
 		wl_pointer_add_listener(t.pointer, &ptr_listener, NULL);
 	} else if (!(caps & WL_SEAT_CAPABILITY_POINTER) && t.pointer) {
+		/* nor a release for buttons it held: a program in mouse mode would
+		 * wait for one, and a drag would go on with the next pointer */
+		for (uint32_t b = 0; b < 3; b++)
+			if (t.buttons & 1u << b)
+				ptr_button(NULL, t.pointer, t.serial, 0,
+					   b == 0 ? BTN_LEFT : b == 1 ? BTN_MIDDLE : BTN_RIGHT,
+					   WL_POINTER_BUTTON_STATE_RELEASED);
 		if (wl_pointer_get_version(t.pointer) >= WL_POINTER_RELEASE_SINCE_VERSION)
 			wl_pointer_release(t.pointer);
 		else
@@ -2488,6 +2563,9 @@ static void spawn(char **argv)
 		sigset_t none;
 		sigemptyset(&none);
 		sigprocmask(SIG_SETMASK, &none, NULL);
+		/* nor what mwt was given open: what mwt opens is CLOEXEC, an fd
+		 * its parent left open would reach the shell and all it starts */
+		close_range(3, ~0U, 0);
 		if (argv && argv[0]) {
 			execvp(argv[0], argv);
 			perror(argv[0]);

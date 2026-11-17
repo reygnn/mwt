@@ -102,6 +102,18 @@ def test_repeat():
     log.close()
 
 
+def test_repeat_no_delay():
+    """A delay of 0, which sway passes on: a zero first expiry disarmed the
+    timer, so nothing repeated at all."""
+    mwtlib.swaymsg("input", "type:keyboard", "repeat_delay", "0")
+    log = session(b"")
+    hold("x", 700).wait()
+    got = log.take()
+    check(set(got) == {ord("x")} and len(got) >= 5, "a repeat delay of 0 repeats at once", repr(got))
+    mwtlib.swaymsg("input", "type:keyboard", "repeat_delay", "600")
+    log.close()
+
+
 def test_repeat_and_focus():
     log = session(b"")
     w = hold("x", 2800)
@@ -164,6 +176,7 @@ def main():
     test_pending_and_other_keys()
     test_pending_and_focus()
     test_repeat()
+    test_repeat_no_delay()
     test_repeat_and_focus()
     test_repeat_keyboard_gone()
     mouse.close()

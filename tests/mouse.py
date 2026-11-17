@@ -229,6 +229,20 @@ def test_x10_limit():
     log.close()
 
 
+def test_device_gone():
+    """The only pointer and keyboard go away with a button down, as a pulled USB
+    device does: the compositor sends no release and no leave. A program in
+    mouse mode waited for the release, and the focus stayed in."""
+    log = session(b"\033[?1002;1006;1004h")
+    at(5, 5)
+    mouse.send("down", "left")
+    log.take(sgr(0, 5, 5))
+    mouse.p.kill()
+    mouse.p.wait()
+    expect(log, "a device gone with a button down: focus out and a release", b"\033[O" + sgr(0, 5, 5, False))
+    log.close()
+
+
 def main():
     global mouse
     # Its virtual keyboard also keeps one on the seat, without one no window has focus.
@@ -243,6 +257,7 @@ def main():
     test_modifiers()
     test_off()
     test_x10_limit()
+    test_device_gone()  # last: it takes the mouse away
     mouse.close()
     return finish()
 

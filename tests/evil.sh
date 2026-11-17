@@ -48,6 +48,8 @@ cat >"$DIR/sway.conf" <<'EOF'
 output HEADLESS-1 resolution 1000x700 position 0 0
 default_border none
 default_floating_border none
+# no limit, as in compositors that have none: zoom_limit needs a window over 2 GiB
+floating_maximum_size -1 x -1
 for_window [app_id="mwt"] floating enable, move position 20 20
 EOF
 
@@ -1150,6 +1152,20 @@ fd_leak() {
 	b=$(ls /proc/"$pid"/fd | wc -l)
 	if [ "$b" -gt $((a + 3)) ]; then gap "file descriptors: $a -> $b after 25 paste/copy rounds"; else ok "file descriptors stay at $a -> $b"; fi
 }
+# An fd left open by whoever starts mwt is not for the shell: mwt's own are
+# CLOEXEC, this one is not.
+fd_to_child() {
+	exec 5>"$DIR/inherited"
+	start_mwt
+	exec 5>&-
+	rm -f "$HOME/fds.txt"
+	T 'ls -l /proc/$$/fd >~/fds.txt' -k Return
+	local i
+	for ((i = 0; i < 25; i++)); do [ -s "$HOME/fds.txt" ] && break; sleep 0.2; done
+	if [ ! -s "$HOME/fds.txt" ]; then gap "the shell did not list its fds"
+	elif grep -q inherited "$HOME/fds.txt"; then gap "the shell has an fd mwt was started with: $(grep inherited "$HOME/fds.txt" | cut -c1-90)"
+	else ok "an fd mwt was started with does not reach the shell"; fi
+}
 stalled_readers() {
 	start_mwt
 	T "seq -f '%078g' 1 6000" -k Return
@@ -1406,6 +1422,37 @@ buffer_fail() {
 	sleep 0.5
 	if alive; then ok "with memfd_create back, zooming works again"; else gap "with memfd_create back, a zoom killed mwt"; fi
 }
+# memfd_create failing from the start: no buffer, so the window never shows.
+# mwt went on invisible, with the shell running; it has to say so and end.
+first_buffer_fail() {
+	[ -n "$FAILMEMFD" ] || { info "failmemfd did not build"; return 0; }
+	local fail=$DIR/fail-memfd i
+	touch "$fail"
+	start_mwt LD_PRELOAD="$FAILMEMFD" MWT_FAIL_MEMFD="$fail" \
+		ASAN_OPTIONS=detect_leaks=0:verify_asan_link_order=0
+	for ((i = 0; i < 25; i++)); do alive || break; sleep 0.2; done
+	rm -f "$fail"
+	if alive; then gap "without a first buffer mwt runs on, unseen"; stop_mwt
+	elif grep -q 'no buffer for the first frame' "$LOG"; then ok "without a first buffer mwt ends: $(grep -m1 'no .*buffer' "$LOG" | cut -c1-80)"
+	else gap "without a first buffer mwt ended without saying why: $(tail -1 "$LOG" | cut -c1-80)"; fi
+}
+# A floating window keeps its grid when zoomed, so the buffer grows with the
+# font. 2048x1500 at 11 pt is just under 2 GiB, at 12 pt over: the zoom is
+# refused, as -g is, instead of a window that stops drawing. The first frame
+# of 2 GiB takes a while, under ASan longer: the key waits.
+zoom_limit() {
+	LOG=$DIR/log.$CASE
+	(cd "$HOME" && "$MWT" -g 2048x1500 -e sleep 300 >"$LOG" 2>&1 &)
+	local i
+	for ((i = 0; i < 50; i++)); do swaymsg -t get_tree | grep -q '"app_id": "mwt"' && break; sleep 0.2; done
+	K plus
+	for ((i = 0; i < 300; i++)); do grep -q 'buffer over 2 GiB' "$LOG" && break; sleep 0.2; done
+	if grep -q 'would need a buffer over 2 GiB, staying' "$LOG" && ! grep -q 'not drawing' "$LOG"; then
+		ok "a zoom past a 2 GiB buffer is refused, mwt stays at its size"
+	else gap "a zoom past a 2 GiB buffer: $(grep -m1 '2 GiB' "$LOG" | cut -c1-90)"; fi
+	alive || gap "mwt died"
+	stop_mwt
+}
 compositor_dies() {
 	start_mwt
 	T 'sleep 777' -k Return
@@ -1424,7 +1471,7 @@ for c in dcs_swallow osc_swallow_cat fuzz noncharacters \
 	snippet_typed snippet_paste snippet_paste_no_newline \
 	stty_raw_read_in_shell inlcr tcoff cyrillic_ctrl_c cyrillic_raw copy_on_ru raw_paste_ctrl_c paste_bracket_on_signal python_repl flood_ctrl_c flood_rss soak reply_flood reply_flood_raw title_flood title_flood_stalled \
 	args shells closed_stdio blocked_signals cwd_tricks exit_with_jobs close_ignores_hup \
-	tiny resize_storm fd_leak stalled_readers stalled_pipes silent_source plain_source flood_source fd_limit low_memory menu_abuse buffer_fail compositor_dies; do
+	tiny resize_storm fd_leak fd_to_child stalled_readers stalled_pipes silent_source plain_source flood_source fd_limit low_memory menu_abuse buffer_fail first_buffer_fail zoom_limit compositor_dies; do
 	run "$c"
 done
 echo "=== $GAPS gaps, $CRASHES crashes ==="
