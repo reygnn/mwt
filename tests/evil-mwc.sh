@@ -62,7 +62,8 @@ run() {
 	local t0=$SECONDS
 	"$1"
 	if grep -q 'AddressSanitizer\|runtime error' "$LOG" 2>/dev/null; then CRASHES=$((CRASHES + 1)); echo "CRASH [$CASE]"; grep -m1 -A14 'AddressSanitizer\|runtime error' "$LOG"; fi
-	if grep -qi 'critical\|protocol error\|lost the connection' "$LOG" 2>/dev/null; then echo "LOG   [$CASE] $(grep -i -m3 'critical\|protocol error\|lost the connection' "$LOG" | cut -c1-160 | tr '\n' '|')"; fi
+	if grep -qi 'protocol error' "$LOG" 2>/dev/null; then gap "Wayland protocol error: $(grep -i -m1 'protocol error' "$LOG" | cut -c1-160)"; fi
+	if grep -qi 'critical\|lost the connection' "$LOG" 2>/dev/null; then echo "LOG   [$CASE] $(grep -i -m3 'critical\|lost the connection' "$LOG" | cut -c1-160 | tr '\n' '|')"; fi
 	stop_mwt
 	rm -f "$HOME"/res*
 	echo "      ($1: $((SECONDS - t0))s)"

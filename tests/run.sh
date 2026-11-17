@@ -67,31 +67,8 @@ fail() {
 	tail -4 "$DIR/shown" 2>/dev/null | cut -c1-100 | sed 's/^/  shown: /'
 }
 
-sway -c "$DIR/sway.conf" >"$DIR/sway.log" 2>&1 &
-SWAY=$!
-for ((i = 0; i < 50; i++)); do
-	[ -S "$DIR/wayland-1" ] && break
-	sleep 0.1
-done
-[ -S "$DIR/wayland-1" ] || die "sway did not start"
-export WAYLAND_DISPLAY=wayland-1
-sleep 0.3
-export SWAYSOCK=$(ls "$DIR"/sway-ipc.*.sock 2>/dev/null | head -1)
-
-coproc VIN { "$VINPUT" 1000 700; }
-VIN_PID=$VIN_PID
-# Bash closes a coproc's descriptors in subshells, and `shown | grep` is one.
-exec 7>&"${VIN[1]}" 8<&"${VIN[0]}"
-v() { echo "$*" >&7; read -r -t 3 _ <&8; }
-
-# A new virtual keyboard per wtype call: sway hands its first key over in
-# wl_keyboard.enter, which a client must not take as a press. So each call
-# starts with a key mwt ignores.
-T() { wtype -k Shift_L "$@"; sleep 0.3; }
-K() { wtype -k Shift_L -M ctrl -M shift -k "$1" -m shift -m ctrl; sleep 0.3; }
-C() { wtype -k Shift_L -M ctrl -k "$1" -m ctrl; sleep 0.3; }
-# Shift held by a wtype in the background, while vinput clicks.
-shift_click() { wtype -k Shift_L -M shift -s 800 -m shift & sleep 0.3; v click "${1:-left}"; wait $!; sleep 0.1; }
+. tests/lib.sh
+sway_start || die "sway did not start"
 
 # What mwt shows, without the blank rows at the end. The pause keeps two drags
 # from counting as a double click.
@@ -131,23 +108,12 @@ expect_n() {
 # mwt ignore SIGINT and SIGQUIT. The shell in it must not.
 start_mwt() {
 	(cd "$HOME" && sh -c '"$0" >>"$1" 2>&1 &' "$MWT" "$LOG")
-	sleep 1.5
-	pgrep -f "^$MWT" >/dev/null || die "mwt did not start"
+	wait_window mwt || die "mwt did not start"
 }
 start_mwt
 
 # The grid in pixels, from the window; px gives the middle of a cell in X and Y.
-read -r W H < <(swaymsg -t get_tree | python3 -c '
-import json, sys
-def walk(n):
-    yield n
-    for k in ("nodes", "floating_nodes"):
-        for c in n.get(k, []):
-            yield from walk(c)
-for n in walk(json.load(sys.stdin)):
-    if n.get("app_id") == "mwt":
-        print(n["rect"]["width"], n["rect"]["height"])
-        break')
+read -r W H < <(window_rect mwt)
 [ -n "${W:-}" ] || die "no mwt window in sway's tree"
 CW=$(((W - 4) / 80))
 CH=$(((H - 4) / 24))

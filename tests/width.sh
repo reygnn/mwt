@@ -42,20 +42,9 @@ cleanup() {
 	rm -rf "$DIR"
 }
 trap cleanup EXIT
-sway -c "$DIR/sway.conf" >"$DIR/sway.log" 2>&1 &
-SWAY=$!
-for ((i = 0; i < 50; i++)); do
-	[ -S "$DIR/wayland-1" ] && break
-	sleep 0.1
-done
-[ -S "$DIR/wayland-1" ] || { echo "width: sway did not start"; exit 1; }
-export WAYLAND_DISPLAY=wayland-1
-sleep 0.3
-coproc VIN { "$VINPUT" 1000 700; }
-exec 7>&"${VIN[1]}" 8<&"${VIN[0]}"
-v() { echo "$*" >&7; read -r -t 3 _ <&8; }
+. tests/lib.sh
+sway_start || { echo "width: sway did not start"; exit 1; }
 
-T() { wtype -k Shift_L "$@"; sleep 0.3; }
 # The whole screen through the primary selection, one line per row.
 shown() {
 	sleep 0.45
@@ -66,7 +55,7 @@ shown() {
 start_mwt() {
 	"$MWT" "$@" >>"$DIR/log" 2>&1 &
 	MPID=$!
-	sleep 1.5
+	wait_window mwt "$MPID"
 }
 stop_mwt() {
 	kill "$MPID" 2>/dev/null

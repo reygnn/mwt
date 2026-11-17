@@ -57,29 +57,10 @@ trap 'kill "${SWAY:-}" 2>/dev/null; pkill -x "$NAME" 2>/dev/null; rm -rf "$DIR"'
 SWAY=
 LOG=$DIR/log.none
 CASE=none
-start_sway() {
-	rm -f "$DIR/wayland-1" "$DIR"/sway-ipc.*
-	sway -c "$DIR/sway.conf" >"$DIR/sway.log" 2>&1 &
-	SWAY=$!
-	for ((i = 0; i < 50; i++)); do
-		[ -S "$DIR/wayland-1" ] && break
-		sleep 0.1
-	done
-	export WAYLAND_DISPLAY=wayland-1
-	sleep 0.3
-	export SWAYSOCK=$(ls "$DIR"/sway-ipc.*.sock 2>/dev/null | head -1)
-	coproc VIN { "$VINPUT" 1000 700; }
-	# Bash closes a coproc's descriptors in subshells, and `shown | grep` is one.
-	exec 7>&"${VIN[1]}" 8<&"${VIN[0]}"
-}
-v() { echo "$*" >&7; read -r -t 3 _ <&8; }
+. tests/lib.sh
+start_sway() { sway_start || { echo "evil: sway did not start"; exit 1; }; }
 start_sway
 
-T() { wtype -k Shift_L "$@"; sleep 0.3; }
-# Shift held by a wtype in the background, while vinput clicks.
-shift_click() { wtype -k Shift_L -M shift -s 800 -m shift & sleep 0.3; v click "${1:-left}"; wait $!; sleep 0.1; }
-K() { wtype -k Shift_L -M ctrl -M shift -k "$1" -m shift -m ctrl; sleep 0.3; }
-C() { wtype -k Shift_L -M ctrl -k "$1" -m ctrl; sleep 0.3; }
 # Selects the whole screen, or with sel_history everything from the top of the
 # scrollback. The pause keeps two drags from counting as a double click.
 sel_screen() { sleep 0.45; v move 21 21; v down left; v move 999 699; v up left; sleep 0.1; }
@@ -91,33 +72,36 @@ alive() { pgrep -x "$NAME" >/dev/null; }
 mwtpid() { pgrep -xn "$NAME"; }
 
 # The middle of rows 1 and 2 and of the last row, in pixels, for the 80x24 window.
+# Without a window to measure the cases would click wrong rows: none are set.
 measure() {
 	local w h
-	read -r w h < <(swaymsg -t get_tree | python3 -c 'import json,sys
-def walk(n):
-    yield n
-    for k in ("nodes", "floating_nodes"):
-        for c in n.get(k, []):
-            yield from walk(c)
-for n in walk(json.load(sys.stdin)):
-    if n.get("app_id") == "mwt":
-        print(n["rect"]["width"], n["rect"]["height"])
-        break')
-	[ -n "${h:-}" ] || return
+	read -r w h < <(window_rect mwt)
+	[ -n "${h:-}" ] || { echo "evil: no mwt window to measure the rows in"; exit 1; }
 	CH=$(((h - 4) / 24))
 	R1=$((22 + CH + CH / 2))
 	R2=$((R1 + CH))
 	R_LAST=$((22 + 23 * CH + CH / 2))
 }
 CH=
-R1=57
-R2=76
-R_LAST=450
+# Until the window shows, or mwt is gone: some cases start one that ends at once,
+# or that never gets a window. At most 10 s.
+wait_mwt() {
+	local i
+	for ((i = 0; i < 100; i++)); do
+		if [ -n "$(window_rect mwt)" ]; then
+			[ -n "${CH:-}" ] || measure
+			return 0
+		fi
+		[ "$i" -gt 5 ] && ! alive && return 1
+		[ -s "$DIR/rc" ] && return 1
+		sleep 0.1
+	done
+	return 1
+}
 start_mwt() {
 	LOG=$DIR/log.$CASE
 	(cd "$HOME" && env "$@" sh -c '"$0" >"$1" 2>&1 &' "$MWT" "$LOG")
-	sleep 1.5
-	[ -n "${CH:-}" ] || measure
+	wait_mwt
 }
 stop_mwt() {
 	pkill -x "$NAME" 2>/dev/null
@@ -136,8 +120,12 @@ check_log() {
 		echo "CRASH [$CASE] sanitizer:"
 		grep -m1 -A14 'AddressSanitizer\|runtime error' "$LOG"
 	fi
-	if grep -qi 'critical\|warning\|protocol error' "$LOG" 2>/dev/null; then
-		echo "LOG   [$CASE] $(grep -i -m3 'critical\|warning\|protocol error' "$LOG" | cut -c1-200 | tr '\n' '|')"
+	# a protocol error is mwt's fault, whatever the case provoked
+	if grep -qi 'protocol error' "$LOG" 2>/dev/null; then
+		gap "Wayland protocol error: $(grep -i -m1 'protocol error' "$LOG" | cut -c1-160)"
+	fi
+	if grep -qi 'critical\|warning' "$LOG" 2>/dev/null; then
+		echo "LOG   [$CASE] $(grep -i -m3 'critical\|warning' "$LOG" | cut -c1-200 | tr '\n' '|')"
 	fi
 }
 # run <name> <function>
@@ -145,6 +133,7 @@ run() {
 	CASE=$1
 	if [ -n "$ONLY" ] && ! [[ " $ONLY " == *" $1 "* ]]; then return; fi
 	local t0=$SECONDS
+	rm -f "$DIR/rc" # wait_mwt takes one as the end of mwt
 	"$1"
 	check_log
 	stop_mwt
@@ -360,14 +349,16 @@ select_history() {
 	shown >/dev/null
 	local top
 	top=$(grep -xE '[0-9]+' "$DIR/shown" | head -1)
-	if [ "${top:-0}" -ge 24970 ] && [ "${top:-0}" -le 24990 ]; then ok "scrollback keeps its 5000 lines, the top shows $top"; else gap "top of the scrollback after 30000 lines: '$top'"; fi
+	# 24 rows: 23 numbers, 29978 to 30000, and the prompt; 5000 lines above them
+	if [ "$top" = 24978 ]; then ok "scrollback keeps its 5000 lines, the top shows $top"; else gap "top of the scrollback after 30000 lines: '$top', expected 24978"; fi
 	pages Next 230
 	sel_history
 	K c
 	local n last
 	n=$(timeout 8 wl-paste -n | wc -l)
 	last=$(timeout 8 wl-paste -n | grep -xE '[0-9]+' | tail -1)
-	if [ "$last" = 30000 ] && [ "$n" -ge 5000 ] && [ "$n" -le 5030 ]; then ok "a selection over the whole scrollback, $n lines"; else gap "selection over the scrollback: $n lines, last '$last'"; fi
+	# 24978 to 30000 and the prompt, which ends without a newline: 5023
+	if [ "$last" = 30000 ] && [ "$n" = 5023 ]; then ok "a selection over the whole scrollback, $n lines"; else gap "selection over the scrollback: $n lines, expected 5023, last '$last'"; fi
 }
 click_clusters() {
 	start_mwt
@@ -1031,17 +1022,20 @@ shells() {
 	T 'echo shell-da' -k Return
 	if try 5 'shell-da'; then ok "an empty SHELL falls back to the passwd entry"; else gap "SHELL='': no usable shell"; fi
 	stop_mwt
+	# CAVEATS.md promises these: the window closes at once, and -e exits 0
+	local i
 	for s in /nichtda bash; do
 		start_mwt SHELL="$s"
-		alive && info "SHELL='$s': the window stays" || info "SHELL='$s': the window closes at once"
+		for ((i = 0; i < 25; i++)); do alive || break; sleep 0.2; done
+		if alive; then gap "SHELL='$s': the window stays, CAVEATS.md says it closes"; else ok "SHELL='$s': the window closes at once"; fi
 		stop_mwt
 	done
 	"$MWT" -e /nichtda/prog >"$LOG" 2>&1
 	rc=$?
-	info "mwt -e of a missing program: code $rc, stderr '$(head -1 "$LOG" | cut -c1-60)'"
+	if [ "$rc" = 0 ]; then ok "mwt -e of a missing program exits 0"; else gap "mwt -e of a missing program: code $rc, CAVEATS.md says 0"; fi
 	"$MWT" -e sh -c 'exit 7' >"$LOG" 2>&1
 	rc=$?
-	info "mwt -e of 'exit 7': code $rc"
+	if [ "$rc" = 0 ]; then ok "mwt -e of 'exit 7' exits 0"; else gap "mwt -e of 'exit 7': code $rc, CAVEATS.md says 0"; fi
 	: >"$LOG"
 }
 # With no terminfo mwt warns on stderr. Closed at the start, fd 2 may by then be
@@ -1053,8 +1047,7 @@ blocked_signals() {
 	(cd "$HOME" && python3 -c 'import os, signal, sys
 signal.pthread_sigmask(signal.SIG_BLOCK, {signal.SIGINT, signal.SIGTERM})
 os.execv(sys.argv[1], sys.argv[1:])' "$MWT" >"$LOG" 2>&1 &)
-	sleep 1.5
-	[ -n "${CH:-}" ] || measure
+	wait_mwt
 	T 'grep SigBlk /proc/self/status | tr -d "\t "' -k Return
 	if try 10 'SigBlk:0000000000000000'; then ok "a program in mwt starts with no signals blocked"
 	else gap "a program in mwt inherits a signal mask: $(shown | grep '^SigBlk' | head -1)"; fi
@@ -1065,7 +1058,7 @@ closed_stdio() {
 	mkdir -p "$DIR/noterm"
 	cp "$HOME/.bashrc" "$DIR/noterm/"
 	(cd "$HOME" && HOME=$DIR/noterm sh -c 'exec "$0" 2>&- >&- <&- &' "$MWT")
-	sleep 1.5
+	wait_mwt
 	T 'echo stdio-ok' -k Return
 	if alive && try 5 'stdio-ok'; then ok "closed stdio with a message for stderr"; else gap "started with stderr closed, its own stderr message goes into the Wayland socket (fd 2): alive=$(alive && echo y || echo n)"; fi
 }
@@ -1073,7 +1066,7 @@ cwd_tricks() {
 	mkdir -p "$HOME/weg"
 	(cd "$HOME/weg" && rmdir "$HOME/weg" && sh -c '"$0" >"$1" 2>&1 &' "$MWT" "$DIR/log.$CASE")
 	LOG=$DIR/log.$CASE
-	sleep 1.5
+	wait_mwt
 	T 'echo im-nichts' -k Return
 	try 5 'im-nichts' && ok "started in a deleted directory" || gap "deleted cwd"
 }
@@ -1278,7 +1271,7 @@ start_rc() {
 	LOG=$DIR/log.$CASE
 	rm -f "$DIR/rc"
 	(cd "$HOME" && sh -c '"$@" >>"'"$LOG"'" 2>&1; echo $? >"'"$DIR/rc"'"' sh "$@" &)
-	sleep 1.5
+	wait_mwt
 }
 # A crash is a gap, ending with a message is fine.
 rc_ok() {
@@ -1361,7 +1354,7 @@ low_memory() {
 	K v
 	sleep 1
 	rc_ok "out of memory on a large copy and paste"
-	alive && ok "mwt lives on a tight memory limit" || ok "mwt ends cleanly when memory runs out"
+	info "$(alive && echo "mwt lives on a tight memory limit" || echo "mwt ended when memory ran out")"
 }
 menu_abuse() {
 	start_mwt

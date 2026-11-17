@@ -32,6 +32,12 @@ Zu entscheiden, aus der dritten Review (docs/history/Review-2026-11-08.md):
 
 Tests, die noch fehlen, als Kür:
 
+* Noch feste Pausen in den Tests: T, K und C warten nach jedem wtype 0,3 s,
+  shown 0,45 s, damit zwei Drags nicht als Doppelklick zählen (die 400 ms in
+  mwt.c, nicht in config.h), mwtlib.Window 0,3 s nach dem Fenster, keys()
+  0,15 s, und die Prüfungen auf "nichts mehr" in mouse.py und keyboard.py
+  feste Fenster. Besser: ein Sentinel, auf den gewartet wird; die Zeit für den
+  Doppelklick in config.h, und die Tests klicken erst in eine andere Zelle.
 * make rediwm: keys.py, mouse.py, keyboard.py und pixel.py unter RediWM
   (github.com/oxydizer/rediwm), headless in einem eigenen Podman-Image wie
   make oldwayland. RediWM baut auf wlroots 0.20, sway und mwc auf 0.19; es hat

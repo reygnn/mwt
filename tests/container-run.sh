@@ -9,6 +9,9 @@ cp -r /src/mwt ~/w/mwt
 cp -r /src/mwc/. ~/w/mwc/
 cd ~/w/mwc && rm -rf build mwc .git
 sed -i 's/\.layout = "us"/.layout = getenv("VIN_LAYOUT") ? getenv("VIN_LAYOUT") : "us"/' tests/vinput.c
+# Should mwc's line change, the layout tests would run with "us" only and pass.
+grep -q 'getenv("VIN_LAYOUT")' tests/vinput.c ||
+	{ echo "FAIL: VIN_LAYOUT could not be put into mwc's tests/vinput.c"; exit 1; }
 grep -q '<stdlib.h>' tests/vinput.c || sed -i '1i #include <stdlib.h>' tests/vinput.c
 make -j"$(nproc)" mwc build/vinput >/dev/null 2>&1 || { echo "mwc did not build"; exit 1; }
 export MWC=$HOME/w/mwc/mwc VINPUT=$HOME/w/mwc/build/vinput VIN_LAYOUTS=1

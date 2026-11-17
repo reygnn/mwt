@@ -207,6 +207,12 @@ def test_off():
     mouse.send("wheel", -1)
     expect(log, "mode off: no reports", b"")
     log.close()
+    # the same click in a window with the mode on: clicks do reach one there
+    log = session(b"\033[?1000;1006h")
+    at(5, 5)
+    mouse.send("click", "middle")
+    expect(log, "and with the mode on the same click reports", sgr(1, 5, 5) + sgr(1, 5, 5, False))
+    log.close()
 
 
 def test_x10_limit():
