@@ -2700,7 +2700,7 @@ static bool parse_geometry(const char *s, int *cols, int *rows)
 
 static void usage(void)
 {
-	fprintf(stderr, "usage: mwt [-v] [-f font] [-a app-id] [-T title] [-g COLSxROWS] "
+	fprintf(stderr, "usage: mwt [-v] [-h] [-f font] [-a app-id] [-T title] [-g COLSxROWS] "
 		"[-e] [command [args...]]\n");
 	exit(2);
 }

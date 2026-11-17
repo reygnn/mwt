@@ -11,6 +11,11 @@ message goes to the window, which closes at once.
 If `$SHELL` is not executable or not an absolute path (`SHELL=bash`), the window closes
 at once. Only an empty `$SHELL` falls back to the passwd entry.
 
+The shell gets mwt's environment as it is, apart from `TERM`, `COLORTERM`, `LINES` and
+`COLUMNS`. Started from within tmux or kitty, `TMUX`, `TERM_PROGRAM` and the like come
+along and mislead programs into tmux passthrough or kitty's protocols; unset them where
+mwt is started.
+
 When the window closes, the shell gets SIGHUP. mwt waits two seconds for it and then
 exits. A shell that ignores the signal (nohup) or takes longer to clean up runs on
 without a terminal; mwt does not kill it.
@@ -23,7 +28,8 @@ without a terminal; mwt does not kill it.
 the grid stays at 4096x2048 in the largest window. A zoom that would pass 2 GiB is
 refused, with a message on stderr.
 
-There is no reflow: shrinking the window cuts off what no longer fits.
+There is no reflow: shrinking the window cuts off what no longer fits. A resize also
+sets the tab stops back to every eighth column.
 
 
 ## Selection and paste
@@ -83,6 +89,19 @@ Hangul jamo; there the cursor drifts. `make width` shows where. To a query for m
 ## Sequences left out
 
 DECRQM reports the modes mwt knows of but does not have as permanently reset (4).
+Mode 1048 (save and restore the cursor) works, but DECRQM answers "unknown" for it:
+xterm reports whether a cursor is saved, which mwt does not keep track of.
+
+The cursor never blinks: the blinking styles of DECSCUSR (1, 3, 5) are drawn steady,
+and DECRQM reports mode 12 as permanently reset.
+
+The wheel in the alternate screen sends arrow keys when no program has the mouse, as
+xterm's alternate scroll mode (1007). In mwt it is always on: `CSI ? 1007 l` is ignored
+and DECRQM answers "unknown".
+
+Shift+PgUp and Shift+PgDn reach the program only in the alternate screen, Shift+Home
+and Shift+End also when it has the mouse; otherwise they scroll the history. `kPRV`,
+`kNXT`, `kHOM` and `kEND` in `mwt.info` hold only then.
 
 Of the VT420 and xterm features esctest checks, these are left out, so most of what
 `make esctest` reports fails by design: left and right margins (DECLRMM, DECSLRM),
@@ -107,3 +126,8 @@ it announced already is not taken up; only a seat announced later is.
 
 `make install` puts the terminfo entry in `/usr/share/terminfo` whatever `PREFIX` is,
 since ncurses does not look under `/usr/local`.
+
+Without the entry mwt falls back to `TERM=xterm-256color`, which promises more than mwt
+does: changing colors (`ccc`, `initc`), a visual bell (`flash`, reverse screen), meta
+mode (`smm`, `rmm`), and the keypad keys `ka1` to `kc3`, which mwt sends as the normal
+cursor keys (see Keypad mode). Install the entry.

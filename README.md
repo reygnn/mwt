@@ -26,11 +26,14 @@ use `TERM=xterm-256color ssh host` or `infocmp -x mwt | ssh host tic -x -`.
 
 ## Usage
 
-    mwt [-v] [-f font] [-a app-id] [-T title] [-g COLSxROWS] [-e] [command [args...]]
+    mwt [-v] [-h] [-f font] [-a app-id] [-T title] [-g COLSxROWS] [-e] [command [args...]]
 
 * `-v` prints the version, set in `version.h`, which XTVERSION also reports.
+* `-h` prints the usage and exits with code 2.
 * `-f "JetBrains Mono:size=12"` takes a fontconfig pattern.
 * `-a` sets the app_id, default `mwt`. mwc's mwmrc and the mwtrc match on it.
+* `-T` sets the window title, default `mwt`, until a program sets its own.
+* `-e` ends the options; what follows is the command.
 * `-g` takes 1x1 to 4096x2048, as long as the window buffer stays under 2 GiB;
   beyond that mwt exits with code 2.
 * Without a command, mwt starts `$SHELL`.
@@ -85,7 +88,7 @@ background, set `color7` and `color15` too.
 | Ctrl+Shift+A | select all: scrollback and screen, in the alternate screen only the screen |
 | Ctrl+Shift+C, Ctrl+Shift+V | copy to and paste from the clipboard |
 | Shift+PgUp, Shift+PgDn | scrollback; in the alternate screen they go to the program |
-| Wheel, Shift+wheel | scrollback by lines or by pages |
+| Wheel, Shift+wheel | scrollback by lines or by pages; in the alternate screen three arrow keys a notch, unless a program has the mouse |
 | Shift+Home, Shift+End | start or end of the scrollback, unless a program has the alternate screen or the mouse |
 | Ctrl+Shift+Plus, Minus, 0 | font larger, smaller, reset |
 | Shift with the mouse | selection and menu while a program has the mouse |
@@ -99,7 +102,8 @@ background, set `color7` and `color15` too.
 * Alternate screen (47, 1047, 1049), bracketed paste, mouse (1000, 1002, 1003, SGR
   1006), focus events, DECSCUSR
 * Replies to DA, DA2, DSR, CPR, DECRQM, XTVERSION and CSI 18 t
-* OSC 0 and 2 (title); OSC 4, 10, 11 and 12 queries, answered with the colors as drawn
+* OSC 0 and 2 (title); OSC 4, 10, 11 and 12 queries, answered with the colors as
+  configured in `config.h` and the mwtrc
 * DECRQCRA only with `allow_checksum` in `config.h`, off by default as in xterm
 * Wide characters, and emoji as outlines if a fallback font has them
 * HiDPI through `wl_surface.preferred_buffer_scale`, integer scales only
