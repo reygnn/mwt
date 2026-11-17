@@ -34,6 +34,10 @@ echo "=== glyph cache limits ==="
 make -s font_cache 2>&1 | grep -E 'warning|error'
 ASAN_OPTIONS=detect_leaks=1 LSAN_OPTIONS=suppressions=$HOME/lsan.supp:print_suppressions=0 \
 	./font_cache || fail=1
+echo "=== missing glyphs: one FcFontSort ==="
+make -s font_lookup 2>&1 | grep -E 'warning|error'
+ASAN_OPTIONS=detect_leaks=1 LSAN_OPTIONS=suppressions=$HOME/lsan.supp:print_suppressions=0 \
+	./font_lookup || fail=1
 echo "=== styles drawn from regular ==="
 make -s font_style 2>&1 | grep -E 'warning|error'
 ASAN_OPTIONS=detect_leaks=1 LSAN_OPTIONS=suppressions=$HOME/lsan.supp:print_suppressions=0 \

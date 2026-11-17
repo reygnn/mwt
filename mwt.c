@@ -472,6 +472,15 @@ nomem:
 	return NULL;
 }
 
+/* The rows shown of absolute lines a to b are drawn anew */
+static void mark_lines(int64_t a, int64_t b)
+{
+	int64_t top = (int64_t)t.vt->scrolled - t.vt->view;
+	int64_t lo = MAX(MIN(a, b) - top, 0), hi = MIN(MAX(a, b) - top, t.vt->rows - 1);
+	for (int64_t r = lo; r <= hi; r++)
+		t.vt->dirty[r] = true;
+}
+
 static void sel_clear(void)
 {
 	if (t.sel.active || t.sel.dragging) {
@@ -1651,7 +1660,9 @@ static void update_grid(void)
 		if (t.pty >= 0)
 			ioctl(t.pty, TIOCSWINSZ, &ws);
 	}
-	vt_mark_all(t.vt);
+	/* No vt_mark_all: a new grid is marked by vt_resize, new cells or a new
+	 * window size draw whole (need_full, a new buffer). sway configures at
+	 * each focus change, and that redrew every row. */
 	t.need_redraw = true;
 }
 
@@ -2169,10 +2180,18 @@ static void ptr_motion(void *d, struct wl_pointer *p, uint32_t time, wl_fixed_t 
 		vt_scroll_view(t.vt, -1);
 	int64_t abs = (int64_t)t.vt->scrolled - t.vt->view + row;
 	if (abs != t.sel.ea || col != t.sel.ec || !t.sel.active) {
+		/* Only what changes: the rows from the old end to the new, and the
+		 * anchor's, whose word or line extends the other way once the end
+		 * passes it. Marking all redrew the screen at pointer rate. */
+		if (t.sel.active) {
+			mark_lines(t.sel.ea, abs);
+			mark_lines(t.sel.aa, t.sel.aa);
+		} else {
+			mark_lines(t.sel.aa, abs);
+		}
 		t.sel.ea = abs;
 		t.sel.ec = col;
 		t.sel.active = true;
-		vt_mark_all(t.vt);
 		t.need_redraw = true;
 	}
 }

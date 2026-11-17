@@ -238,6 +238,52 @@ def test_scrolled_back_output(win, mouse):
     settle()
 
 
+def damage_since(path, start):
+    """Heights of the window's damage_buffer requests logged by WAYLAND_DEBUG
+    after offset start; the cursor surface damages INT32_MAX, it is left out."""
+    with open(path, errors="replace") as f:
+        f.seek(start)
+        text = f.read()
+    hs = [int(m.group(1)) for m in re.finditer(r"damage_buffer\(-?\d+, -?\d+, -?\d+, (\d+)\)", text)]
+    return [h for h in hs if h != 2147483647]
+
+
+def test_damage(mouse):
+    """What a focus change and a selection drag draw anew, as the compositor is
+    told: a focus change redrew every row (sway configures at each), a drag the
+    whole screen at each cell the pointer crossed."""
+    log = os.path.join(mwtlib.DIR, "damage.log")
+    with Window(env={"WAYLAND_DEBUG": "client"}, stderr=log) as win:
+        win.feed(RESET + b"".join(b"zeile %d mit etwas Text\r\n" % i for i in range(20)))
+        img = settle()
+        g = Grid(img, 80, 24)
+        rows = g.ch
+        start = os.path.getsize(log)
+        other = Window("sleep", "100", app_id="other", geometry="10x2")
+        settle("other")
+        other.close()
+        settle()
+        hs = damage_since(log, start)
+        check(hs and max(hs) <= 2 * rows, "a focus change draws only the cursor row anew", f"heights {hs}")
+        x, y, _, _ = rect()
+
+        def at(col, row):
+            x0, y0, x1, y1 = g.box(col, row)
+            mouse.send("move", x + (x0 + x1) // 2, y + (y0 + y1) // 2)
+            time.sleep(0.1)
+
+        at(2, 2)
+        mouse.send("down", "left")
+        settle()
+        start = os.path.getsize(log)
+        for col, row in ((10, 2), (5, 3), (5, 4), (8, 4)):
+            at(col, row)
+        mouse.send("up", "left")
+        settle()
+        hs = damage_since(log, start)
+        check(hs and max(hs) <= 3 * rows, "a drag draws only the rows it changes anew", f"heights {hs}")
+
+
 def noise(seed):
     """Output that moves things about, in pieces, without leaving a sequence open."""
     r = random.Random(seed)
@@ -631,6 +677,7 @@ def main():
         test_scrollback(win)
         test_scrolled_back_output(win, mouse)
     test_partial_redraw()
+    test_damage(mouse)
     test_zoom()
     test_zoom_tiled()
     test_hidpi()

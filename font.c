@@ -50,6 +50,12 @@ struct font {
 	struct face style[4];
 	struct face fallback[MAX_FALLBACK];
 	int nfallback;
+	/* the system's fonts in order of preference, made once on the first
+	 * missing glyph, and what all of them cover together */
+	bool sorted_tried;
+	FcPattern *sort_pat;
+	FcFontSet *sorted;
+	FcCharSet *cover;
 	unsigned long tick;
 	double size_pt, size_px;
 	int cw, ch, ascent;
@@ -218,6 +224,12 @@ void font_close(struct font *f)
 		free_face(&f->style[i]);
 	for (int i = 0; i < f->nfallback; i++)
 		free_face(&f->fallback[i]);
+	if (f->sorted)
+		FcFontSetDestroy(f->sorted);
+	if (f->cover)
+		FcCharSetDestroy(f->cover);
+	if (f->sort_pat)
+		FcPatternDestroy(f->sort_pat);
 	if (f->base)
 		FcPatternDestroy(f->base);
 	if (f->lib)
@@ -237,6 +249,26 @@ double font_size_pt(const struct font *f)
 	return f->size_pt;
 }
 
+/* One FcFontSort for all missing glyphs instead of an FcFontMatch for each:
+ * with hundreds of fonts a match took 0.2 ms, and a screen of characters no font
+ * has, each new, held up the event loop for seconds. */
+static bool sorted_fonts(struct font *f)
+{
+	if (f->sorted_tried)
+		return f->sorted && f->cover;
+	f->sorted_tried = true;
+	f->sort_pat = FcPatternDuplicate(f->base);
+	if (!f->sort_pat) /* FcPatternAdd* and FcConfigSubstitute do not take NULL */
+		return false;
+	FcPatternAddBool(f->sort_pat, FC_SCALABLE, FcTrue);
+	FcConfigSubstitute(NULL, f->sort_pat, FcMatchPattern);
+	FcDefaultSubstitute(f->sort_pat);
+	FcResult res;
+	/* trimmed: a font that adds nothing to those before it is left out */
+	f->sorted = FcFontSort(NULL, f->sort_pat, FcTrue, &f->cover, &res);
+	return f->sorted && f->cover;
+}
+
 /* find or load a face that has cp; NULL if none on the system */
 static struct face *find_fallback(struct font *f, uint32_t cp)
 {
@@ -245,54 +277,66 @@ static struct face *find_fallback(struct font *f, uint32_t cp)
 			f->fallback[i].used = ++f->tick;
 			return &f->fallback[i];
 		}
-
-	FcPattern *p = FcPatternDuplicate(f->base);
-	if (!p) /* FcPatternAdd* and FcConfigSubstitute do not take NULL */
+	if (!sorted_fonts(f) || !FcCharSetHasChar(f->cover, cp))
 		return NULL;
-	/* NULL is safe here: fontconfig skips it, and the match is checked for cp */
-	FcCharSet *cs = FcCharSetCreate();
-	FcCharSetAddChar(cs, cp);
-	FcPatternAddCharSet(p, FC_CHARSET, cs);
-	FcPatternAddBool(p, FC_SCALABLE, FcTrue);
-	FcCharSetDestroy(cs);
-	FcPattern *m = match_pattern(p);
-	FcPatternDestroy(p);
-	if (!m)
-		return NULL;
-	struct face *res = NULL;
-	FcCharSet *mcs;
-	FcChar8 *file;
-	if (FcPatternGetCharSet(m, FC_CHARSET, 0, &mcs) == FcResultMatch &&
-	    FcCharSetHasChar(mcs, cp) &&
-	    FcPatternGetString(m, FC_FILE, 0, &file) == FcResultMatch) {
-		/* a face already open does not have cp, or the loop above found it */
-		bool dup = false;
-		for (int i = 0; i < 4; i++)
-			dup |= !strcmp(f->style[i].path, (const char *)file);
-		for (int i = 0; i < f->nfallback; i++)
-			dup |= !strcmp(f->fallback[i].path, (const char *)file);
-		struct face nf = { 0 };
-		if (!dup && load_face(f, m, &nf) && FT_Get_Char_Index(nf.ft, cp)) {
-			int slot = f->nfallback;
-			if (slot == MAX_FALLBACK) {
-				slot = 0;
-				for (int i = 1; i < MAX_FALLBACK; i++)
-					if (f->fallback[i].used < f->fallback[slot].used)
-						slot = i;
-				free_face(&f->fallback[slot]);
-			} else {
-				f->nfallback++;
-			}
-			nf.embolden = false;
-			nf.used = ++f->tick;
-			f->fallback[slot] = nf;
-			res = &f->fallback[slot];
-		} else if (!dup && nf.ft) {
-			free_face(&nf);
+	for (int k = 0; k < f->sorted->nfont; k++) {
+		FcCharSet *cs;
+		if (FcPatternGetCharSet(f->sorted->fonts[k], FC_CHARSET, 0, &cs) != FcResultMatch ||
+		    !FcCharSetHasChar(cs, cp))
+			continue;
+		FcPattern *m = FcFontRenderPrepare(NULL, f->sort_pat, f->sorted->fonts[k]);
+		FcChar8 *file;
+		int index = 0;
+		if (!m || FcPatternGetString(m, FC_FILE, 0, &file) != FcResultMatch) {
+			if (m)
+				FcPatternDestroy(m);
+			continue;
 		}
+		FcPatternGetInteger(m, FC_INDEX, 0, &index);
+		/* Open already: a fallback face was tried above and lacks cp, but
+		 * bold or italic may have what regular lacks. */
+		bool open = false;
+		struct face *style = NULL;
+		for (int i = 0; i < 4; i++)
+			if (!strcmp(f->style[i].path, (const char *)file) && f->style[i].index == index) {
+				open = true;
+				if (!style && FT_Get_Char_Index(f->style[i].ft, cp))
+					style = &f->style[i];
+			}
+		for (int i = 0; i < f->nfallback; i++)
+			open |= !strcmp(f->fallback[i].path, (const char *)file) &&
+				f->fallback[i].index == index;
+		if (open) {
+			FcPatternDestroy(m);
+			if (style)
+				return style;
+			continue;
+		}
+		struct face nf = { 0 };
+		bool ok = load_face(f, m, &nf);
+		FcPatternDestroy(m);
+		if (!ok)
+			continue; /* not scalable, or unreadable: the next may do */
+		if (!FT_Get_Char_Index(nf.ft, cp)) {
+			free_face(&nf);
+			continue;
+		}
+		int slot = f->nfallback;
+		if (slot == MAX_FALLBACK) {
+			slot = 0;
+			for (int i = 1; i < MAX_FALLBACK; i++)
+				if (f->fallback[i].used < f->fallback[slot].used)
+					slot = i;
+			free_face(&f->fallback[slot]);
+		} else {
+			f->nfallback++;
+		}
+		nf.embolden = false;
+		nf.used = ++f->tick;
+		f->fallback[slot] = nf;
+		return &f->fallback[slot];
 	}
-	FcPatternDestroy(m);
-	return res;
+	return NULL;
 }
 
 static void render(struct font *f, uint32_t cp, int style, struct glyph *g)
@@ -302,9 +346,8 @@ static void render(struct font *f, uint32_t cp, int style, struct glyph *g)
 	bool bold = style == STYLE_BOLD || style == STYLE_BOLD_ITALIC;
 	FT_UInt gi = FT_Get_Char_Index(fc->ft, cp);
 	/* Bold and italic faces often cover less than regular (DejaVu Sans Mono
-	 * Oblique lacks hundreds), and fontconfig would offer the regular file to
-	 * find_fallback, which skips the style faces as already tried. Use regular
-	 * directly; bold is synthesized below as for any face not the style's own. */
+	 * Oblique lacks hundreds): regular first, before the system's fonts. Bold
+	 * is synthesized below as for any face not the style's own. */
 	if (!gi && style != STYLE_REGULAR) {
 		fc = &f->style[STYLE_REGULAR];
 		gi = FT_Get_Char_Index(fc->ft, cp);
