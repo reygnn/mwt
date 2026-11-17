@@ -8,6 +8,12 @@
 #
 #   tests/replay.sh            check all files, print failures and a summary
 #   tests/replay.sh -r         also list per file what mwt does not support
+#   tests/replay.sh -u         write the end states anew into tests/replay.sums
+#
+# tests/replay.sums holds a hash of each file's end state at 80x24, which is
+# kept here though the files are not: it catches what breaks the same way in
+# every run. After a change meant to alter what the files show, -u and a look
+# at what changed.
 #   tests/replay.sh f.vt ...   only these files
 #   tests/replay.sh --fetch    only fetch the files
 set -u
@@ -32,8 +38,9 @@ if [ "${1:-}" = --fetch ]; then
 fi
 [ -x ./test_replay ] || { echo "replay: ./test_replay not built (make test_replay)"; exit 2; }
 
-opts=(-q)
+opts=(-q -s tests/replay.sums)
 [ "${1:-}" = -r ] && { opts+=(-r); shift; }
+[ "${1:-}" = -u ] && { opts+=(-u); shift; }
 if [ $# -gt 0 ]; then
 	exec ./test_replay "${opts[@]}" "$@"
 fi

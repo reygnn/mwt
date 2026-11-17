@@ -10,11 +10,18 @@
  * would; it is only checked for consistency, its result depends on the sizes.
  * Built with ASan/UBSan, see `make replay`.
  *
+ * The three runs agreeing does not say they are right: a sequence broken in
+ * all of them the same way passes. With -s SUMS the end state of the whole run
+ * at 80x24 is hashed and compared with what SUMS holds for the file; -u writes
+ * SUMS anew instead. The widths come from the C library's wcwidth, which
+ * changes between versions: SUMS records a hash of them, and with other widths
+ * the comparison is skipped with a note.
+ *
  * With -r it also reports, per file, the sequences mwt ignores on purpose or
  * does not have (double-size lines, 132 columns, blink, ...), so a file that
  * looks wrong on screen can be told apart from a bug.
  *
- * usage: replay [-r] [-q] file...
+ * usage: replay [-r] [-q] [-s SUMS [-u]] file...
  * exit:  0 all passed, 1 a check failed, 2 usage or I/O error */
 #define _XOPEN_SOURCE 700
 #include "vt.h"
@@ -23,6 +30,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <wchar.h>
 
 static const struct { int cols, rows; } sizes[] = {
 	{ 80, 24 },  /* what the files were made for */
@@ -163,6 +171,175 @@ static const char *difference(const struct vt *a, const struct vt *b)
 	return NULL;
 }
 
+/* ---- the end state as a hash ------------------------------------------ */
+
+static uint64_t fnv(uint64_t h, const void *p, size_t n)
+{
+	const unsigned char *b = p;
+	for (size_t i = 0; i < n; i++)
+		h = (h ^ b[i]) * 0x100000001b3u;
+	return h;
+}
+
+static uint64_t fnv_cells(uint64_t h, const struct cell *c, int n)
+{
+	for (int i = 0; i < n; i++) {
+		uint32_t v[4] = { c[i].cp, c[i].fg, c[i].bg, c[i].attr };
+		h = fnv(h, v, sizeof v);
+	}
+	return h;
+}
+
+static uint64_t fnv_cursor(uint64_t h, const struct vt_cursor *c)
+{
+	int v[7] = { c->x, c->y, c->wrapnext, c->charset[0], c->charset[1], c->gl, c->origin };
+	return fnv_cells(fnv(h, v, sizeof v), &c->tmpl, 1);
+}
+
+/* what difference() compares, and the replies and bells */
+static uint64_t state_hash(const struct vt *vt, const struct run *run)
+{
+	uint64_t h = 0xcbf29ce484222325u;
+	int v[6] = { (int)vt->mode, vt->top, vt->bot, vt->cursor_style, vt->hist_count, run->bells };
+	h = fnv(h, v, sizeof v);
+	h = fnv(h, &vt->scrolled, sizeof vt->scrolled);
+	h = fnv_cursor(fnv_cursor(fnv_cursor(h, &vt->c), &vt->saved_pri), &vt->saved_alt);
+	for (int x = 0; x < vt->cols; x++)
+		h = fnv(h, &(char){ vt->tabs[x] }, 1);
+	for (int r = 0; r < vt->rows; r++)
+		h = fnv_cells(fnv_cells(h, vt->pri[r], vt->cols), vt->alt[r], vt->cols);
+	for (int64_t i = vt_abs_first(vt); i < vt_abs_first(vt) + vt->hist_count; i++) {
+		int n;
+		const struct cell *l = vt_abs_line(vt, i, &n);
+		h = fnv(h, &n, sizeof n);
+		if (l)
+			h = fnv_cells(h, l, n);
+	}
+	return fnv(h, run->reply ? run->reply : "", run->reply_len);
+}
+
+/* the widths the C library gives, as vt.c asks for them */
+static uint64_t width_hash(void)
+{
+	uint64_t h = 0xcbf29ce484222325u;
+	for (wchar_t cp = 0x300; cp < 0x110000; cp++) {
+		signed char w = (signed char)wcwidth(cp);
+		h = fnv(h, &w, 1);
+	}
+	return h;
+}
+
+struct sum {
+	char *name;
+	uint64_t hash;
+};
+static struct sum *sums;
+static size_t nsums, sums_cap;
+static bool sums_skip, sums_update;
+static int sums_bad, sums_new;
+
+/* the name below videos/, so that VT_DIR does not matter */
+static const char *sum_name(const char *path)
+{
+	const char *p = strstr(path, "videos/");
+	return p ? p + 7 : path;
+}
+
+static struct sum *sum_find(const char *name)
+{
+	for (size_t i = 0; i < nsums; i++)
+		if (!strcmp(sums[i].name, name))
+			return &sums[i];
+	return NULL;
+}
+
+static void sum_add(const char *name, uint64_t hash)
+{
+	if (nsums == sums_cap) {
+		sums_cap = sums_cap ? sums_cap * 2 : 512;
+		sums = realloc(sums, sums_cap * sizeof *sums);
+		if (!sums) {
+			perror("realloc");
+			exit(2);
+		}
+	}
+	sums[nsums].name = strdup(name);
+	if (!sums[nsums].name) {
+		perror("strdup");
+		exit(2);
+	}
+	sums[nsums++].hash = hash;
+}
+
+/* SUMS: "widths HASH", then "HASH name" per file */
+static bool sums_read(const char *path, uint64_t widths)
+{
+	FILE *f = fopen(path, "r");
+	if (!f)
+		return sums_update; /* to be written */
+	char line[1024];
+	unsigned long long w = 0;
+	if (!fgets(line, sizeof line, f) || sscanf(line, "widths %llx", &w) != 1) {
+		fprintf(stderr, "replay: %s: no widths line\n", path);
+		fclose(f);
+		return false;
+	}
+	if (w != widths && !sums_update) {
+		printf("replay: wcwidth here is not the one %s was made with; "
+		       "end states not compared\n", path);
+		sums_skip = true;
+	}
+	while (fgets(line, sizeof line, f)) {
+		unsigned long long h;
+		char name[900];
+		if (sscanf(line, "%llx %899[^\n]", &h, name) == 2)
+			sum_add(name, h);
+	}
+	fclose(f);
+	return true;
+}
+
+static int sum_cmp(const void *a, const void *b)
+{
+	return strcmp(((const struct sum *)a)->name, ((const struct sum *)b)->name);
+}
+
+static bool sums_write(const char *path, uint64_t widths)
+{
+	qsort(sums, nsums, sizeof *sums, sum_cmp);
+	FILE *f = fopen(path, "w");
+	if (!f)
+		return false;
+	fprintf(f, "widths %016llx\n", (unsigned long long)widths);
+	for (size_t i = 0; i < nsums; i++)
+		fprintf(f, "%016llx %s\n", (unsigned long long)sums[i].hash, sums[i].name);
+	return fclose(f) == 0;
+}
+
+static void sum_check(uint64_t hash)
+{
+	const char *name = sum_name(cur_file);
+	struct sum *s = sum_find(name);
+	if (sums_update) {
+		if (s)
+			s->hash = hash;
+		else
+			sum_add(name, hash);
+		return;
+	}
+	if (sums_skip)
+		return;
+	if (!s) {
+		sums_new++;
+		printf("replay: %s has no end state in the sums, make replay UPDATE=1\n", name);
+	} else if (s->hash != hash) {
+		sums_bad++;
+		fail("whole", "end state differs from the sums", 0);
+	}
+}
+
+static bool use_sums;
+
 /* ---- playing --------------------------------------------------------- */
 
 enum { WHOLE, BYTEWISE, RANDOM, RESIZE };
@@ -231,6 +408,8 @@ static void check_file(const char *buf, size_t len)
 		struct vt *vts[4];
 		for (int how = 0; how < 4; how++)
 			vts[how] = play(buf, len, how, &runs[how]);
+		if (use_sums && s == 0 && vts[WHOLE])
+			sum_check(state_hash(vts[WHOLE], &runs[WHOLE]));
 		for (int how = 1; how < 3; how++) {
 			if (!vts[0] || !vts[how])
 				continue;
@@ -404,18 +583,30 @@ int main(int argc, char **argv)
 	if (!setlocale(LC_CTYPE, "C.UTF-8"))
 		setlocale(LC_CTYPE, "");
 	bool do_report = false, quiet = false;
+	const char *sums_path = NULL;
 	int i = 1;
 	for (; i < argc && argv[i][0] == '-'; i++) {
 		if (!strcmp(argv[i], "-r"))
 			do_report = true;
 		else if (!strcmp(argv[i], "-q"))
 			quiet = true;
+		else if (!strcmp(argv[i], "-u"))
+			sums_update = true;
+		else if (!strcmp(argv[i], "-s") && i + 1 < argc)
+			sums_path = argv[++i];
 		else
 			break;
 	}
-	if (i == argc) {
-		fputs("usage: replay [-r] [-q] file...\n", stderr);
+	if (i == argc || (sums_update && !sums_path)) {
+		fputs("usage: replay [-r] [-q] [-s SUMS [-u]] file...\n", stderr);
 		return 2;
+	}
+	uint64_t widths = 0;
+	if (sums_path) {
+		widths = width_hash();
+		if (!sums_read(sums_path, widths))
+			return 2;
+		use_sums = true;
 	}
 	int files = 0, bad_files = 0;
 	size_t bytes = 0;
@@ -447,5 +638,15 @@ int main(int argc, char **argv)
 	}
 	printf("replay: %d/%d files passed, %zu bytes, %zu grid sizes\n",
 	       files - bad_files, files, bytes, sizeof sizes / sizeof *sizes);
+	if (use_sums && sums_update) {
+		if (!sums_write(sums_path, widths)) {
+			perror(sums_path);
+			return 2;
+		}
+		printf("replay: end states of %zu files written to %s\n", nsums, sums_path);
+	} else if (use_sums && !sums_skip) {
+		printf("replay: end states at 80x24: %d differ from %s, %d not in it\n",
+		       sums_bad, sums_path, sums_new);
+	}
 	return failures != 0;
 }

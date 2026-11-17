@@ -95,9 +95,10 @@ test_replay: tests/replay.c vt.c vt.h version.h
 
 # About 290 recorded VT100 animations and ANSI files through the VT core, whole,
 # byte by byte, in random chunks and while resizing; fetched on the first run.
-# REPORT=1 lists what each file uses that mwt does not support.
+# REPORT=1 lists what each file uses that mwt does not support. The end state of
+# each at 80x24 is compared with tests/replay.sums; UPDATE=1 writes it anew.
 replay: test_replay
-	tests/replay.sh $(if $(REPORT),-r)
+	tests/replay.sh $(if $(REPORT),-r) $(if $(UPDATE),-u)
 
 # Coverage-guided fuzzing of the VT core with libFuzzer, see tests/fuzz_vt.c.
 # Ten minutes by default (FUZZ_TIME=seconds), on all cores. Uses clang on the
