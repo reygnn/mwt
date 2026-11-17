@@ -111,6 +111,7 @@ struct vt {
 	int params[VT_MAX_PARAMS];
 	bool subparam[VT_MAX_PARAMS]; /* param was preceded by ':' */
 	int nparams;
+	bool params_full;         /* a separator past the last slot: drop the rest */
 	bool param_started;
 	char priv;                /* '?', '>', '<', '=' or 0 */
 	char inter[2];

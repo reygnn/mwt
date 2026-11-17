@@ -893,6 +893,56 @@ static void test_origin(void)
 	vt_free(vt);
 }
 
+/* Where mwt follows xterm, from the 2026-11-17 review */
+static void test_xterm_details(void)
+{
+	struct vt *vt = mk(5, 6, 0);
+	/* parameters past the 24th are dropped, digits included: 0;x24 3;1 was red.
+	 * xterm keeps 30, so there it is bold italic; dropping is DEC's rule */
+	w(vt, "\033[0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;3;1mX");
+	CHECK(vt->pri[0][0].fg == COL_DEFAULT_FG);
+	w(vt, "\033[1;3;1;1;1;1;1;1;1;1;1;1;1;1;1;1;1;1;1;1;1;1;1;1;1;1;1;1;1;5H");
+	CHECK(vt->c.y == 0 && vt->c.x == 2);
+
+	/* DECXCPR is relative to the scroll region in origin mode, as CPR */
+	w(vt, "\033[3;5r\033[?6h\033[2;2H");
+	replybuf[0] = 0;
+	w(vt, "\033[6n\033[?6n");
+	CHECK_STR(replybuf, "\033[2;2R\033[?2;2R");
+	w(vt, "\033[?6l\033[r\033[2J\033[H");
+
+	/* EL and ECH drop a pending wrap, as in xterm 407: x lands in the last column */
+	w(vt, "abcde\033[Kx");
+	CHECK_STR(row(vt, 0), "abcdx");
+	CHECK_STR(row(vt, 1), "");
+	w(vt, "\033[2;1Habcde\033[Xx");
+	CHECK_STR(row(vt, 1), "abcdx");
+	/* so do ED 0 to 2, checked against xterm 407; ED 3 erases only history */
+	w(vt, "\033[2J\033[Habcde\033[1Jx");
+	CHECK_STR(row(vt, 0), "    x");
+	w(vt, "\033[2J\033[Habcde\033[3Jx");
+	CHECK_STR(row(vt, 1), "x");
+	w(vt, "\033[2J\033[H");
+	/* ESC = and ESC > (smkx, is2) keep it, and so does DECSC/DECRC */
+	w(vt, "\033[3;1Habcde\033=x");
+	CHECK_STR(row(vt, 2), "abcde");
+	CHECK_STR(row(vt, 3), "x");
+	w(vt, "\033[5;1Habcde\0337\0338x");
+	CHECK_STR(row(vt, 4), "abcde");
+	CHECK_STR(row(vt, 5), "x");
+	vt_free(vt);
+
+	/* 47 never clears; 1047 clears the alternate screen when leaving it */
+	vt = mk(10, 3, 0);
+	w(vt, "\033[?47hALT\033[?47l\033[?1047h");
+	CHECK_STR(row(vt, 0), "ALT");
+	w(vt, "\033[?1047l\033[?47h");
+	CHECK_STR(row(vt, 0), "");
+	w(vt, "\033[?47l");
+	CHECK_STR(row(vt, 0), "");
+	vt_free(vt);
+}
+
 static void test_alloc_failures(void)
 {
 	/* vt_new: any one allocation failing gives NULL and leaks nothing */
@@ -986,6 +1036,7 @@ int main(void)
 	test_unsupported_vt100();
 	test_resize();
 	test_origin();
+	test_xterm_details();
 	test_cursor_style_redraw();
 	test_index_and_charsets();
 	test_alloc_failures();

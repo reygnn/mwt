@@ -1097,9 +1097,10 @@ static void draw_row(struct buffer *b, int r, bool sel, int64_t ba, int bc,
 					     y0, y0 + t.ch, fg);
 			}
 			int thick = MAX(1, t.scale);
-			if (c.attr & ATTR_UNDERLINE)
+			/* invisible hides the lines too, as xterm: hidden input fields */
+			if ((c.attr & (ATTR_UNDERLINE | ATTR_INVISIBLE)) == ATTR_UNDERLINE)
 				fill_rect(b, x0, y0 + t.ascent + thick, span * t.cw, thick, fg);
-			if (c.attr & ATTR_STRIKE)
+			if ((c.attr & (ATTR_STRIKE | ATTR_INVISIBLE)) == ATTR_STRIKE)
 				fill_rect(b, x0, y0 + t.ascent * 2 / 3, span * t.cw, thick, fg);
 			if (cur && !block) {
 				int w = span * t.cw;

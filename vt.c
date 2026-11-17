@@ -643,18 +643,19 @@ static void esc_dispatch(struct vt *vt, uint32_t f)
 {
 	if (vt->ninter == 0) {
 		switch (f) {
+		/* only what moves the cursor drops a pending wrap: ESC = and ESC >
+		 * come with smkx and is2, and DECRC brings back the saved one */
 		case '7': save_cursor(vt); break;
 		case '8': restore_cursor(vt); break;
-		case 'D': index_down(vt); break;
-		case 'E': vt->c.x = 0; index_down(vt); break;
+		case 'D': index_down(vt); vt->c.wrapnext = false; break;
+		case 'E': vt->c.x = 0; index_down(vt); vt->c.wrapnext = false; break;
 		case 'H': vt->tabs[vt->c.x] = true; break;
-		case 'M': reverse_index(vt); break;
+		case 'M': reverse_index(vt); vt->c.wrapnext = false; break;
 		case 'Z': reply(vt, "\033[?62;22c"); break; /* DECID, the old DA */
 		case 'c': vt_reset(vt); break;
 		case '=': vt->mode |= MODE_APPKEYPAD; break;
 		case '>': vt->mode &= ~MODE_APPKEYPAD; break;
 		}
-		vt->c.wrapnext = false;
 		return;
 	}
 	switch (vt->inter[0]) {
@@ -811,8 +812,14 @@ static void set_private_mode(struct vt *vt, int m, bool on)
 		else
 			vt->mode |= MODE_HIDECURSOR;
 		return;
-	case 47: case 1047:
-		set_altscreen(vt, on, m == 1047);
+	case 47:
+		set_altscreen(vt, on, false);
+		return;
+	case 1047: /* as xterm: the alternate screen is cleared on leaving it */
+		if (!on && (vt->mode & MODE_ALTSCREEN))
+			for (int r = 0; r < vt->rows; r++)
+				fill_row(vt, vt->alt[r], 0, vt->cols, blank(vt));
+		set_altscreen(vt, on, false);
 		return;
 	case 1048:
 		if (on)
@@ -963,7 +970,7 @@ static void csi_dispatch(struct vt *vt, uint32_t f)
 			for (int i = 0; i < vt->nparams; i++)
 				set_private_mode(vt, vt->params[i], f == 'h');
 		else if (f == 'n' && arg(vt, 0, 0) == 6)
-			reply(vt, "\033[?%d;%dR", c->y + 1, c->x + 1);
+			reply(vt, "\033[?%d;%dR", c->y + 1 - (c->origin ? vt->top : 0), c->x + 1);
 		return;
 	}
 	if (vt->priv == '>') {
@@ -1024,19 +1031,23 @@ static void csi_dispatch(struct vt *vt, uint32_t f)
 	case 'I': tab(vt, n); break;
 	case 'J': /* ED */
 		switch (arg(vt, 0, 0)) {
+		/* as xterm: erasing the screen drops a pending wrap, ED 3 does not */
 		case 0:
 			clear_line(vt, c->y, c->x, vt->cols - 1);
 			for (int r = c->y + 1; r < vt->rows; r++)
 				clear_line(vt, r, 0, vt->cols - 1);
+			c->wrapnext = false;
 			break;
 		case 1:
 			for (int r = 0; r < c->y; r++)
 				clear_line(vt, r, 0, vt->cols - 1);
 			clear_line(vt, c->y, 0, c->x);
+			c->wrapnext = false;
 			break;
 		case 2:
 			for (int r = 0; r < vt->rows; r++)
 				clear_line(vt, r, 0, vt->cols - 1);
+			c->wrapnext = false;
 			break;
 		case 3:
 			vt->hist_count = 0;
@@ -1051,6 +1062,7 @@ static void csi_dispatch(struct vt *vt, uint32_t f)
 		case 1: clear_line(vt, c->y, 0, c->x); break;
 		case 2: clear_line(vt, c->y, 0, vt->cols - 1); break;
 		}
+		c->wrapnext = false; /* as xterm: nothing left to wrap onto */
 		break;
 	case 'L':
 		if (c->y >= vt->top && c->y <= vt->bot) {
@@ -1076,7 +1088,10 @@ static void csi_dispatch(struct vt *vt, uint32_t f)
 		break;
 	case 'S': scroll_up(vt, vt->top, n); break;
 	case 'T': scroll_down(vt, vt->top, n); break;
-	case 'X': clear_line(vt, c->y, c->x, c->x + n - 1); break;
+	case 'X':
+		clear_line(vt, c->y, c->x, c->x + n - 1);
+		c->wrapnext = false;
+		break;
 	case 'Z': tab(vt, -n); break;
 	case 'b': /* REP */
 		/* at most a screenful: more only adds the same lines to the history,
@@ -1226,6 +1241,7 @@ static void osc_dispatch(struct vt *vt)
 static void clear_seq(struct vt *vt)
 {
 	vt->nparams = 0;
+	vt->params_full = false;
 	vt->priv = 0;
 	vt->ninter = 0;
 }
@@ -1243,11 +1259,15 @@ static void param(struct vt *vt, uint32_t cp)
 		vt->params[0] = 0;
 		vt->subparam[0] = false;
 	}
+	if (vt->params_full)
+		return;
 	if (cp == ';' || cp == ':') {
 		if (vt->nparams < VT_MAX_PARAMS) {
 			vt->params[vt->nparams] = 0;
 			vt->subparam[vt->nparams] = cp == ':';
 			vt->nparams++;
+		} else {
+			vt->params_full = true;
 		}
 	} else {
 		int *p = &vt->params[vt->nparams - 1];

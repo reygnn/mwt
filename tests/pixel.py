@@ -123,7 +123,8 @@ def test_attributes(win):
              + b"HH "                               # 21 plain
              + b"\033[8mHH\033[0m "                 # 24 invisible
              + b"\033[1mHH\033[0m "                 # 27 bold
-             + b"\033[41mHH\033[0m ")               # 30 a background below a glyph
+             + b"\033[41mHH\033[0m "                # 30 a background below a glyph
+             + b"\033[4;9;8mHH\033[0m ")            # 33 invisible hides the lines too
     img = settle()
     g = Grid(img, 80, 24)
     under = g.full_rows(0, 0, FG)
@@ -141,6 +142,7 @@ def test_attributes(win):
     check(not g.ink(24, 0), "invisible shows nothing")
     check(g.colors(27, 0) != g.colors(21, 0), "bold looks different")
     check(g.corner(30, 0) == COLORS16[1] and g.ink(30, 0), "a glyph over a background")
+    check(not g.ink(33, 0), "invisible hides underline and strike")
 
 
 def test_cursor(win):
