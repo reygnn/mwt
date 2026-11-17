@@ -653,6 +653,9 @@ static void control(struct vt *vt, uint32_t cp)
 
 /* ---- escape sequences ------------------------------------------------- */
 
+/* DA and DECID: a VT220 with ANSI color */
+#define DA1 "\033[?62;22c"
+
 static void esc_dispatch(struct vt *vt, uint32_t f)
 {
 	if (vt->ninter == 0) {
@@ -665,7 +668,7 @@ static void esc_dispatch(struct vt *vt, uint32_t f)
 		case 'E': vt->c.x = 0; index_down(vt); vt->c.wrapnext = false; break;
 		case 'H': vt->tabs[vt->c.x] = true; break;
 		case 'M': reverse_index(vt); vt->c.wrapnext = false; break;
-		case 'Z': reply(vt, "\033[?62;22c"); break; /* DECID, the old DA */
+		case 'Z': reply(vt, DA1); break; /* DECID, the old DA */
 		case 'c': vt_reset(vt); break;
 		case '=': vt->mode |= MODE_APPKEYPAD; break;
 		case '>': vt->mode &= ~MODE_APPKEYPAD; break;
@@ -810,16 +813,35 @@ static void sgr(struct vt *vt)
 	}
 }
 
+/* The modes that are one bit of vt->mode, for setting and for DECRQM alike */
+static const struct { int mode; unsigned bit; } private_bits[] = {
+	{ 1, MODE_APPCURSOR }, { 7, MODE_AUTOWRAP }, { 66, MODE_APPKEYPAD },
+	{ 1000, MODE_MOUSE_BTN }, { 1002, MODE_MOUSE_DRAG }, { 1003, MODE_MOUSE_ANY },
+	{ 1004, MODE_FOCUS }, { 1006, MODE_MOUSE_SGR }, { 2004, MODE_BRACKETED },
+};
+
+static unsigned private_bit(int m)
+{
+	for (size_t i = 0; i < sizeof private_bits / sizeof *private_bits; i++)
+		if (private_bits[i].mode == m)
+			return private_bits[i].bit;
+	return 0;
+}
+
+/* ANSI modes: IRM (4) and LNM (20) */
+static unsigned ansi_bit(int m)
+{
+	return m == 4 ? MODE_INSERT : m == 20 ? MODE_LNM : 0;
+}
+
 static void set_private_mode(struct vt *vt, int m, bool on)
 {
 	unsigned bit = 0;
 	switch (m) {
-	case 1: bit = MODE_APPCURSOR; break;
 	case 6:
 		vt->c.origin = on;
 		moveto_abs(vt, 0, 0);
 		return;
-	case 7: bit = MODE_AUTOWRAP; break;
 	case 25:
 		if (on)
 			vt->mode &= ~MODE_HIDECURSOR;
@@ -850,16 +872,12 @@ static void set_private_mode(struct vt *vt, int m, bool on)
 			restore_cursor(vt);
 		}
 		return;
-	case 1000: case 1002: case 1003:
-		vt->mode &= ~MODE_MOUSE;
-		bit = m == 1000 ? MODE_MOUSE_BTN :
-		      m == 1002 ? MODE_MOUSE_DRAG : MODE_MOUSE_ANY;
+	default:
+		/* 66 is DECNKM, the same as ESC = and ESC > */
+		bit = private_bit(m);
+		if (bit & MODE_MOUSE) /* one mouse mode at a time */
+			vt->mode &= ~MODE_MOUSE;
 		break;
-	case 66: bit = MODE_APPKEYPAD; break; /* DECNKM, the same as ESC = and ESC > */
-	case 1004: bit = MODE_FOCUS; break;
-	case 1006: bit = MODE_MOUSE_SGR; break;
-	case 2004: bit = MODE_BRACKETED; break;
-	default: return;
 	}
 	if (on)
 		vt->mode |= bit;
@@ -883,19 +901,13 @@ static int private_mode_state(const struct vt *vt, int m)
 		return 4;
 	case 1035:
 		return 3;
-	case 66: bit = MODE_APPKEYPAD; break;
-	case 1: bit = MODE_APPCURSOR; break;
 	case 6: return vt->c.origin ? 1 : 2;
-	case 7: bit = MODE_AUTOWRAP; break;
 	case 25: return vt->mode & MODE_HIDECURSOR ? 2 : 1;
 	case 47: case 1047: case 1049: bit = MODE_ALTSCREEN; break;
-	case 1000: bit = MODE_MOUSE_BTN; break;
-	case 1002: bit = MODE_MOUSE_DRAG; break;
-	case 1003: bit = MODE_MOUSE_ANY; break;
-	case 1004: bit = MODE_FOCUS; break;
-	case 1006: bit = MODE_MOUSE_SGR; break;
-	case 2004: bit = MODE_BRACKETED; break;
-	default: return 0;
+	default:
+		bit = private_bit(m);
+		if (!bit)
+			return 0;
 	}
 	return vt->mode & bit ? 1 : 2;
 }
@@ -1008,7 +1020,7 @@ static void csi_dispatch(struct vt *vt, uint32_t f)
 			decrqcra(vt);
 		} else if (vt->inter[0] == '$' && f == 'p') { /* DECRQM, ANSI modes */
 			int m = arg(vt, 0, 0);
-			unsigned bit = m == 4 ? MODE_INSERT : m == 20 ? MODE_LNM : 0;
+			unsigned bit = ansi_bit(m);
 			/* the ECMA-48 modes of a terminal mwt is not (guarded areas,
 			 * a locked keyboard, editing extents...) are permanently reset;
 			 * SRM (12) stays unknown, terminals disagree on what reset means */
@@ -1116,7 +1128,7 @@ static void csi_dispatch(struct vt *vt, uint32_t f)
 		break;
 	case 'c':
 		if (arg(vt, 0, 0) == 0)
-			reply(vt, "\033[?62;22c");
+			reply(vt, DA1);
 		break;
 	case 'd': moveto_abs(vt, c->x, n - 1); break;
 	case 'g':
@@ -1127,8 +1139,7 @@ static void csi_dispatch(struct vt *vt, uint32_t f)
 		break;
 	case 'h': case 'l':
 		for (int i = 0; i < vt->nparams; i++) {
-			unsigned bit = vt->params[i] == 4 ? MODE_INSERT :
-				       vt->params[i] == 20 ? MODE_LNM : 0;
+			unsigned bit = ansi_bit(vt->params[i]);
 			if (f == 'h')
 				vt->mode |= bit;
 			else

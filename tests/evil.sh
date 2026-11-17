@@ -43,6 +43,9 @@ cc -std=c11 -O1 -I"$DIR" -o "$SRC" tests/stallsource.c "$DIR/data-control.c" \
 # memfd_create that fails on demand, for buffer_fail.
 FAILMEMFD=$DIR/failmemfd.so
 cc -std=c11 -O1 -shared -fPIC -o "$FAILMEMFD" tests/failmemfd.c -ldl >>"$DIR/stall.build" 2>&1 || FAILMEMFD=
+# And pidfd_open that fails, for no_pidfd.
+FAILPIDFD=$DIR/failpidfd.so
+cc -std=c11 -O1 -shared -fPIC -o "$FAILPIDFD" tests/failpidfd.c -ldl >>"$DIR/stall.build" 2>&1 || FAILPIDFD=
 tic -x -o "$HOME/.terminfo" mwt.info || exit 1
 cat >"$DIR/sway.conf" <<'EOF'
 output HEADLESS-1 resolution 1000x700 position 0 0
@@ -1062,6 +1065,18 @@ closed_stdio() {
 	T 'echo stdio-ok' -k Return
 	if alive && try 5 'stdio-ok'; then ok "closed stdio with a message for stderr"; else gap "started with stderr closed, its own stderr message goes into the Wayland socket (fd 2): alive=$(alive && echo y || echo n)"; fi
 }
+# TERMINFO_DIRS with the entry in its twelfth directory: mwt looked through
+# eight and fell back to xterm-256color.
+terminfo_dirs() {
+	mkdir -p "$DIR/noterm"
+	cp "$HOME/.bashrc" "$DIR/noterm/"
+	local d i
+	d=$(for i in $(seq 1 11); do printf '/nichtda/%d:' "$i"; done)$HOME/.terminfo
+	start_mwt HOME="$DIR/noterm" TERMINFO_DIRS="$d"
+	T 'echo "term=$TERM"' -k Return
+	if try 10 'term=mwt'; then ok "the entry in the twelfth of TERMINFO_DIRS is found"
+	else gap "TERMINFO_DIRS with twelve entries: $(shown | grep '^term=' | head -1)"; fi
+}
 cwd_tricks() {
 	mkdir -p "$HOME/weg"
 	(cd "$HOME/weg" && rmdir "$HOME/weg" && sh -c '"$0" >"$1" 2>&1 &' "$MWT" "$DIR/log.$CASE")
@@ -1077,6 +1092,19 @@ exit_with_jobs() {
 	if alive; then gap "mwt stays after the shell exits with jobs on the pty"; else ok "mwt ends with the shell, jobs on the pty or not"; fi
 	pgrep -x sleep >/dev/null && info "a background 'sleep 1000' outlives the window (HUP not delivered to it)"
 	pkill -f 'while :' 2>/dev/null
+}
+# Without a pidfd, as before Linux 5.3 or under seccomp: the shell's end is seen
+# all the same, also with jobs that keep the pty open. mwt stayed for good.
+no_pidfd() {
+	[ -n "$FAILPIDFD" ] || { info "failpidfd did not build"; return 0; }
+	start_mwt LD_PRELOAD="$FAILPIDFD" ASAN_OPTIONS=detect_leaks=0:verify_asan_link_order=0
+	T '(while :; do echo x; sleep 0.01; done) & sleep 1000 & exit' -k Return
+	local i
+	for ((i = 0; i < 25; i++)); do alive || break; sleep 0.2; done
+	if alive; then gap "without a pidfd mwt stays after the shell exits with jobs on the pty"
+	else ok "without a pidfd mwt ends with the shell, jobs on the pty or not"; fi
+	pkill -f 'while :' 2>/dev/null
+	return 0
 }
 close_ignores_hup() {
 	start_mwt
@@ -1463,7 +1491,7 @@ for c in dcs_swallow osc_swallow_cat fuzz noncharacters \
 	paste_integrity paste_bidi paste_escape paste_controls paste_queue_limit paste_latin1_limit ctrl_c_behind_paste paste_holds_until_return line_limits paste_over_16mb paste_memory reply_behind_paste \
 	snippet_typed snippet_paste snippet_paste_no_newline \
 	stty_raw_read_in_shell inlcr tcoff cyrillic_ctrl_c cyrillic_raw copy_on_ru raw_paste_ctrl_c paste_bracket_on_signal python_repl flood_ctrl_c flood_rss soak reply_flood reply_flood_raw title_flood title_flood_stalled \
-	args shells closed_stdio blocked_signals cwd_tricks exit_with_jobs close_ignores_hup \
+	args shells closed_stdio blocked_signals terminfo_dirs cwd_tricks exit_with_jobs no_pidfd close_ignores_hup \
 	tiny resize_storm fd_leak fd_to_child stalled_readers stalled_pipes silent_source plain_source flood_source fd_limit low_memory menu_abuse buffer_fail first_buffer_fail zoom_limit compositor_dies; do
 	run "$c"
 done

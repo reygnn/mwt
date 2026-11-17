@@ -12,8 +12,19 @@ static const int default_rows = 24;
 static const int padding = 2;               /* pixels, logical */
 static const int histsize = 5000;           /* scrollback lines */
 static const int wheel_lines = 3;
-static const bool allow_checksum = false;  /* DECRQCRA, for esctest: lets programs
-                                             * read the screen, as xterm's GetChecksum */
+static const double touchpad_step = 10;     /* touchpad travel, in surface pixels, for
+                                             * one step of wheel_lines */
+static const int double_click_ms = 400;     /* a second click on the cell sooner is a
+                                             * double click; a third, a triple */
+static const double zoom_min_pt = 4, zoom_max_pt = 96; /* Ctrl+Shift+Plus and Minus */
+
+/* DECRQCRA lets programs read the screen, as xterm's GetChecksum, so it is off.
+ * esctest checks with it: make esctest builds mwt-esctest with it on. */
+#ifdef MWT_ALLOW_CHECKSUM
+static const bool allow_checksum = true;
+#else
+static const bool allow_checksum = false;
+#endif
 
 static const uint32_t color_fg = 0xdcdccc;
 static const uint32_t color_bg = 0x1e1e1e;

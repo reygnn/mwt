@@ -8,6 +8,7 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <langinfo.h>
+#include <limits.h>
 #include <linux/input-event-codes.h>
 #include <locale.h>
 #include <poll.h>
@@ -198,6 +199,14 @@ static void die(const char *msg)
 /* ---- pty output ------------------------------------------------------- */
 
 #define REPLY_BACKLOG_MAX (1024 * 1024) /* replies waiting for the pty */
+/* Repeats a stalled event loop owes are sent at once, at most this many: a
+ * held key after a long stall should not flood the program. */
+#define REPEAT_BURST_MAX 32u
+/* Alpha of the foreground over the background, of 255: dim text, and the menu's
+ * disabled items and shortcuts. */
+#define DIM_ALPHA 140
+#define MENU_DISABLED_ALPHA 110
+#define MENU_SHORTCUT_ALPHA 150
 #define OUT_KEEP (64 * 1024)            /* an emptied buffer larger than this goes */
 #define PASTE_MAX (64 * 1024 * 1024)    /* a larger paste is dropped whole */
 #define PASTE_TURN_MAX (1024 * 1024)    /* read in one turn of the event loop */
@@ -399,7 +408,7 @@ static void sel_range(int64_t *ba, int *bc, int64_t *ea, int *ec)
 	}
 	if (t.sel.mode == SEL_LINE) {
 		*bc = 0;
-		*ec = 1 << 30;
+		*ec = INT_MAX; /* to the end of the line, whatever its length */
 	} else if (t.sel.mode == SEL_WORD) {
 		int k = cell_class(*ba, *bc);
 		if (k != 2)
@@ -566,12 +575,15 @@ static void send_text(const char *text, const char *mime, int fd)
 		xfer_drop(t.nxfers - 1);
 }
 
+/* an offer's rank before any of its types is known, and of a type not in mimes */
+#define MIME_NONE ((int)LEN(mimes))
+
 static int mime_rank(const char *mime)
 {
 	for (size_t i = 0; i < LEN(mimes); i++)
 		if (!strcmp(mime, mimes[i]))
 			return (int)i;
-	return 99;
+	return MIME_NONE;
 }
 
 static void ds_target(void *d, struct wl_data_source *s, const char *m) { (void)d; (void)s; (void)m; }
@@ -742,7 +754,7 @@ static void dd_data_offer(void *d, struct wl_data_device *dd, struct wl_data_off
 	int *rank = malloc(sizeof *rank);
 	if (!rank)
 		return;
-	*rank = 99;
+	*rank = MIME_NONE;
 	wl_data_offer_add_listener(o, &offer_listener, rank);
 }
 static void dd_enter(void *d, struct wl_data_device *dd, uint32_t serial,
@@ -790,7 +802,7 @@ static void pd_data_offer(void *d, struct zwp_primary_selection_device_v1 *pd,
 	int *rank = malloc(sizeof *rank); /* out of memory as in dd_data_offer */
 	if (!rank)
 		return;
-	*rank = 99;
+	*rank = MIME_NONE;
 	zwp_primary_selection_offer_v1_add_listener(o, &poffer_listener, rank);
 }
 static void pd_selection(void *d, struct zwp_primary_selection_device_v1 *pd,
@@ -1092,7 +1104,7 @@ static void draw_row(struct buffer *b, int r, bool sel, int64_t ba, int bc,
 			if (pass == 1) { /* pass 0 needs only bg */
 				fg = readable(fg, bg);
 				if (c.attr & ATTR_DIM)
-					fg = blend(bg, fg, 140) & 0xffffff;
+					fg = blend(bg, fg, DIM_ALPHA) & 0xffffff;
 			}
 			if (sel && abs >= ba && abs <= ea &&
 			    !(abs == ba && col + span - 1 < bc) && !(abs == ea && col > ec)) {
@@ -1475,7 +1487,7 @@ static void menu_draw(struct buffer *b)
 	for (int i = 0; i < (int)LEN(menu_items); i++) {
 		int y = border + i * t.menu.row_h;
 		bool on = menu_enabled(i), hover = i == t.menu.hover;
-		uint32_t fg = !on ? blend(t.col.bg, t.col.fg, 110) & 0xffffff : t.col.fg;
+		uint32_t fg = !on ? blend(t.col.bg, t.col.fg, MENU_DISABLED_ALPHA) & 0xffffff : t.col.fg;
 		if (hover) {
 			fill_rect(b, border, y, W - 2 * border, t.menu.row_h, t.col.sel_bg);
 			fg = t.col.sel_fg;
@@ -1484,7 +1496,7 @@ static void menu_draw(struct buffer *b)
 		menu_text(b, menu_items[i].label, border + t.cw, base, fg);
 		int n = (int)strlen(menu_items[i].keys);
 		menu_text(b, menu_items[i].keys, W - border - (n + 1) * t.cw, base,
-			  hover ? fg : blend(t.col.bg, fg, 150) & 0xffffff);
+			  hover ? fg : blend(t.col.bg, fg, MENU_SHORTCUT_ALPHA) & 0xffffff);
 	}
 	wl_surface_set_buffer_scale(t.menu.surface, t.scale);
 	wl_surface_attach(t.menu.surface, b->wb, 0, 0);
@@ -1773,7 +1785,7 @@ static void reload_font(double pt, int scale)
 static void zoom(int delta)
 {
 	double pt = delta ? t.font_pt + delta : t.font_pt0;
-	if (pt >= 4 && pt <= 96)
+	if (pt >= zoom_min_pt && pt <= zoom_max_pt)
 		reload_font(pt, t.scale);
 }
 
@@ -2231,7 +2243,8 @@ static void ptr_button(void *d, struct wl_pointer *p, uint32_t serial, uint32_t 
 		vt_mark_all(t.vt);
 		t.need_redraw = true;
 	} else if (b == 0 && press) {
-		if (time - t.click_time < 400 && abs == t.click_abs && t.mcol == t.click_col)
+		if (time - t.click_time < (uint32_t)double_click_ms && abs == t.click_abs &&
+		    t.mcol == t.click_col)
 			t.click_count = t.click_count % 3 + 1;
 		else
 			t.click_count = 1;
@@ -2285,12 +2298,12 @@ static void ptr_axis(void *d, struct wl_pointer *p, uint32_t time, uint32_t axis
 	if (axis != WL_POINTER_AXIS_VERTICAL_SCROLL || t.menu.popup || t.axis_discrete)
 		return;
 	t.axis_acc += wl_fixed_to_double(v);
-	while (t.axis_acc >= 10) {
-		t.axis_acc -= 10;
+	while (t.axis_acc >= touchpad_step) {
+		t.axis_acc -= touchpad_step;
 		wheel(true);
 	}
-	while (t.axis_acc <= -10) {
-		t.axis_acc += 10;
+	while (t.axis_acc <= -touchpad_step) {
+		t.axis_acc += touchpad_step;
 		wheel(false);
 	}
 }
@@ -2307,7 +2320,7 @@ static void ptr_axis_stop(void *d, struct wl_pointer *p, uint32_t tm, uint32_t a
 	t.axis_acc = 0;
 }
 /* A wheel counts its notches here, before the axis event with the same move in
- * pixels: 15 a notch, which a threshold of 10 would turn into 1.5 steps. So only
+ * pixels: 15 a notch, which touchpad_step's 10 would turn into 1.5 steps. So only
  * what has no notches, a touchpad, goes by the distance. */
 static void ptr_axis_discrete(void *d, struct wl_pointer *p, uint32_t a, int32_t n)
 {
@@ -2528,35 +2541,56 @@ static const struct wl_registry_listener reg_listener = { reg_global, reg_remove
 
 /* ---- pty and child ---------------------------------------------------- */
 
-static bool have_terminfo(const char *name)
+static bool terminfo_in(const char *dir, const char *name)
 {
 	char path[4096];
-	const char *home = getenv("HOME");
-	const char *dirs[16];
-	int n = 0;
-	if (getenv("TERMINFO"))
-		dirs[n++] = getenv("TERMINFO");
-	char homedir[4096];
-	if (home) {
-		snprintf(homedir, sizeof homedir, "%s/.terminfo", home);
-		dirs[n++] = homedir;
-	}
-	char *tdirs = getenv("TERMINFO_DIRS") ? strdup(getenv("TERMINFO_DIRS")) : NULL;
-	for (char *tok = tdirs ? strtok(tdirs, ":") : NULL; tok && n < 10; tok = strtok(NULL, ":"))
-		dirs[n++] = tok;
+	snprintf(path, sizeof path, "%s/%c/%s", dir, name[0], name);
+	if (access(path, R_OK) == 0)
+		return true;
+	snprintf(path, sizeof path, "%s/%02x/%s", dir, (unsigned char)name[0], name);
+	return access(path, R_OK) == 0;
+}
+
+static bool terminfo_system(const char *name)
+{
 	static const char *std[] = { "/etc/terminfo", "/lib/terminfo", "/usr/share/terminfo",
 		"/usr/lib/terminfo" };
 	for (size_t i = 0; i < LEN(std); i++)
-		dirs[n++] = std[i];
-	bool found = false;
-	for (int i = 0; i < n && !found; i++) {
-		snprintf(path, sizeof path, "%s/%c/%s", dirs[i], name[0], name);
-		found = access(path, R_OK) == 0;
-		snprintf(path, sizeof path, "%s/%02x/%s", dirs[i], (unsigned char)name[0], name);
-		found |= access(path, R_OK) == 0;
+		if (terminfo_in(std[i], name))
+			return true;
+	return false;
+}
+
+/* Where ncurses looks, in its order: TERMINFO, ~/.terminfo, each of TERMINFO_DIRS,
+ * where an empty entry stands for the system's directories, then those. */
+static bool have_terminfo(const char *name)
+{
+	const char *ti = getenv("TERMINFO"), *home = getenv("HOME");
+	if (ti && terminfo_in(ti, name))
+		return true;
+	if (home) {
+		char dir[4096];
+		snprintf(dir, sizeof dir, "%s/.terminfo", home);
+		if (terminfo_in(dir, name))
+			return true;
 	}
-	free(tdirs);
-	return found;
+	const char *p = getenv("TERMINFO_DIRS");
+	while (p && *p) {
+		const char *end = strchr(p, ':');
+		size_t len = end ? (size_t)(end - p) : strlen(p);
+		char dir[4096];
+		if (!len) {
+			if (terminfo_system(name))
+				return true;
+		} else if (len < sizeof dir) {
+			memcpy(dir, p, len);
+			dir[len] = 0;
+			if (terminfo_in(dir, name))
+				return true;
+		}
+		p = end ? end + 1 : NULL;
+	}
+	return terminfo_system(name);
 }
 
 static void spawn(char **argv)
@@ -2757,9 +2791,6 @@ done:;
 	if (!t.vt)
 		die("out of memory");
 	t.vt->allow_checksum = allow_checksum;
-#ifdef MWT_ALLOW_CHECKSUM
-	t.vt->allow_checksum = true; /* a build for esctest */
-#endif
 
 	t.xkb = xkb_context_new(XKB_CONTEXT_NO_FLAGS);
 	const char *loc = getenv("LC_ALL");
@@ -2827,12 +2858,17 @@ done:;
 		int nx = t.nxfers;
 		for (int i = 0; i < nx; i++)
 			fds[5 + i] = (struct pollfd){ t.xfers[i].fd, POLLOUT, 0 };
-		if (poll(fds, 5 + nx, -1) < 0) {
+		/* Without a pidfd (before Linux 5.3, or denied by seccomp) only the
+		 * pty's end shows the shell's, and jobs can keep the pty open: the
+		 * child is asked for four times a second instead. */
+		if (poll(fds, 5 + nx, t.child_fd >= 0 ? -1 : 250) < 0) {
 			wl_display_cancel_read(t.display);
 			if (errno == EINTR)
 				continue;
 			break;
 		}
+		if (t.child_fd < 0 && waitpid(t.child, NULL, WNOHANG) == t.child)
+			t.running = false;
 		if (fds[0].revents & POLLIN)
 			wl_display_read_events(t.display);
 		else
@@ -2849,7 +2885,7 @@ done:;
 		if (fds[2].revents & POLLIN) {
 			uint64_t n = 0;
 			if (read(t.repeat_fd, &n, sizeof n) == sizeof n && t.repeat_key)
-				for (uint64_t i = 0; i < MIN(n, 32u); i++)
+				for (uint64_t i = 0; i < MIN(n, REPEAT_BURST_MAX); i++)
 					handle_key(t.repeat_key);
 		}
 		if (t.paste_fd >= 0 && (fds[3].revents & (POLLIN | POLLHUP | POLLERR)))
