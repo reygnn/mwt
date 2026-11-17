@@ -28,6 +28,10 @@ without a terminal; mwt does not kill it.
 the grid stays at 4096x2048 in the largest window. A zoom that would pass 2 GiB is
 refused, with a message on stderr.
 
+mwt draws no frame of its own and uses no libdecor: frames are the compositor's job,
+asked for through xdg-decoration. Where that is missing, as in GNOME and Weston, the
+window has no frame, no title bar and no border.
+
 There is no reflow: shrinking the window cuts off what no longer fits. A resize also
 sets the tab stops back to every eighth column.
 
