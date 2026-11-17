@@ -632,6 +632,11 @@ static void test_keys(void)
 	/* the keypad mode changes nothing, see CAVEATS.md */
 	w(vt, "\033[?1l\033=");
 	CHECK_STR(key(vt, VT_KEY_ENTER, 0), "\r");
+	/* newline mode: Return sends CR LF */
+	w(vt, "\033[20h");
+	CHECK_STR(key(vt, VT_KEY_ENTER, 0), "\r\n");
+	CHECK_STR(key(vt, VT_KEY_ENTER, A), "\033\r\n");
+	w(vt, "\033[20l");
 	CHECK_STR(key(vt, VT_KEY_UP, 0), "\033[A");
 	/* no room, no key: nothing */
 	char small[3];

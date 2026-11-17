@@ -1542,7 +1542,8 @@ size_t vt_key(const struct vt *vt, enum vt_key key, unsigned mods, char *buf, si
 	} else {
 		switch (key) {
 		case VT_KEY_BACKSPACE: s = ctrl ? "\b" : "\x7f"; break;
-		case VT_KEY_ENTER: s = "\r"; break;
+		/* newline mode (LNM, CSI 20 h): CR LF, as the VT100 */
+		case VT_KEY_ENTER: s = vt->mode & MODE_LNM ? "\r\n" : "\r"; break;
 		case VT_KEY_TAB: s = shift ? "\033[Z" : "\t"; break;
 		case VT_KEY_BACKTAB: s = "\033[Z"; alt = false; break;
 		case VT_KEY_ESCAPE: s = "\033"; break;
