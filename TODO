@@ -16,6 +16,24 @@ TODO
   andere Schrift aus derselben .ttc wird also genommen. Ein Test fehlt: er
   braucht eine .ttc im Image von make fonts, aus der zwei Schriften nötig sind.
 
+Performance, aus der Review vom 2026-11-17 (docs/history/Review-2026-11-17.md):
+
+* Scrollen um eine Zeile zeichnet alle Zeilen neu, bei 200x55 und 1080p etwa
+  2 ms statt 0,3. Besser: der VT-Kern merkt sich die Verschiebung, draw()
+  verschiebt die Pixel im Puffer und zeichnet nur die neuen Zeilen; der
+  andere Puffer holt mit derselben Verschiebung auf. MWT_CHECK_REDRAW prüft.
+* blit ist 73 bis 76 % der Zeichenzeit, Pixel für Pixel gemischt. Ein Cache
+  fertig gemischter Glyphen je Vorder- und Hintergrund, oder SIMD. Ohne
+  Verzweigung war es 20 % langsamer.
+* push_hist ruft realloc für jede Zeile, die hinausscrollt; eine Kapazität je
+  Platz sparte bei seq 17 %.
+* Synchronized Output (Mode 2026), damit ein Programm, das ein Bild in
+  mehreren write() schickt, nicht halb gezeichnet wird.
+* Beim Resize und Zoom bei jedem Schritt zwei neue memfd-Puffer; ein Pool,
+  der nur wächst, sparte die Seitenfehler.
+* Der Glyph-Hash nimmt die unteren Bits des Produkts; die oberen streuen
+  besser. Klein gegen blit.
+
 Zu entscheiden, aus der dritten Review (docs/history/Review-2026-11-08.md):
 
 * Eine Selektion bleibt auf Text stehen, den das Programm überschreibt, und
@@ -33,11 +51,17 @@ Zu entscheiden, aus der dritten Review (docs/history/Review-2026-11-08.md):
 Tests, die noch fehlen, als Kür:
 
 * Noch feste Pausen in den Tests: T, K und C warten nach jedem wtype 0,3 s,
-  shown 0,45 s, damit zwei Drags nicht als Doppelklick zählen (die 400 ms in
-  mwt.c, nicht in config.h), mwtlib.Window 0,3 s nach dem Fenster, keys()
+  shown 0,45 s, damit zwei Drags nicht als Doppelklick zählen
+  (double_click_ms in config.h), mwtlib.Window 0,3 s nach dem Fenster, keys()
   0,15 s, und die Prüfungen auf "nichts mehr" in mouse.py und keyboard.py
-  feste Fenster. Besser: ein Sentinel, auf den gewartet wird; die Zeit für den
-  Doppelklick in config.h, und die Tests klicken erst in eine andere Zelle.
+  feste Fenster. Besser: ein Sentinel, auf den gewartet wird, und die Tests
+  klicken erst in eine andere Zelle statt zu warten.
+* font.c mit --wrap=malloc,calloc in make fonts: font_oom lässt bisher nur
+  strdup und FcPatternDuplicate scheitern, nicht den Glyph-Cache und die
+  Bitmaps.
+* leaks.py überspringt ohne ASan-Build mit "info" und Exit 0; nur
+  container-run.sh sorgt für einen. Ein eigener Exit-Code fürs Überspringen,
+  den die Aufrufer prüfen.
 * make rediwm: keys.py, mouse.py, keyboard.py und pixel.py unter RediWM
   (github.com/oxydizer/rediwm), headless in einem eigenen Podman-Image wie
   make oldwayland. RediWM baut auf wlroots 0.20, sway und mwc auf 0.19; es hat
@@ -47,7 +71,8 @@ Tests, die noch fehlen, als Kür:
   swaymsg liest. Fälle mit sway-Befehlen (floating_maximum_size, input,
   seat) entfallen dort. Zu sehen: ob ein abgezogenes Gerät dort Release und
   Leave schickt (mouse.py test_device_gone).
-* Andere Compositoren (weston, labwc), auch wegen fehlender Protokolle. vttest.
+* Andere Compositoren als sway und mwc, etwa labwc. Weston und GNOME nicht:
+  ohne xdg-decoration hat mwt dort keinen Rahmen, mit Absicht (CAVEATS). vttest.
   Bildschirmvergleich gegen tmux capture-pane mit aufgezeichneten Sitzungen von
   vim oder htop.
 * Ein CI-Job unter headless sway (make keys, make mouse, make pixel); die CI
