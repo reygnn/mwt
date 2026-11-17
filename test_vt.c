@@ -943,6 +943,39 @@ static void test_xterm_details(void)
 	vt_free(vt);
 }
 
+/* The ASCII fast path in vt_write writes runs; it must leave what put() would */
+static void test_ascii_runs(void)
+{
+	struct vt *vt = mk(5, 3, 0);
+	/* a run starting on a wide glyph's right half, one ending on a left half */
+	w(vt, "\xe4\xb8\x80xy\033[1;2Hab");
+	CHECK_STR(row(vt, 0), " aby");
+	CHECK(!(vt->pri[0][0].attr & (ATTR_WIDE | ATTR_WDUMMY)));
+	w(vt, "\033[2;4H\xe4\xb8\x80\033[2;1Habcd");
+	CHECK_STR(row(vt, 1), "abcd");
+	CHECK(!(vt->pri[1][4].attr & (ATTR_WIDE | ATTR_WDUMMY)));
+	/* a run to the end of the row defers the wrap, the next byte takes it */
+	w(vt, "\033[3;1Habcde");
+	CHECK(vt->c.x == 4 && vt->c.wrapnext);
+	w(vt, "f"); /* the bottom row: the screen scrolls */
+	CHECK_STR(row(vt, 1), "abcde");
+	CHECK_STR(row(vt, 2), "f");
+	CHECK(vt->lastcp == 'f');
+	/* no autowrap: the run stops at the edge, the rest lands in the last column */
+	w(vt, "\033[?7l\033[1;1Hvwxyz123");
+	CHECK_STR(row(vt, 0), "vwxy3");
+	w(vt, "\033[?7h");
+	/* insert mode and DEC graphics go through put() */
+	w(vt, "\033[2J\033[1;1Habc\033[1;1H\033[4hXY\033[4l");
+	CHECK_STR(row(vt, 0), "XYabc");
+	w(vt, "\033(0q\033(B");
+	CHECK(vt->pri[0][2].cp == 0x2500 && (vt->pri[0][2].attr & ATTR_DECGFX));
+	/* attributes and colour from the template, on every cell of the run */
+	w(vt, "\033[2;1H\033[1;31mabc\033[0m");
+	CHECK(vt->pri[1][0].fg == 1 && vt->pri[1][2].fg == 1 && (vt->pri[1][2].attr & ATTR_BOLD));
+	vt_free(vt);
+}
+
 static void test_alloc_failures(void)
 {
 	/* vt_new: any one allocation failing gives NULL and leaks nothing */
@@ -1037,6 +1070,7 @@ int main(void)
 	test_resize();
 	test_origin();
 	test_xterm_details();
+	test_ascii_runs();
 	test_cursor_style_redraw();
 	test_index_and_charsets();
 	test_alloc_failures();

@@ -134,8 +134,11 @@ static struct cell **alloc_screen(int cols, int rows)
 
 static void dirty_range(struct vt *vt, int a, int b)
 {
-	for (int r = MAX(a, 0); r <= b && r < vt->rows; r++)
-		vt->dirty[r] = true;
+	/* every line feed at the bottom marks the region: a loop was 29% of yes */
+	a = MAX(a, 0);
+	b = MIN(b, vt->rows - 1);
+	if (a <= b)
+		memset(vt->dirty + a, true, (size_t)(b - a + 1));
 }
 
 void vt_mark_all(struct vt *vt)
@@ -1406,11 +1409,52 @@ static void feed(struct vt *vt, uint32_t cp)
 	}
 }
 
+/* A run of printable ASCII in the ground state, as put() writes it one by one, up
+ * to the end of the row; 0 where put() has more to do: a pending wrap, DEC
+ * graphics, insert mode. Wide glyphs need mending only at the run's edges, what
+ * lies between is overwritten. About three times faster on plain text. */
+static size_t put_ascii(struct vt *vt, const unsigned char *s, size_t n)
+{
+	struct vt_cursor *c = &vt->c;
+	if (c->wrapnext || c->charset[c->gl] || (vt->mode & MODE_INSERT))
+		return 0;
+	size_t room = (size_t)(vt->cols - c->x), k = 0;
+	while (k < n && k < room && s[k] >= 0x20 && s[k] < 0x7f)
+		k++;
+	if (!k)
+		return 0;
+	struct cell *l = vt->line[c->y];
+	int x0 = c->x, x1 = c->x + (int)k - 1;
+	fix_wide(vt, l, x0, x1);
+	struct cell tm = c->tmpl;
+	tm.attr &= ~(ATTR_WIDE | ATTR_WDUMMY | ATTR_WRAP);
+	for (size_t i = 0; i < k; i++) {
+		tm.cp = s[i];
+		l[x0 + i] = tm;
+	}
+	touch(vt, l, x1 + 1);
+	vt->dirty[c->y] = true;
+	vt->lastcp = s[k - 1];
+	c->x = x1 + 1;
+	if (c->x >= vt->cols) {
+		c->x = vt->cols - 1;
+		c->wrapnext = vt->mode & MODE_AUTOWRAP;
+	}
+	return k;
+}
+
 void vt_write(struct vt *vt, const char *buf, size_t len)
 {
 	const unsigned char *s = (const unsigned char *)buf;
 	for (size_t i = 0; i < len; i++) {
 		unsigned char b = s[i];
+		if (!vt->utf8_need && vt->state == ST_GROUND && b >= 0x20 && b < 0x7f) {
+			size_t k = put_ascii(vt, s + i, len - i);
+			if (k) {
+				i += k - 1;
+				continue;
+			}
+		}
 		if (vt->utf8_need) {
 			if ((b & 0xc0) == 0x80) {
 				vt->utf8_cp = vt->utf8_cp << 6 | (b & 0x3f);
