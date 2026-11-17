@@ -87,7 +87,7 @@ struct vt {
 	/* rows of cols + 1 cells: the last is vt.c's own, the cp of it counts the
 	 * cells that may differ from a default blank (USED in vt.c) */
 	struct cell **pri, **alt;
-	bool *dirty;
+	bool *dirty;              /* by rows shown: with the view back, screen row + view */
 	bool *tabs;
 
 	struct vt_cursor c, saved_pri, saved_alt;

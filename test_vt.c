@@ -1007,6 +1007,38 @@ static void test_ascii_runs(void)
 	vt_free(vt);
 }
 
+/* Scrolled back, dirty marks the rows shown: screen row y is in row y + view */
+static void test_dirty_scrolled_back(void)
+{
+	struct vt *vt = mk(10, 4, 20);
+	for (int i = 0; i < 10; i++) {
+		char b[16];
+		snprintf(b, sizeof b, "a%d\r\n", i);
+		w(vt, b);
+	}
+	vt_scroll_view(vt, 2);
+	memset(vt->dirty, 0, 4);
+	w(vt, "\0337\033[1;1HX\0338"); /* screen row 0, shown in row 2 */
+	CHECK_STR(row(vt, 2), "X7");
+	CHECK(vt->dirty[2] && !vt->dirty[0] && !vt->dirty[1]);
+	/* a line scrolled off: the history shown stays, the rows below move */
+	memset(vt->dirty, 0, 4);
+	w(vt, "b\r\n");
+	CHECK(vt->view == 3);
+	CHECK(!vt->dirty[0] && !vt->dirty[1] && !vt->dirty[2] && vt->dirty[3]);
+	vt_free(vt);
+
+	/* at the top of a full history the text shown moves: all of it */
+	vt = mk(10, 4, 3);
+	w(vt, "1\r\n2\r\n3\r\n4\r\n5\r\n6\r\n7\r\n");
+	vt_scroll_view(vt, 100);
+	CHECK(vt->view == 3);
+	memset(vt->dirty, 0, 4);
+	w(vt, "\r\n");
+	CHECK(vt->dirty[0] && vt->dirty[3]);
+	vt_free(vt);
+}
+
 static void test_alloc_failures(void)
 {
 	/* vt_new: any one allocation failing gives NULL and leaks nothing */
@@ -1104,6 +1136,7 @@ int main(void)
 	test_origin();
 	test_xterm_details();
 	test_ascii_runs();
+	test_dirty_scrolled_back();
 	test_cursor_style_redraw();
 	test_index_and_charsets();
 	test_alloc_failures();

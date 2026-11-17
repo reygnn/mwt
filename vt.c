@@ -132,18 +132,25 @@ static struct cell **alloc_screen(int cols, int rows)
 	return s;
 }
 
+/* Screen rows a to b changed. dirty is by the rows shown: scrolled back by view,
+ * screen row y is shown in row y + view, and the history above did not change. */
 static void dirty_range(struct vt *vt, int a, int b)
 {
 	/* every line feed at the bottom marks the region: a loop was 29% of yes */
-	a = MAX(a, 0);
-	b = MIN(b, vt->rows - 1);
+	a = MAX(a + vt->view, 0);
+	b = MIN(b + vt->view, vt->rows - 1);
 	if (a <= b)
 		memset(vt->dirty + a, true, (size_t)(b - a + 1));
 }
 
+static void mark_row(struct vt *vt, int y)
+{
+	dirty_range(vt, y, y);
+}
+
 void vt_mark_all(struct vt *vt)
 {
-	dirty_range(vt, 0, vt->rows - 1);
+	memset(vt->dirty, true, (size_t)vt->rows);
 }
 
 /* break up wide glyphs that are partially overwritten in [x0, x1] */
@@ -174,7 +181,7 @@ static void clear_line(struct vt *vt, int y, int x0, int x1)
 		return;
 	fix_wide(vt, vt->line[y], x0, x1);
 	fill_row(vt, vt->line[y], x0, x1 + 1, blank(vt));
-	vt->dirty[y] = true;
+	mark_row(vt, y);
 }
 
 /* ---- scrollback ------------------------------------------------------- */
@@ -204,8 +211,12 @@ static void push_hist(struct vt *vt, const struct cell *l, int len)
 	if (vt->hist_count < vt->hist_cap)
 		vt->hist_count++;
 	vt->scrolled++;
-	if (vt->view > 0) /* keep the viewed text in place */
-		vt->view = MIN(vt->view + 1, vt->hist_count);
+	if (vt->view > 0) { /* keep the viewed text in place */
+		int v = vt->view;
+		vt->view = MIN(v + 1, vt->hist_count);
+		if (vt->view == v) /* at the top of a full history: it moves */
+			vt_mark_all(vt);
+	}
 }
 
 const struct cell *vt_abs_line(const struct vt *vt, int64_t abs, int *len)
@@ -596,7 +607,7 @@ static void put(struct vt *vt, uint32_t cp)
 		l[c->x + 1].attr = base | ATTR_WDUMMY;
 	}
 	touch(vt, l, c->x + w);
-	vt->dirty[c->y] = true;
+	mark_row(vt, c->y);
 	vt->lastcp = cp;
 
 	c->x += w;
@@ -990,7 +1001,7 @@ static void csi_dispatch(struct vt *vt, uint32_t f)
 			int s = arg(vt, 0, 0);
 			vt->cursor_style = s <= 2 ? CURSOR_BLOCK :
 					   s <= 4 ? CURSOR_UNDERLINE : CURSOR_BAR;
-			vt->dirty[c->y] = true;
+			mark_row(vt, c->y);
 		} else if (vt->inter[0] == '!' && f == 'p') {
 			soft_reset(vt);
 		} else if (vt->inter[0] == '*' && f == 'y') {
@@ -1018,7 +1029,7 @@ static void csi_dispatch(struct vt *vt, uint32_t f)
 		fill_row(vt, l, c->x, c->x + n, blank(vt));
 		if (l[vt->cols - 1].attr & ATTR_WIDE)
 			set_cell(vt, l, vt->cols - 1, blank(vt));
-		vt->dirty[c->y] = true;
+		mark_row(vt, c->y);
 		c->wrapnext = false;
 		break;
 	case 'A': moveto(vt, c->x, MAX(c->y - n, c->y >= vt->top ? vt->top : 0)); break;
@@ -1086,7 +1097,7 @@ static void csi_dispatch(struct vt *vt, uint32_t f)
 		fix_wide(vt, l, c->x, c->x + n - 1);
 		memmove(&l[c->x], &l[c->x + n], (vt->cols - c->x - n) * sizeof *l);
 		fill_row(vt, l, vt->cols - n, vt->cols, blank(vt));
-		vt->dirty[c->y] = true;
+		mark_row(vt, c->y);
 		c->wrapnext = false;
 		break;
 	case 'S': scroll_up(vt, vt->top, n); break;
@@ -1434,7 +1445,7 @@ static size_t put_ascii(struct vt *vt, const unsigned char *s, size_t n)
 		l[x0 + i] = tm;
 	}
 	touch(vt, l, x1 + 1);
-	vt->dirty[c->y] = true;
+	mark_row(vt, c->y);
 	vt->lastcp = s[k - 1];
 	c->x = x1 + 1;
 	if (c->x >= vt->cols) {

@@ -220,6 +220,24 @@ def test_scrollback(win):
     check(settle() == before, "Shift+End gives back the live screen, pixel for pixel")
 
 
+def test_scrolled_back_output(win, mouse):
+    """Scrolled back by a notch, output still shows where it lands: screen row 0
+    is in row 3 then. The row marked for redrawing was row 0, history."""
+    win.feed(RESET + b"".join(b"zeile %d\r\n" % i for i in range(100)))
+    settle()
+    x, y, w, h = rect()
+    mouse.send("move", x + w // 2, y + h // 2)
+    mouse.send("wheel", -1)
+    up = settle()
+    win.feed(b"\0337\033[1;1H\033[41mXXXXXXXX\033[0m\0338")
+    after = settle()
+    g = Grid(after, 80, 24)
+    check(COLORS16[1] in g.colors(0, 3), "output shows in row 3, scrolled back by 3")
+    check(Grid(up, 80, 24).colors(0, 0) == g.colors(0, 0), "and the history above stays")
+    combo("End", "shift")
+    settle()
+
+
 def noise(seed):
     """Output that moves things about, in pieces, without leaving a sequence open."""
     r = random.Random(seed)
@@ -611,6 +629,7 @@ def main():
         test_cursor(win)
         test_selection(win, mouse)
         test_scrollback(win)
+        test_scrolled_back_output(win, mouse)
     test_partial_redraw()
     test_zoom()
     test_zoom_tiled()
