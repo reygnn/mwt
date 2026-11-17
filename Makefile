@@ -69,6 +69,13 @@ font_cache: tests/font_cache.c font.c font.h
 		-fno-sanitize-recover=all $(shell pkg-config --cflags fontconfig freetype2) \
 		-o $@ tests/font_cache.c $(shell pkg-config --libs fontconfig freetype2) -lm
 
+# Each style draws what regular has, where its own face lacks it; under
+# sanitizers, with DejaVu Sans Mono. make fonts runs it.
+font_style: tests/font_style.c font.c font.h
+	$(CC) -std=c11 -Wall -Wextra -g -O1 -I. -fsanitize=address,undefined \
+		-fno-sanitize-recover=all $(shell pkg-config --cflags fontconfig freetype2) \
+		-o $@ tests/font_style.c $(shell pkg-config --libs fontconfig freetype2) -lm
+
 fuzz_regress: tests/fuzz_vt.c vt.c vt.h version.h
 	$(CC) -std=c11 -Wall -Wextra -g -O1 -I. -DFUZZ_STANDALONE -fsanitize=address,undefined \
 		-fno-sanitize-recover=all -o $@ tests/fuzz_vt.c vt.c
@@ -163,6 +170,6 @@ uninstall:
 	rm -f $(DESTDIR)$(PREFIX)/share/terminfo/m/mwt $(DESTDIR)$(PREFIX)/share/terminfo/6d/mwt
 
 clean:
-	rm -f mwt mwt-esctest test_vt test_rc vtdump test_replay fuzz_vt fuzz_regress fuzz_regress.log font_oom font_cache *.o $(PROTO_H) $(PROTO_C)
+	rm -f mwt mwt-esctest test_vt test_rc vtdump test_replay fuzz_vt fuzz_regress fuzz_regress.log font_oom font_cache font_style *.o $(PROTO_H) $(PROTO_C)
 
 .PHONY: all check replay fuzz terminfo keys pixel mouse keyboard test evil fonts oldwayland width esctest profile install uninstall clean

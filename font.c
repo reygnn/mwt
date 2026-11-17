@@ -301,6 +301,14 @@ static void render(struct font *f, uint32_t cp, int style, struct glyph *g)
 	struct face *fc = &f->style[style];
 	bool bold = style == STYLE_BOLD || style == STYLE_BOLD_ITALIC;
 	FT_UInt gi = FT_Get_Char_Index(fc->ft, cp);
+	/* Bold and italic faces often cover less than regular (DejaVu Sans Mono
+	 * Oblique lacks hundreds), and fontconfig would offer the regular file to
+	 * find_fallback, which skips the style faces as already tried. Use regular
+	 * directly; bold is synthesized below as for any face not the style's own. */
+	if (!gi && style != STYLE_REGULAR) {
+		fc = &f->style[STYLE_REGULAR];
+		gi = FT_Get_Char_Index(fc->ft, cp);
+	}
 	if (!gi && (fc = find_fallback(f, cp)))
 		gi = FT_Get_Char_Index(fc->ft, cp);
 	if (!gi || FT_Load_Glyph(fc->ft, gi, FT_LOAD_TARGET_LIGHT))

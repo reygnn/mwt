@@ -10,6 +10,7 @@
 /fuzz_regress.log
 /font_oom
 /font_cache
+/font_style
 /tests/fuzz/
 *.o
 *-client-protocol.h
