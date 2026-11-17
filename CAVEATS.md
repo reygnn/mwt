@@ -29,8 +29,10 @@ There is no reflow: shrinking the window cuts off what no longer fits.
 
 The selected text reaches only as far as the scrollback, 5000 lines (`config.h`).
 
-A paste over 64 MiB is dropped whole, with a message on stderr. Of the C0 controls only
-tab, CR and LF are pasted.
+A paste over 64 MiB is dropped whole, with a message on stderr. It counts as UTF-8,
+which Latin-1 doubles, and together with what still waits for the program: a program
+that does not read takes 64 MiB of pastes at most. Of the controls only tab, CR and LF
+are pasted, LF and CR LF as CR; C1 goes too, also as UTF-8.
 
 With Ctrl+Shift+letter on non-Latin layouts without a Latin second layout, the key's
 QWERTY position counts.

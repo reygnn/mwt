@@ -276,8 +276,10 @@ static void pty_write(const char *s, size_t n)
 		if (t.out_off + t.out_len + n > t.out_cap) {
 			size_t cap = MAX(t.out_cap * 2, t.out_off + t.out_len + n + 4096);
 			char *p = realloc(t.out, cap);
-			if (!p)
+			if (!p) {
+				fprintf(stderr, "mwt: %zu bytes to the program dropped: out of memory\n", n);
 				return;
+			}
 			t.out = p;
 			t.out_cap = cap;
 		}
@@ -663,6 +665,14 @@ static void select_all(void)
 static void paste_text(const char *s, size_t n)
 {
 	bool br = t.vt->mode & MODE_BRACKETED;
+	/* Counted as UTF-8, which Latin-1 doubles, and with what still waits for the
+	 * program: pasting again into one that does not read would grow without end.
+	 * mwt's own selection comes here without passing read_paste. */
+	if (n > PASTE_MAX || t.out_len + n > PASTE_MAX) {
+		fprintf(stderr, "mwt: paste dropped: %s\n", n > PASTE_MAX ?
+			"larger than 64 MiB" : "64 MiB would wait for the program");
+		return;
+	}
 	char *buf = malloc(n + 16);
 	if (!buf)
 		return;
@@ -889,14 +899,20 @@ static void read_paste(void)
 				for (int j = 1; j < k; j++)
 					cp = cp << 6 | (p[j] & 0x3f);
 			}
-			if (!put_utf8(&buf, &len, &cap, cp))
+			if ((cp < 0x80 || cp >= 0xa0) && !put_utf8(&buf, &len, &cap, cp))
 				goto nomem;
 			i += k;
-			continue;
+		} else {
+			if ((*p < 0x80 || *p >= 0xa0) && !put_utf8(&buf, &len, &cap, *p))
+				goto nomem;
+			i++;
 		}
-		if ((*p < 0x80 || *p >= 0xa0) && !put_utf8(&buf, &len, &cap, *p))
-			goto nomem;
-		i++;
+		if (len > PASTE_MAX) { /* Latin-1 grows; paste_text would refuse it */
+			fputs("mwt: paste dropped: larger than 64 MiB\n", stderr);
+			paste_free();
+			free(buf);
+			return;
+		}
 	}
 	paste_free();
 	paste_text(buf ? buf : "", len);

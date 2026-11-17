@@ -498,7 +498,60 @@ paste_escape() {
 	printf 'echo a\033[201~b\033]52\007c\x9bd' | wl-copy
 	sleep 0.4
 	K v; T -k Return
-	if try 6 'a\[201~b\]52cd'; then ok "control bytes stripped from a paste"; else info "paste result: $(tail -3 "$DIR/shown" | cut -c1-100)"; fi
+	if try 6 'a\[201~b\]52cd'; then ok "control bytes stripped from a paste"; else gap "paste result: $(tail -3 "$DIR/shown" | cut -c1-100)"; fi
+	# C1 in UTF-8 (U+009B is CSI, U+0085 NEL) goes too. The screen drops C1
+	# anyway, so what the program got is looked at in a file.
+	T 'stty -echo; cat >~/c1.txt; stty echo' -k Return
+	sleep 0.3
+	printf 'a\xc2\x9bb\xc2\x85c\xc3\xa4d\n' | wl-copy
+	sleep 0.4
+	K v
+	local i
+	for ((i = 0; i < 25; i++)); do [ -s "$HOME/c1.txt" ] && break; sleep 0.2; done
+	C d
+	sleep 0.3
+	if [ "$(cat "$HOME/c1.txt" 2>/dev/null)" = "$(printf 'abc\xc3\xa4d')" ]; then
+		ok "C1 controls in UTF-8 dropped from a paste, other UTF-8 kept"
+	else
+		gap "C1 in UTF-8 pasted, cat wrote: '$(od -c "$HOME/c1.txt" 2>/dev/null | head -2 | tr -s ' \n' ' ')'"
+		pkill -x cat
+	fi
+}
+# A program that does not read, pasted into again and again: what waits for it
+# is limited as one paste is. sleep 1.5 between pastes: a new one replaces one
+# still being read, and mwt shows nothing of where reading is.
+paste_queue_limit() {
+	start_mwt
+	T 'sleep 300' -k Return
+	sleep 0.3
+	wl-copy <"$DIR/big.txt"
+	sleep 0.8
+	local i
+	for i in 1 2 3 4; do K v; sleep 1.5; done
+	for ((i = 0; i < 50; i++)); do grep -q 'paste dropped: 64 MiB would wait' "$LOG" && break; sleep 0.2; done
+	if grep -q 'paste dropped: 64 MiB would wait' "$LOG"; then ok "a fourth 17 MB paste into a program that does not read is dropped, with a message"
+	else gap "four 17 MB pastes wait for a program that does not read, mwt at $(ps -o rss= -p "$(mwtpid)") kB"; fi
+	C c
+	sleep 0.5
+	alive || gap "mwt died"
+}
+# Latin-1 doubles as UTF-8: 40 MB of STRING is 80 MB to send, over the limit.
+paste_latin1_limit() {
+	start_mwt
+	T 'stty -echo; cat >~/l1.txt; stty echo' -k Return
+	sleep 0.3
+	head -c 40000000 /dev/zero | tr '\0' '\351' | wl-copy -t STRING
+	sleep 0.8
+	K v
+	local i
+	for ((i = 0; i < 75; i++)); do grep -q 'paste dropped: larger than 64 MiB' "$LOG" && break; sleep 0.2; done
+	C d
+	sleep 0.3
+	local got
+	got=$(stat -c %s "$HOME/l1.txt" 2>/dev/null || echo 0)
+	if grep -q 'paste dropped: larger than 64 MiB' "$LOG" && [ "$got" = 0 ]; then ok "40 MB of Latin-1, 80 MB as UTF-8, is dropped whole, with a message"
+	else gap "40 MB of Latin-1: $got bytes reached the program, log: $(grep 'paste' "$LOG" | head -1)"; fi
+	alive || gap "mwt died"
 }
 # ^C, ^Z, ^D, ^U and DEL in pasted text act in the kernel's line discipline,
 # bracketed paste or not; only tab, CR and LF may stay of the controls.
@@ -1367,7 +1420,7 @@ compositor_dies() {
 
 for c in dcs_swallow osc_swallow_cat fuzz noncharacters \
 	mid_char_selection drag_during_flood select_history click_clusters \
-	paste_integrity paste_bidi paste_escape paste_controls ctrl_c_behind_paste paste_holds_until_return line_limits paste_over_16mb paste_memory reply_behind_paste \
+	paste_integrity paste_bidi paste_escape paste_controls paste_queue_limit paste_latin1_limit ctrl_c_behind_paste paste_holds_until_return line_limits paste_over_16mb paste_memory reply_behind_paste \
 	snippet_typed snippet_paste snippet_paste_no_newline \
 	stty_raw_read_in_shell inlcr tcoff cyrillic_ctrl_c cyrillic_raw copy_on_ru raw_paste_ctrl_c paste_bracket_on_signal python_repl flood_ctrl_c flood_rss soak reply_flood reply_flood_raw title_flood title_flood_stalled \
 	args shells closed_stdio blocked_signals cwd_tricks exit_with_jobs close_ignores_hup \
