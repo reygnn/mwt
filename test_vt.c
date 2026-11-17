@@ -366,8 +366,26 @@ static unsigned fuzz_rand(void)
 	return (unsigned)(fuzz_state >> 11);
 }
 
-static void fuzz_write(void *ud, const char *b, size_t n) { (void)ud; (void)b; (void)n; }
-static void fuzz_title(void *ud, const char *t) { (void)ud; (void)t; }
+/* what a terminal said: a hash of its replies and its last title */
+struct fuzz_said {
+	unsigned long long replies;
+	size_t reply_bytes;
+	char title[VT_OSC_MAX + 1];
+	int titles;
+};
+static void fuzz_write(void *ud, const char *b, size_t n)
+{
+	struct fuzz_said *s = ud;
+	for (size_t i = 0; i < n; i++)
+		s->replies = (s->replies ^ (unsigned char)b[i]) * 0x100000001b3ull;
+	s->reply_bytes += n;
+}
+static void fuzz_title(void *ud, const char *t)
+{
+	struct fuzz_said *s = ud;
+	snprintf(s->title, sizeof s->title, "%s", t);
+	s->titles++;
+}
 
 static const char *const fuzz_frags[] = {
 	"\033", "\033[", "\033]", "\033P", "\a", "\033\\", "\030", "\032", "\r", "\n",
@@ -383,6 +401,7 @@ static const char *const fuzz_frags[] = {
 	"\033[9b", "\033[Z", "\033[9Z", "\033[9I", "\033[I", "\033[g", "\033[3g",
 	"\033H", "\033M", "\033D", "\033E", "\0337", "\0338", "\033c", "\033[!p", "\033#8",
 	"\033(0", "\033(B", "\033)0", "\033[6n", "\033[c", "\033[18t", "\033[?2004$p",
+	"\033[?6n", "\033[5n", "\033[>c", "\033[>q", "\033[4$p", "\033]2;ab\033\\",
 	"\033[1;31m", "\033[38;2;1;2;3m", "\033[38:2::1:2:3m", "\033[38;5m", "\033[38;2m",
 	"\033[0m", "\033[7m", "\033[2 q", "\033]0;x\a", "\033]2;\xff\a",
 	"\xc3", "\xe2\x82", "\xf0\x9f\x98", "\xff", "\xc0\x80", "\xed\xa0\x80", "\xf4\x90\x80\x80",
@@ -434,18 +453,43 @@ static const char *fuzz_broken(const struct vt *vt)
 	return why ? why : fuzz_broken_grid(vt->alt, vt->cols, vt->rows);
 }
 
-static bool fuzz_same(const struct vt *a, const struct vt *b)
+static bool fuzz_cells(const struct cell *a, const struct cell *b, int n)
 {
-	if (a->c.x != b->c.x || a->c.y != b->c.y || a->c.wrapnext != b->c.wrapnext ||
-	    a->mode != b->mode || a->state != b->state || a->hist_count != b->hist_count)
+	for (int x = 0; x < n; x++)
+		if (a[x].cp != b[x].cp || a[x].fg != b[x].fg || a[x].bg != b[x].bg ||
+		    a[x].attr != b[x].attr)
+			return false;
+	return true;
+}
+
+static bool fuzz_cursor(const struct vt_cursor *a, const struct vt_cursor *b)
+{
+	return a->x == b->x && a->y == b->y && a->wrapnext == b->wrapnext &&
+	       fuzz_cells(&a->tmpl, &b->tmpl, 1) && a->charset[0] == b->charset[0] &&
+	       a->charset[1] == b->charset[1] && a->gl == b->gl && a->origin == b->origin;
+}
+
+/* the whole state, both screens, the history and what each said */
+static bool fuzz_same(const struct vt *a, const struct vt *b,
+		      const struct fuzz_said *sa, const struct fuzz_said *sb)
+{
+	if (!fuzz_cursor(&a->c, &b->c) || !fuzz_cursor(&a->saved_pri, &b->saved_pri) ||
+	    !fuzz_cursor(&a->saved_alt, &b->saved_alt) || a->mode != b->mode ||
+	    a->state != b->state || a->top != b->top || a->bot != b->bot ||
+	    a->cursor_style != b->cursor_style || a->hist_count != b->hist_count ||
+	    a->scrolled != b->scrolled || memcmp(a->tabs, b->tabs, (size_t)a->cols * sizeof *a->tabs))
 		return false;
 	for (int r = 0; r < a->rows; r++)
-		for (int x = 0; x < a->cols; x++) {
-			const struct cell *p = &a->line[r][x], *q = &b->line[r][x];
-			if (p->cp != q->cp || p->fg != q->fg || p->bg != q->bg || p->attr != q->attr)
-				return false;
-		}
-	return true;
+		if (!fuzz_cells(a->pri[r], b->pri[r], a->cols) || !fuzz_cells(a->alt[r], b->alt[r], a->cols))
+			return false;
+	for (int64_t i = vt_abs_first(a); i < vt_abs_first(a) + a->hist_count; i++) {
+		int la, lb;
+		const struct cell *ca = vt_abs_line(a, i, &la), *cb = vt_abs_line(b, i, &lb);
+		if (!ca || !cb || la != lb || !fuzz_cells(ca, cb, la))
+			return false;
+	}
+	return sa->replies == sb->replies && sa->reply_bytes == sb->reply_bytes &&
+	       sa->titles == sb->titles && !strcmp(sa->title, sb->title);
 }
 
 static void fuzz_report(long seed, const char *what, const char *why)
@@ -459,7 +503,6 @@ static void test_fuzz(void)
 {
 	const char *env = getenv("VT_FUZZ_SEEDS");
 	long seeds = env ? atol(env) : 300;
-	struct vt_callbacks cb = { .write = fuzz_write, .title = fuzz_title };
 	static char buf[4000];
 	for (long seed = 1; seed <= seeds; seed++) {
 		fuzz_state = (unsigned long long)seed * 0x9E3779B97F4A7C15ULL + 1;
@@ -471,7 +514,12 @@ static void test_fuzz(void)
 		int before = failures;
 
 		/* the same bytes in one piece and in small ones */
-		struct vt *whole = vt_new(cols, rows, 50, &cb), *split = vt_new(cols, rows, 50, &cb);
+		static struct fuzz_said sw, ss;
+		sw = (struct fuzz_said){ .replies = 0xcbf29ce484222325ull };
+		ss = sw;
+		struct vt_callbacks cbw = { .write = fuzz_write, .title = fuzz_title, .ud = &sw };
+		struct vt_callbacks cbs = { .write = fuzz_write, .title = fuzz_title, .ud = &ss };
+		struct vt *whole = vt_new(cols, rows, 50, &cbw), *split = vt_new(cols, rows, 50, &cbs);
 		vt_write(whole, buf, n);
 		for (size_t i = 0; i < n;) {
 			size_t k = 1 + fuzz_rand() % 7;
@@ -479,13 +527,15 @@ static void test_fuzz(void)
 			vt_write(split, buf + i, k);
 			i += k;
 		}
-		if (!fuzz_same(whole, split))
+		if (!fuzz_same(whole, split, &sw, &ss))
 			fuzz_report(seed, "chunks", "the result depends on how the input is cut");
 		vt_free(whole);
 		vt_free(split);
 
 		/* in pieces, with what a window does in between */
-		struct vt *vt = vt_new(cols, rows, 50, &cb);
+		static struct fuzz_said sv;
+		struct vt_callbacks cbv = { .write = fuzz_write, .title = fuzz_title, .ud = &sv };
+		struct vt *vt = vt_new(cols, rows, 50, &cbv);
 		for (size_t i = 0; i < n && failures == before;) {
 			size_t k = 1 + fuzz_rand() % 600;
 			k = k > n - i ? n - i : k;

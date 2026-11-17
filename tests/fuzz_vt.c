@@ -2,7 +2,8 @@
  *
  * The first two bytes pick the grid (1..140 x 1..60), the rest goes into two
  * terminals: one gets it in a single write, the other in chunks whose lengths
- * come from the input itself. Both must end in the same state, and after every
+ * come from the input itself. Both must end in the same state, replies, title
+ * and bells included, and after every
  * write the grid must be consistent (see check()). Then the second terminal is
  * resized a few times, the view scrolled through the history and the terminal
  * reset, each followed by the same checks. Sanitizers catch the rest.
@@ -38,16 +39,32 @@
 
 #define HIST 64
 
+/* what a terminal said: a hash of its replies, its last title, its bells */
+struct said {
+	uint64_t replies;
+	size_t reply_bytes;
+	char title[VT_OSC_MAX + 1];
+	int titles, bells;
+};
+
 static void on_write(void *ud, const char *b, size_t n)
 {
-	(void)ud;
-	(void)b;
-	(void)n;
+	struct said *s = ud;
+	for (size_t i = 0; i < n; i++)
+		s->replies = (s->replies ^ (unsigned char)b[i]) * 0x100000001b3u;
+	s->reply_bytes += n;
+}
+
+static void on_title(void *ud, const char *t)
+{
+	struct said *s = ud;
+	snprintf(s->title, sizeof s->title, "%s", t);
+	s->titles++;
 }
 
 static void on_bell(void *ud)
 {
-	(void)ud;
+	((struct said *)ud)->bells++;
 }
 
 static uint32_t on_color(void *ud, uint32_t c)
@@ -58,7 +75,13 @@ static uint32_t on_color(void *ud, uint32_t c)
 	return c * 0x10101u;
 }
 
-static const struct vt_callbacks cb = { .write = on_write, .bell = on_bell, .color = on_color };
+static struct vt *mk(int cols, int rows, struct said *s)
+{
+	*s = (struct said){ .replies = 0xcbf29ce484222325u };
+	struct vt_callbacks cb = { .write = on_write, .title = on_title, .bell = on_bell,
+				   .color = on_color, .ud = s };
+	return vt_new(cols, rows, HIST, &cb);
+}
 
 static void die(const char *what, const struct vt *vt)
 {
@@ -111,21 +134,46 @@ static bool same_cells(const struct cell *a, const struct cell *b, int n)
 	return true;
 }
 
-static void compare(const struct vt *a, const struct vt *b)
+static bool same_cursor(const struct vt_cursor *a, const struct vt_cursor *b)
+{
+	return a->x == b->x && a->y == b->y && a->wrapnext == b->wrapnext &&
+	       same_cells(&a->tmpl, &b->tmpl, 1) && a->charset[0] == b->charset[0] &&
+	       a->charset[1] == b->charset[1] && a->gl == b->gl && a->origin == b->origin;
+}
+
+static void compare(const struct vt *a, const struct vt *b,
+		    const struct said *sa, const struct said *sb)
 {
 	if (a->mode != b->mode)
 		die("modes differ between whole and chunked", b);
-	if (a->c.x != b->c.x || a->c.y != b->c.y || a->c.wrapnext != b->c.wrapnext ||
-	    !same_cells(&a->c.tmpl, &b->c.tmpl, 1))
+	if (!same_cursor(&a->c, &b->c))
 		die("cursor differs between whole and chunked", b);
+	if (!same_cursor(&a->saved_pri, &b->saved_pri) || !same_cursor(&a->saved_alt, &b->saved_alt))
+		die("saved cursor differs between whole and chunked", b);
 	if (a->top != b->top || a->bot != b->bot)
 		die("scroll region differs between whole and chunked", b);
+	if (a->cursor_style != b->cursor_style)
+		die("cursor style differs between whole and chunked", b);
+	if (memcmp(a->tabs, b->tabs, (size_t)a->cols * sizeof *a->tabs))
+		die("tab stops differ between whole and chunked", b);
 	for (int r = 0; r < a->rows; r++)
 		if (!same_cells(a->pri[r], b->pri[r], a->cols) ||
 		    !same_cells(a->alt[r], b->alt[r], a->cols))
 			die("screen differs between whole and chunked", b);
-	if (a->hist_count != b->hist_count)
+	if (a->hist_count != b->hist_count || a->scrolled != b->scrolled)
 		die("history differs between whole and chunked", b);
+	for (int64_t i = vt_abs_first(a); i < vt_abs_first(a) + a->hist_count; i++) {
+		int la, lb;
+		const struct cell *ca = vt_abs_line(a, i, &la), *cb = vt_abs_line(b, i, &lb);
+		if (!ca || !cb || la != lb || !same_cells(ca, cb, la))
+			die("history lines differ between whole and chunked", b);
+	}
+	if (sa->replies != sb->replies || sa->reply_bytes != sb->reply_bytes)
+		die("replies differ between whole and chunked", b);
+	if (sa->titles != sb->titles || strcmp(sa->title, sb->title))
+		die("title differs between whole and chunked", b);
+	if (sa->bells != sb->bells)
+		die("bells differ between whole and chunked", b);
 }
 
 int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size)
@@ -136,8 +184,9 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size)
 	data += 2;
 	size -= 2;
 
-	struct vt *a = vt_new(cols, rows, HIST, &cb);
-	struct vt *b = vt_new(cols, rows, HIST, &cb);
+	static struct said sa, sb;
+	struct vt *a = mk(cols, rows, &sa);
+	struct vt *b = mk(cols, rows, &sb);
 	if (!a || !b)
 		abort();
 	a->allow_checksum = b->allow_checksum = true; /* DECRQCRA is parsed too */
@@ -155,7 +204,7 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size)
 		off += n;
 		check(b);
 	}
-	compare(a, b);
+	compare(a, b, &sa, &sb);
 
 	/* resizes taken from the last bytes, then the same text once more */
 	for (size_t i = 0; i < 4 && i < size; i++) {
