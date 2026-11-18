@@ -1106,6 +1106,29 @@ no_pidfd() {
 	pkill -f 'while :' 2>/dev/null
 	return 0
 }
+# The same, started with SIGCHLD ignored: the kernel reaped the shell, waitpid
+# got ECHILD, and jobs on the pty kept mwt for good. Python execs straight into
+# mwt, as in blocked_signals: a shell between could reset the signal.
+no_pidfd_sigchld() {
+	[ -n "$FAILPIDFD" ] || { info "failpidfd did not build"; return 0; }
+	LOG=$DIR/log.$CASE
+	(cd "$HOME" && LD_PRELOAD="$FAILPIDFD" ASAN_OPTIONS=detect_leaks=0:verify_asan_link_order=0 \
+		python3 -c 'import os, signal, sys
+signal.signal(signal.SIGCHLD, signal.SIG_IGN)
+os.execv(sys.argv[1], sys.argv[1:])' "$MWT" >"$LOG" 2>&1 &)
+	wait_mwt || { gap "started with SIGCHLD ignored, mwt shows no window"; return 0; }
+	local ign i
+	ign=$(awk '/^SigIgn/ { print $2 }' "/proc/$(mwtpid)/status" 2>/dev/null)
+	(( 0x${ign:-0} & 0x10000 )) && gap "mwt keeps SIGCHLD ignored"
+	T 'echo noch-da' -k Return
+	try 10 noch-da || { gap "started with SIGCHLD ignored, mwt does not run the shell"; return 0; }
+	T '(while :; do echo x; sleep 0.01; done) & sleep 1000 & exit' -k Return
+	for ((i = 0; i < 25; i++)); do alive || break; sleep 0.2; done
+	if alive; then gap "SIGCHLD ignored, no pidfd: mwt stays after the shell exits with jobs on the pty"
+	else ok "SIGCHLD ignored, no pidfd: mwt ends with the shell"; fi
+	pkill -f 'while :' 2>/dev/null
+	return 0
+}
 close_ignores_hup() {
 	start_mwt
 	T "exec sh -c \"trap '' HUP; while :; do sleep 1; done\"" -k Return
@@ -1491,7 +1514,7 @@ for c in dcs_swallow osc_swallow_cat fuzz noncharacters \
 	paste_integrity paste_bidi paste_escape paste_controls paste_queue_limit paste_latin1_limit ctrl_c_behind_paste paste_holds_until_return line_limits paste_over_16mb paste_memory reply_behind_paste \
 	snippet_typed snippet_paste snippet_paste_no_newline \
 	stty_raw_read_in_shell inlcr tcoff cyrillic_ctrl_c cyrillic_raw copy_on_ru raw_paste_ctrl_c paste_bracket_on_signal python_repl flood_ctrl_c flood_rss soak reply_flood reply_flood_raw title_flood title_flood_stalled \
-	args shells closed_stdio blocked_signals terminfo_dirs cwd_tricks exit_with_jobs no_pidfd close_ignores_hup \
+	args shells closed_stdio blocked_signals terminfo_dirs cwd_tricks exit_with_jobs no_pidfd no_pidfd_sigchld close_ignores_hup \
 	tiny resize_storm fd_leak fd_to_child stalled_readers stalled_pipes silent_source plain_source flood_source fd_limit low_memory menu_abuse buffer_fail first_buffer_fail zoom_limit compositor_dies; do
 	run "$c"
 done

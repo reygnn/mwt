@@ -2677,13 +2677,26 @@ static void read_pty(void)
 
 /* ---- main ------------------------------------------------------------- */
 
+/* Whether the shell is gone: reaped here, or already (ECHILD). Then t.child is 0,
+ * so that no signal goes to its pid, which may be someone else's by now. */
+static bool child_gone(void)
+{
+	if (t.child <= 0)
+		return true;
+	pid_t r = waitpid(t.child, NULL, WNOHANG);
+	if (r == t.child || (r < 0 && errno == ECHILD)) {
+		t.child = 0;
+		return true;
+	}
+	return false;
+}
+
 /* reap the child if it ends within ms */
 static void wait_child(int ms)
 {
 	int64_t end = now_ms() + ms;
 	for (;;) {
-		pid_t r = waitpid(t.child, NULL, WNOHANG);
-		if (r == t.child || (r < 0 && errno == ECHILD))
+		if (child_gone())
 			return;
 		int64_t left = end - now_ms();
 		if (left <= 0)
@@ -2701,12 +2714,12 @@ static void wait_child(int ms)
  */
 static void reap_child(void)
 {
-	if (t.child <= 0)
-		return;
 	if (t.pty >= 0) {
 		close(t.pty);
 		t.pty = -1;
 	}
+	if (child_gone()) /* no SIGHUP to a pid that may be reused */
+		return;
 	kill(t.child, SIGHUP);
 	wait_child(2000);
 }
@@ -2769,6 +2782,9 @@ done:;
 	if (strcmp(nl_langinfo(CODESET), "UTF-8"))
 		setlocale(LC_CTYPE, "C.UTF-8");
 	signal(SIGPIPE, SIG_IGN);
+	/* SIGCHLD left ignored by what started mwt has the kernel reap the shell:
+	 * without a pidfd its end would be seen only once jobs close the pty */
+	signal(SIGCHLD, SIG_DFL);
 
 	load_colors(app_id);
 	init_palette();
@@ -2867,7 +2883,7 @@ done:;
 				continue;
 			break;
 		}
-		if (t.child_fd < 0 && waitpid(t.child, NULL, WNOHANG) == t.child)
+		if (t.child_fd < 0 && child_gone())
 			t.running = false;
 		if (fds[0].revents & POLLIN)
 			wl_display_read_events(t.display);
