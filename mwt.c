@@ -42,6 +42,7 @@
 #include "paste.h"
 #include "sel.h"
 #include "shell.h"
+#include "util.h"
 #include "vt.h"
 
 #define MIN(a, b) ((a) < (b) ? (a) : (b))
@@ -64,10 +65,6 @@ struct xfer {
 };
 #define MAX_XFERS 16
 
-
-static const char *mimes[] = {
-	"text/plain;charset=utf-8", "UTF8_STRING", "text/plain", "TEXT", "STRING",
-};
 
 static struct {
 	/* globals */
@@ -340,15 +337,7 @@ static void send_text(const char *text, const char *mime, int fd)
 }
 
 /* an offer's rank before any of its types is known, and of a type not in mimes */
-#define MIME_NONE ((int)LEN(mimes))
-
-static int mime_rank(const char *mime)
-{
-	for (size_t i = 0; i < LEN(mimes); i++)
-		if (!strcmp(mime, mimes[i]))
-			return (int)i;
-	return MIME_NONE;
-}
+#define MIME_NONE MIME_COUNT
 
 static void ds_target(void *d, struct wl_data_source *s, const char *m) { (void)d; (void)s; (void)m; }
 static void ds_send(void *d, struct wl_data_source *s, const char *m, int fd)
@@ -1233,7 +1222,7 @@ static void menu_key(xkb_keysym_t sym)
 			menu_run(t.menu.hover);
 		return;
 	case XKB_KEY_Up: case XKB_KEY_KP_Up:
-		step = n - 1;
+		step = -1;
 		break;
 	case XKB_KEY_Down: case XKB_KEY_KP_Down:
 		step = 1;
@@ -1241,14 +1230,10 @@ static void menu_key(xkb_keysym_t sym)
 	default:
 		return;
 	}
-	int i = t.menu.hover < 0 && step == 1 ? n - 1 : MAX(t.menu.hover, 0);
-	for (int k = 0; k < n; k++) {
-		i = (i + step) % n;
-		if (menu_enabled(i)) {
-			menu_set_hover(i);
-			return;
-		}
-	}
+	unsigned on = 0;
+	for (int i = 0; i < n; i++)
+		on |= menu_enabled(i) ? 1u << i : 0;
+	menu_set_hover(menu_next(t.menu.hover, n, step, on));
 }
 
 static void menu_configure(void *d, struct xdg_surface *xs, uint32_t serial)
@@ -2123,27 +2108,6 @@ static void read_pty(void)
 
 /* ---- main ------------------------------------------------------------- */
 
-/* COLSxROWS within 1..VT_MAX_COLS and 1..VT_MAX_ROWS */
-static bool parse_geometry(const char *s, int *cols, int *rows)
-{
-	char *end;
-	errno = 0;
-	long c = strtol(s, &end, 10);
-	if (errno || end == s || *end != 'x')
-		return false;
-	const char *r0 = end + 1;
-	long r = strtol(r0, &end, 10);
-	if (errno || end == r0 || *end)
-		return false;
-	if (c < 1 || r < 1 || c > VT_MAX_COLS || r > VT_MAX_ROWS) {
-		fprintf(stderr, "mwt: -g takes 1x1 up to %dx%d\n", VT_MAX_COLS, VT_MAX_ROWS);
-		return false;
-	}
-	*cols = (int)c;
-	*rows = (int)r;
-	return true;
-}
-
 static void usage(void)
 {
 	fprintf(stderr, "usage: mwt [-v] [-h] [-f font] [-a app-id] [-T title] [-g COLSxROWS] "
@@ -2167,8 +2131,17 @@ int main(int argc, char **argv)
 		case 'a': app_id = optarg; break;
 		case 'T': title = optarg; break;
 		case 'g':
-			if (!parse_geometry(optarg, &t.init_cols, &t.init_rows))
+			switch (parse_geometry(optarg, VT_MAX_COLS, VT_MAX_ROWS,
+					       &t.init_cols, &t.init_rows)) {
+			case GEOM_RANGE:
+				fprintf(stderr, "mwt: -g takes 1x1 up to %dx%d\n",
+					VT_MAX_COLS, VT_MAX_ROWS);
 				usage();
+				break;
+			case GEOM_SYNTAX:
+				usage();
+				break;
+			}
 			break;
 		case 'e': goto done; /* the rest is the command */
 		default: usage();

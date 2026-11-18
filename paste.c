@@ -115,6 +115,18 @@ void track_brackets(struct brackets *b, const char *s, size_t n)
 	}
 }
 
+const char *const mimes[MIME_COUNT] = {
+	"text/plain;charset=utf-8", "UTF8_STRING", "text/plain", "TEXT", "STRING",
+};
+
+int mime_rank(const char *mime)
+{
+	for (int i = 0; i < MIME_COUNT; i++)
+		if (!strcmp(mime, mimes[i]))
+			return i;
+	return MIME_COUNT;
+}
+
 char *to_latin1(const char *s)
 {
 	char *out = malloc(strlen(s) + 1);

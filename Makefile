@@ -16,7 +16,7 @@ primary-selection-unstable-v1_XML = $(WP)/unstable/primary-selection/primary-sel
 
 PROTO_H = $(PROTOS:=-client-protocol.h)
 PROTO_C = $(PROTOS:=-protocol.c)
-OBJ = mwt.o vt.o font.o rc.o input.o paste.o sel.o shell.o $(PROTO_C:.c=.o)
+OBJ = mwt.o vt.o font.o rc.o input.o paste.o sel.o shell.o util.o $(PROTO_C:.c=.o)
 
 all: mwt
 
@@ -24,10 +24,10 @@ mwt: $(OBJ)
 	$(CC) $(LDFLAGS) -o $@ $(OBJ) $(LDLIBS)
 
 # mwt that answers DECRQCRA, which esctest reads the screen with; see allow_checksum.
-mwt-esctest: mwt.c config.h version.h vt.h font.h rc.h input.h paste.h sel.h shell.h $(PROTO_H) $(filter-out mwt.o,$(OBJ))
+mwt-esctest: mwt.c config.h version.h vt.h font.h rc.h input.h paste.h sel.h shell.h util.h $(PROTO_H) $(filter-out mwt.o,$(OBJ))
 	$(CC) $(CFLAGS) -DMWT_ALLOW_CHECKSUM $(LDFLAGS) -o $@ mwt.c $(filter-out mwt.o,$(OBJ)) $(LDLIBS)
 
-mwt.o: mwt.c config.h version.h vt.h font.h rc.h input.h paste.h sel.h shell.h $(PROTO_H)
+mwt.o: mwt.c config.h version.h vt.h font.h rc.h input.h paste.h sel.h shell.h util.h $(PROTO_H)
 vt.o: vt.c vt.h version.h
 font.o: font.c font.h
 rc.o: rc.c rc.h
@@ -35,6 +35,7 @@ input.o: input.c input.h vt.h
 paste.o: paste.c paste.h
 sel.o: sel.c sel.h vt.h paste.h
 shell.o: shell.c shell.h paste.h
+util.o: util.c util.h
 
 %-client-protocol.h:
 	$(SCANNER) client-header $($*_XML) $@
@@ -75,17 +76,22 @@ test_shell: test_shell.c shell.c shell.h paste.c paste.h
 	$(CC) -std=c11 -Wall -Wextra -g -fsanitize=address,undefined -fno-sanitize-recover=all \
 		-Wl,--wrap=kill,--wrap=realloc -o $@ test_shell.c shell.c paste.c -lutil
 
+test_util: test_util.c util.c util.h
+	$(CC) -std=c11 -Wall -Wextra -g -fsanitize=address,undefined -fno-sanitize-recover=all \
+		-o $@ test_util.c util.c
+
 # The unit tests (test_vt, test_rc, test_input, test_paste, test_sel,
-# test_shell), mwt's command line without a compositor (tests/args.sh), then
+# test_shell, test_util), mwt's command line without a compositor (tests/args.sh), then
 # every input kept in tests/fuzz-regress through the checks of tests/fuzz_vt.c;
 # no clang needed.
-check: test_vt test_rc test_input test_paste test_sel test_shell fuzz_regress mwt
+check: test_vt test_rc test_input test_paste test_sel test_shell test_util fuzz_regress mwt
 	./test_vt
 	./test_rc
 	./test_input
 	./test_paste
 	./test_sel
 	./test_shell
+	./test_util
 	tests/args.sh
 	@./fuzz_regress tests/fuzz-regress/* 2>fuzz_regress.log || { cat fuzz_regress.log; exit 1; }
 	@rm -f fuzz_regress.log
@@ -216,6 +222,6 @@ uninstall:
 	rm -f $(DESTDIR)$(PREFIX)/share/terminfo/m/mwt $(DESTDIR)$(PREFIX)/share/terminfo/6d/mwt
 
 clean:
-	rm -f mwt mwt-esctest test_vt test_rc test_input test_paste test_sel test_shell vtdump test_replay fuzz_vt fuzz_regress fuzz_regress.log font_oom font_cache font_style font_lookup *.o $(PROTO_H) $(PROTO_C)
+	rm -f mwt mwt-esctest test_vt test_rc test_input test_paste test_sel test_shell test_util vtdump test_replay fuzz_vt fuzz_regress fuzz_regress.log font_oom font_cache font_style font_lookup *.o $(PROTO_H) $(PROTO_C)
 
 .PHONY: all check replay fuzz terminfo keys pixel mouse keyboard test evil fonts oldwayland width esctest profile install uninstall clean

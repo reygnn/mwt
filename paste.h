@@ -39,6 +39,13 @@ struct brackets {
 };
 void track_brackets(struct brackets *b, const char *s, size_t n);
 
+/* The text types mwt offers and takes, best first; STRING is Latin-1. */
+#define MIME_COUNT 5
+extern const char *const mimes[MIME_COUNT];
+
+/* Its place in mimes, MIME_COUNT for one that is not there. */
+int mime_rank(const char *mime);
+
 /* UTF-8 as Latin-1, for STRING: what it cannot hold becomes "?". NULL when out
  * of memory. */
 char *to_latin1(const char *s);

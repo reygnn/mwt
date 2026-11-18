@@ -45,9 +45,9 @@ Zu entscheiden, aus der dritten Review (docs/history/Review-2026-11-08.md):
   Tasten und Maus sind in input.c (test_input), der Paste in paste.c
   (test_paste, mit Zufallseingaben statt eines Fuzz-Harness), die Selektion
   in sel.c (test_sel), Shell und pty in shell.c (test_shell, mit echten
-  ptys, Pipes und Prozessen). Noch offen:
-  - Klein: parse_geometry, snap_size, buffer_fits, mime_rank, cursor_size,
-    menu_key (die Wahl des nächsten aktiven Eintrags).
+  ptys, Pipes und Prozessen), parse_geometry und menu_key in util.c
+  (test_util), mime_rank in paste.c. Noch offen, wenn sie sich ändern:
+  snap_size, buffer_fits, cursor_size.
   Die Wayland-Callbacks bleiben bei den Black-Box-Tests unter sway.
 
 Tests, die noch fehlen, als Kür:

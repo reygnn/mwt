@@ -511,6 +511,24 @@ static void test_latin1(void)
 	free(s);
 }
 
+static void test_mime(void)
+{
+	/* best first: UTF-8 under its names, then text/plain, then Latin-1 */
+	CHECK(mime_rank("text/plain;charset=utf-8") == 0);
+	CHECK(mime_rank("UTF8_STRING") == 1);
+	CHECK(mime_rank("text/plain") == 2);
+	CHECK(mime_rank("TEXT") == 3);
+	CHECK(mime_rank("STRING") == 4 && !strcmp(mimes[4], "STRING"));
+	for (int i = 0; i < MIME_COUNT; i++)
+		CHECK(mime_rank(mimes[i]) == i);
+	/* exactly as named */
+	CHECK(mime_rank("text/html") == MIME_COUNT);
+	CHECK(mime_rank("text/plain;charset=UTF-8") == MIME_COUNT);
+	CHECK(mime_rank("text/plain;charset=utf-8 ") == MIME_COUNT);
+	CHECK(mime_rank("utf8_string") == MIME_COUNT);
+	CHECK(mime_rank("") == MIME_COUNT);
+}
+
 int main(void)
 {
 	test_utf8_seq();
@@ -519,6 +537,7 @@ int main(void)
 	test_filter();
 	test_brackets();
 	test_latin1();
+	test_mime();
 	printf("test_paste: %d/%d checks passed\n", checks - failures, checks);
 	return failures != 0;
 }
