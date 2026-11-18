@@ -13,7 +13,7 @@ use mwc's `vinput` need `MWC_DIR`, which defaults to `../../mwc`:
 | Target | |
 |---|---|
 | `make` | mwt |
-| `make check` | `test_vt`, `test_rc`, `test_input` and the kept fuzz findings in `tests/fuzz-regress`, under ASan and UBSan, and mwt's command line (`tests/args.sh`), headless |
+| `make check` | `test_vt`, `test_rc`, `test_input`, `test_paste` and the kept fuzz findings in `tests/fuzz-regress`, under ASan and UBSan, and mwt's command line (`tests/args.sh`), headless |
 | `make replay` | about 290 recorded VT100 animations and ANSI files through the VT core; `REPORT=1` lists what mwt lacks |
 | `make fuzz` | libFuzzer on the VT core, `FUZZ_TIME` seconds (600); clang on the host or the `make evil` container |
 | `make terminfo` | each capability of `mwt.info` against the VT core; python3 and ncurses |
@@ -49,10 +49,11 @@ esctest is GPL. The containers have no network, so fetch on the host first with
 | `font.c` | fontconfig and FreeType, four styles, fallback faces, glyph cache |
 | `mwt.c` | Wayland (xdg-shell, xdg-decoration, viewporter, wl_shm, data device, primary selection), keyboard and pointer events, pty, event loop |
 | `input.c` | what keys and the mouse send: xkbcommon with Compose, shortcuts, mouse reports; no Wayland |
+| `paste.c` | what a paste becomes: UTF-8 checks, decoding, the control filter, the brackets; the clipboard's Latin-1 |
 | `rc.c` | the mwtrc and the minimum contrast; no Wayland |
 | `mwt.info` | terminfo; declares only what `vt.c` really does |
 | `config.h`, `version.h` | defaults; the version for `-v` and XTVERSION |
-| `test_vt.c`, `test_rc.c`, `test_input.c` | unit tests; `test_vt` fails each allocation once through `--wrap`, `test_input` compiles keymaps from layout names |
+| `test_vt.c`, `test_rc.c`, `test_input.c`, `test_paste.c` | unit tests; `test_vt` and `test_paste` fail each allocation once through `--wrap`, `test_input` compiles keymaps from layout names |
 | `tests/replay.c` | plays recordings whole, byte by byte, in chunks and with resizes; the first three must end the same |
 | `tests/fuzz_vt.c` | libFuzzer harness; built with `-DFUZZ_STANDALONE` it is `fuzz_regress`. How to keep a finding: its head |
 | `tests/` | black-box and adversarial tests, from the mt project; `tests/mwtlib.py` for the Python ones |

@@ -44,6 +44,7 @@
 #include "version.h"
 #include "font.h"
 #include "input.h"
+#include "paste.h"
 #include "vt.h"
 
 #define MIN(a, b) ((a) < (b) ? (a) : (b))
@@ -124,8 +125,7 @@ static struct {
 	char *out;          /* what waits for the pty: out_len bytes from out_off */
 	size_t out_off, out_len, out_cap;
 	size_t reply_len;   /* of those, at most this many are replies (vt_reply) */
-	int bracket_seen;  /* how much of "\033[200~" or "\033[201~" went out last */
-	bool bracket_open; /* a paste's opening bracket went out, its closing not */
+	struct brackets brackets; /* the paste brackets in what went out */
 	bool was_alt;
 	int last_cx, last_cy;
 	bool last_shown;
@@ -219,26 +219,6 @@ static void paste_free(void)
 	t.paste_len = t.paste_cap = 0;
 }
 
-/* Follows the paste brackets in what has gone to the pty, which a write may cut
- * anywhere: bracket_seen is 0 to 4 for that much of "\033[20", 5 for "\033[200"
- * and 6 for "\033[201". Pasted text holds no ESC, so nothing else looks alike. */
-static void track_brackets(const char *s, size_t n)
-{
-	for (size_t i = 0; i < n; i++) {
-		char c = s[i];
-		int k = t.bracket_seen;
-		if (k < 4 && c == "\033[20"[k])
-			t.bracket_seen = k + 1;
-		else if (k == 4 && (c == '0' || c == '1'))
-			t.bracket_seen = c == '0' ? 5 : 6;
-		else {
-			if (k >= 5 && c == '~')
-				t.bracket_open = k == 5;
-			t.bracket_seen = c == '\033';
-		}
-	}
-}
-
 /* Nothing waits any more: a buffer a large paste grew is given back. */
 static void out_empty(void)
 {
@@ -263,7 +243,7 @@ static void flush_out(void)
 				out_empty();
 			return;
 		}
-		track_brackets(t.out + t.out_off, n);
+		track_brackets(&t.brackets, t.out + t.out_off, n);
 		t.out_off += n;
 		t.out_len -= n;
 		t.reply_len = MIN(t.reply_len, t.out_len);
@@ -340,8 +320,8 @@ static void drop_paste_for_signal(unsigned char c)
 	tcflush(t.pty, TCOFLUSH);
 	tcsetattr(t.pty, TCSAFLUSH, &tm);
 	/* a bracket cut off halfway is ended by the ESC of the next */
-	t.bracket_seen = 0;
-	if (t.bracket_open)
+	t.brackets.seen = 0;
+	if (t.brackets.open)
 		pty_write("\033[201~", 6);
 }
 
@@ -421,29 +401,6 @@ static void sel_range(int64_t *ba, int *bc, int64_t *ea, int *ec)
 	}
 }
 
-/* false when out of memory, and then the buffer is as it was */
-static bool put_utf8(char **buf, size_t *len, size_t *cap, uint32_t cp)
-{
-	if (*len + 5 > *cap) {
-		size_t ncap = MAX(*cap * 2, 256);
-		char *p = realloc(*buf, ncap);
-		if (!p)
-			return false;
-		*buf = p;
-		*cap = ncap;
-	}
-	unsigned char *p = (unsigned char *)*buf + *len;
-	int n;
-	if (cp < 0x80) { p[0] = cp; n = 1; }
-	else if (cp < 0x800) { p[0] = 0xc0 | cp >> 6; p[1] = 0x80 | (cp & 0x3f); n = 2; }
-	else if (cp < 0x10000) { p[0] = 0xe0 | cp >> 12; p[1] = 0x80 | (cp >> 6 & 0x3f);
-		p[2] = 0x80 | (cp & 0x3f); n = 3; }
-	else { p[0] = 0xf0 | cp >> 18; p[1] = 0x80 | (cp >> 12 & 0x3f);
-		p[2] = 0x80 | (cp >> 6 & 0x3f); p[3] = 0x80 | (cp & 0x3f); n = 4; }
-	*len += n;
-	return true;
-}
-
 static char *selection_text(void)
 {
 	if (!t.sel.active)
@@ -500,27 +457,6 @@ static void sel_clear(void)
 }
 
 /* ---- clipboard and primary selection ---------------------------------- */
-
-/* UTF-8 as Latin-1, for STRING: what it cannot hold becomes "?" */
-static char *to_latin1(const char *s)
-{
-	char *out = malloc(strlen(s) + 1);
-	if (!out)
-		return NULL;
-	size_t o = 0;
-	for (const unsigned char *p = (const unsigned char *)s; *p;) {
-		uint32_t cp = *p;
-		int more = cp >= 0xf0 ? 3 : cp >= 0xe0 ? 2 : cp >= 0xc0 ? 1 : 0;
-		if (more)
-			cp &= 0x3f >> more;
-		p++;
-		for (; more && (*p & 0xc0) == 0x80; more--)
-			cp = cp << 6 | (*p++ & 0x3f);
-		out[o++] = cp < 0x80 || (cp >= 0xa0 && cp < 0x100) ? (char)cp : '?';
-	}
-	out[o] = 0;
-	return out;
-}
 
 /* slots stay in age order, oldest first */
 static void xfer_drop(int i)
@@ -698,31 +634,10 @@ static void paste_text(const char *s, size_t n)
 			"larger than 64 MiB" : "64 MiB would wait for the program");
 		return;
 	}
-	char *buf = malloc(n + 16);
+	char *buf = malloc(n + 12);
 	if (!buf)
 		return;
-	size_t o = 0;
-	if (br) {
-		memcpy(buf, "\033[200~", 6);
-		o = 6;
-	}
-	/* Of the controls only tab, CR and LF stay. ESC would end the bracket, and
-	 * ^C, ^Z, ^D, ^U, DEL and the like act in the kernel's line discipline,
-	 * bracketed paste or not: pasted text must not raise a signal or edit. */
-	for (size_t i = 0; i < n; i++) {
-		unsigned char c = (unsigned char)s[i];
-		if (c == '\n') {
-			if (i == 0 || s[i - 1] != '\r')
-				buf[o++] = '\r';
-		} else if ((c >= 0x20 && c != 0x7f) || c == '\t' || c == '\r') {
-			buf[o++] = (char)c;
-		}
-	}
-	if (br) {
-		memcpy(buf + o, "\033[201~", 6);
-		o += 6;
-	}
-	send_input(buf, o);
+	send_input(buf, paste_filter(s, n, br, buf));
 	free(buf);
 }
 
@@ -853,22 +768,6 @@ static void paste(bool primary)
 	wl_display_flush(t.display);
 }
 
-/* Length of the valid UTF-8 sequence at s, or 0 */
-static int utf8_seq(const unsigned char *s, size_t n)
-{
-	int k = s[0] < 0x80 ? 1 : s[0] >= 0xc2 && s[0] < 0xe0 ? 2 :
-		s[0] >= 0xe0 && s[0] < 0xf0 ? 3 : s[0] >= 0xf0 && s[0] < 0xf5 ? 4 : 0;
-	if (!k || (size_t)k > n)
-		return 0;
-	for (int i = 1; i < k; i++)
-		if ((s[i] & 0xc0) != 0x80)
-			return 0;
-	if ((s[0] == 0xe0 && s[1] < 0xa0) || (s[0] == 0xed && s[1] >= 0xa0) ||
-	    (s[0] == 0xf0 && s[1] < 0x90) || (s[0] == 0xf4 && s[1] >= 0x90))
-		return 0;
-	return k;
-}
-
 static void drop_paste(const char *why)
 {
 	fprintf(stderr, "mwt: paste dropped: %s\n", why);
@@ -910,42 +809,16 @@ static void read_paste(void)
 	}
 	close(t.paste_fd);
 	t.paste_fd = -1;
-	/* STRING is Latin-1, and so is what is not UTF-8 whatever its label says:
-	 * sources offer one text under every name. C1 controls go. */
 	char *buf = NULL;
-	size_t len = 0, cap = 0;
-	for (size_t i = 0; i < t.paste_len;) {
-		const unsigned char *p = (const unsigned char *)t.paste_buf + i;
-		int k = t.paste_latin1 ? 0 : utf8_seq(p, t.paste_len - i);
-		if (k) {
-			uint32_t cp = *p;
-			if (k > 1) {
-				cp &= 0x3f >> (k - 1);
-				for (int j = 1; j < k; j++)
-					cp = cp << 6 | (p[j] & 0x3f);
-			}
-			if ((cp < 0x80 || cp >= 0xa0) && !put_utf8(&buf, &len, &cap, cp))
-				goto nomem;
-			i += k;
-		} else {
-			if ((*p < 0x80 || *p >= 0xa0) && !put_utf8(&buf, &len, &cap, *p))
-				goto nomem;
-			i++;
-		}
-		if (len > PASTE_MAX) { /* Latin-1 grows; paste_text would refuse it */
-			fputs("mwt: paste dropped: larger than 64 MiB\n", stderr);
-			paste_free();
-			free(buf);
-			return;
-		}
+	size_t len;
+	int r = paste_decode(t.paste_buf, t.paste_len, t.paste_latin1, PASTE_MAX, &buf, &len);
+	paste_free();
+	if (r != PASTE_OK) {
+		fprintf(stderr, "mwt: paste dropped: %s\n",
+			r == PASTE_NOMEM ? "out of memory" : "larger than 64 MiB");
+		return;
 	}
-	paste_free();
 	paste_text(buf ? buf : "", len);
-	free(buf);
-	return;
-nomem:
-	fputs("mwt: paste dropped: out of memory\n", stderr);
-	paste_free();
 	free(buf);
 }
 
