@@ -4,7 +4,7 @@
 # What mwt shows is read through a mouse drag and the primary selection.
 # Prints OK, GAP, INFO or CRASH per case and fails on a GAP or a CRASH.
 # Run with `make evil`; it needs a container. ONLY="case case" picks cases,
-# VIN_LAYOUTS=1 says that $VINPUT takes its layout from VIN_LAYOUT.
+# VIN_LAYOUTS=1 says that $VINPUT takes XKB layouts as a third argument.
 set -u
 [ -e /run/.containerenv ] || {
 	echo "evil: only in a container, it kills every mwt, sleep and yes it finds: make evil"
@@ -734,7 +734,7 @@ tcoff() {
 	if try 4 'tcoff-weiter'; then info "TCOOFF ends on Ctrl+C/Q"; return; fi
 	info "TCOOFF: output stays stopped, keys do not help (a kernel stop; only tcflow(TCOON) ends it)"
 }
-vkey() { local l=$1; shift; (sleep 0.6; echo "key Escape"; sleep 0.2; for k in "$@"; do echo "key $k"; sleep 0.3; done; sleep 0.3) | VIN_LAYOUT=$l "$VINPUT" 1000 700 >/dev/null 2>&1; }
+vkey() { local l=$1; shift; (sleep 0.6; echo "key Escape"; sleep 0.2; for k in "$@"; do echo "key $k"; sleep 0.3; done; sleep 0.3) | "$VINPUT" 1000 700 "$l" >/dev/null 2>&1; }
 layouts() { [ "${VIN_LAYOUTS:-}" = 1 ] || { info "skipped: vinput has no layouts"; return 1; }; }
 cyrillic_ctrl_c() {
 	layouts || return
