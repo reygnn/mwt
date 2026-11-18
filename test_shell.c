@@ -1,0 +1,701 @@
+/* test_shell.c - what waits for the pty, and the shell, with real pipes, ptys
+ * and processes: make check */
+#define _GNU_SOURCE
+#include <errno.h>
+#include <fcntl.h>
+#include <poll.h>
+#include <pty.h>
+#include <signal.h>
+#include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <sys/syscall.h>
+#include <sys/wait.h>
+#include <termios.h>
+#include <time.h>
+#include <unistd.h>
+
+#include "shell.h"
+
+#define MIN(a, b) ((a) < (b) ? (a) : (b))
+
+static int failures, checks;
+
+#define CHECK(c) do { checks++; if (!(c)) { failures++; \
+	fprintf(stderr, "%s:%d: FAIL: %s\n", __FILE__, __LINE__, #c); } } while (0)
+
+/* realloc that fails once, the countdown-th call from now */
+void *__real_realloc(void *p, size_t n);
+static long countdown = -1;
+void *__wrap_realloc(void *p, size_t n)
+{
+	if (countdown >= 0 && countdown-- == 0)
+		return NULL;
+	return __real_realloc(p, n);
+}
+
+/* kill as it is, with each signal sent noted: what no real process can show, a
+ * signal to a pid that is no longer the shell's */
+int __real_kill(pid_t pid, int sig);
+struct sent { pid_t pid; int sig; };
+static struct sent kills[16];
+static int nkills;
+int __wrap_kill(pid_t pid, int sig)
+{
+	if (sig && nkills < 16)
+		kills[nkills++] = (struct sent){ pid, sig };
+	return __real_kill(pid, sig);
+}
+
+static uint64_t rng = 0x853c49e6748fea9bu;
+static unsigned rnd(unsigned n)
+{
+	rng ^= rng << 13;
+	rng ^= rng >> 7;
+	rng ^= rng << 17;
+	return (unsigned)(rng % n);
+}
+
+static int64_t now_ms(void)
+{
+	struct timespec ts;
+	clock_gettime(CLOCK_MONOTONIC, &ts);
+	return (int64_t)ts.tv_sec * 1000 + ts.tv_nsec / 1000000;
+}
+
+/* A pipe that takes one page at a time, its write end nonblocking: what a pty
+ * does with a program that does not read. */
+static void small_pipe(int fds[2])
+{
+	if (pipe2(fds, O_CLOEXEC) < 0) {
+		perror("pipe2");
+		exit(1);
+	}
+	fcntl(fds[1], F_SETPIPE_SZ, 4096);
+	fcntl(fds[1], F_SETFL, O_NONBLOCK);
+	fcntl(fds[0], F_SETFL, O_NONBLOCK);
+}
+
+/* up to max bytes of what fd holds now, appended to buf of size bytes */
+static size_t drain_into(int fd, char *buf, size_t size, size_t *len, size_t max)
+{
+	size_t got = 0;
+	max = MIN(max, size - *len);
+	while (got < max) {
+		ssize_t n = read(fd, buf + *len, MIN(max - got, 65536));
+		if (n <= 0)
+			break;
+		*len += (size_t)n;
+		got += (size_t)n;
+	}
+	return got;
+}
+#define drain(fd, buf, len, max) drain_into(fd, buf, sizeof buf, len, max)
+
+/* out_empty keeps a small buffer for the next write, as mwt does for good */
+static void out_free(struct out *o)
+{
+	out_empty(o);
+	free(o->buf);
+	*o = (struct out){ 0 };
+}
+
+static int syscall_pidfd(pid_t pid)
+{
+	return (int)syscall(SYS_pidfd_open, pid, 0);
+}
+
+static void test_write(void)
+{
+	int p[2];
+	small_pipe(p);
+	struct out o = { 0 };
+	static char got[300000];
+	size_t glen = 0;
+
+	CHECK(out_write(&o, p[1], "hello", 5));
+	CHECK(o.len == 0);
+	drain(p[0], got, &glen, sizeof got);
+	CHECK(glen == 5 && !memcmp(got, "hello", 5));
+	/* what is written whole leaves a small buffer for the next */
+	CHECK(o.buf && o.cap > 0 && o.cap <= OUT_KEEP);
+
+	/* more than the pipe takes: the rest waits, in order */
+	static char big[100000];
+	for (size_t i = 0; i < sizeof big; i++)
+		big[i] = (char)('a' + i % 26);
+	glen = 0;
+	CHECK(out_write(&o, p[1], big, sizeof big));
+	CHECK(o.len == sizeof big - 4096);
+	out_flush(&o, p[1]);
+	CHECK(o.len == sizeof big - 4096);
+	while (o.len) {
+		drain(p[0], got, &glen, sizeof got);
+		out_flush(&o, p[1]);
+	}
+	drain(p[0], got, &glen, sizeof got);
+	CHECK(glen == sizeof big && !memcmp(got, big, sizeof big));
+	/* emptied, a buffer that large is given back */
+	CHECK(!o.buf && o.cap == 0 && o.reply_len == 0);
+
+	/* nothing to write, or no pty */
+	CHECK(out_write(&o, p[1], "x", 0) && o.len == 0);
+	CHECK(out_write(&o, -1, "x", 1) && o.len == 0);
+	out_free(&o);
+	close(p[0]);
+	close(p[1]);
+}
+
+/* What waits is moved to the front, not grown, when what went out is at least
+ * as much as what waits. */
+static void test_write_front(void)
+{
+	int p[2];
+	small_pipe(p);
+	struct out o = { 0 };
+	static char a[10000], b[5000], got[20000];
+	memset(a, 'a', sizeof a);
+	memset(b, 'b', sizeof b);
+	size_t glen = 0;
+	out_write(&o, p[1], a, sizeof a);
+	CHECK(o.off == 4096 && o.len == 5904 && o.cap == 14096);
+	drain(p[0], got, &glen, 4096);
+	out_flush(&o, p[1]);
+	CHECK(o.off == 8192 && o.len == 1808);
+	/* 8192 + 1808 + 5000 > 14096: moved, 1808 + 5000 fit */
+	out_write(&o, p[1], b, sizeof b);
+	CHECK(o.cap == 14096);
+	while (o.len) {
+		drain(p[0], got, &glen, sizeof got);
+		out_flush(&o, p[1]);
+	}
+	drain(p[0], got, &glen, sizeof got);
+	CHECK(glen == sizeof a + sizeof b && !memcmp(got, a, sizeof a) &&
+	      !memcmp(got + sizeof a, b, sizeof b));
+	out_free(&o);
+	close(p[0]);
+	close(p[1]);
+}
+
+/* Random writes into a reader that takes random amounts: every byte arrives
+ * once, in order. The buffer grows only with off < len, so to below twice what
+ * waits, and doubles: it stays within four times that, and the write. */
+static void test_write_random(void)
+{
+	static char sent[1 << 22], got[1 << 22];
+	long bad = 0;
+	for (int round = 0; round < 40; round++) {
+		int p[2];
+		small_pipe(p);
+		struct out o = { 0 };
+		size_t slen = 0, glen = 0, most = 0;
+		while (slen < sizeof sent - 20000) {
+			size_t n = 1 + rnd(rnd(4) ? 300 : 20000);
+			for (size_t i = 0; i < n; i++)
+				sent[slen + i] = (char)rnd(256);
+			if (!out_write(&o, p[1], sent + slen, n))
+				bad++;
+			slen += n;
+			most = o.len > most ? o.len : most;
+			if (o.cap > 4 * most + 2 * n + 8192)
+				bad++;
+			if (rnd(3) == 0) {
+				drain(p[0], got, &glen, rnd(12000));
+				out_flush(&o, p[1]);
+			}
+			if (rnd(50) == 0)
+				break;
+		}
+		while (o.len) {
+			drain(p[0], got, &glen, sizeof got);
+			out_flush(&o, p[1]);
+		}
+		drain(p[0], got, &glen, sizeof got);
+		if (glen != slen || memcmp(got, sent, slen))
+			bad++;
+		out_free(&o);
+		close(p[0]);
+		close(p[1]);
+	}
+	CHECK(bad == 0);
+}
+
+static void test_write_fail(void)
+{
+	/* the reader gone: what waits goes, the next write too */
+	int p[2];
+	small_pipe(p);
+	struct out o = { 0 };
+	static char big[20000];
+	memset(big, 'z', sizeof big);
+	out_write(&o, p[1], big, sizeof big);
+	CHECK(o.len > 0);
+	close(p[0]);
+	out_flush(&o, p[1]);
+	CHECK(o.len == 0 && o.off == 0);
+	CHECK(out_write(&o, p[1], "x", 1) && o.len == 0);
+	close(p[1]);
+	out_free(&o);
+
+	/* out of memory: false, and what waited is as it was */
+	small_pipe(p);
+	o = (struct out){ 0 };
+	out_write(&o, p[1], big, sizeof big);
+	size_t len = o.len, cap = o.cap;
+	countdown = 0;
+	CHECK(!out_write(&o, p[1], big, sizeof big));
+	countdown = -1;
+	CHECK(o.len == len && o.cap == cap);
+	static char got[40000];
+	size_t glen = 0;
+	while (o.len) {
+		drain(p[0], got, &glen, sizeof got);
+		out_flush(&o, p[1]);
+	}
+	drain(p[0], got, &glen, sizeof got);
+	CHECK(glen == sizeof big && !memcmp(got, big, sizeof big));
+	out_free(&o);
+	close(p[0]);
+	close(p[1]);
+}
+
+/* the brackets count only what went out */
+static void test_brackets_out(void)
+{
+	int p[2];
+	small_pipe(p);
+	struct out o = { 0 };
+	static char paste[20006], got[40000];
+	memcpy(paste, "\033[200~", 6);
+	memset(paste + 6, 'x', sizeof paste - 6);
+	size_t glen = 0;
+	out_write(&o, p[1], paste, sizeof paste);
+	CHECK(o.brackets.open);
+	out_write(&o, p[1], "\033[201~", 6);
+	CHECK(o.brackets.open); /* the closing one waits */
+	while (o.len) {
+		drain(p[0], got, &glen, sizeof got);
+		out_flush(&o, p[1]);
+	}
+	CHECK(!o.brackets.open);
+	drain(p[0], got, &glen, sizeof got);
+
+	/* one write with both, the pipe takes only the first: open */
+	static char both[8012];
+	memcpy(both, "\033[200~", 6);
+	memset(both + 6, 'y', 8000);
+	memcpy(both + 8006, "\033[201~", 6);
+	out_write(&o, p[1], both, sizeof both);
+	CHECK(o.len == sizeof both - 4096 && o.brackets.open);
+	glen = 0;
+	while (o.len) {
+		drain(p[0], got, &glen, sizeof got);
+		out_flush(&o, p[1]);
+	}
+	CHECK(!o.brackets.open);
+	drain(p[0], got, &glen, sizeof got);
+
+	/* a full pipe: the opening bracket waits too, nothing is open */
+	char fill[4096];
+	memset(fill, 'f', sizeof fill);
+	CHECK(write(p[1], fill, sizeof fill) == (ssize_t)sizeof fill);
+	out_write(&o, p[1], paste, sizeof paste);
+	CHECK(!o.brackets.open && o.len == sizeof paste);
+	/* cut after "\033[20": seen 4 */
+	glen = 0;
+	drain(p[0], got, &glen, 4);
+	out_flush(&o, p[1]);
+	out_free(&o);
+	close(p[0]);
+	close(p[1]);
+}
+
+static void test_reply(void)
+{
+	int p[2];
+	small_pipe(p);
+	struct out o = { 0 };
+	char fill[4096];
+	memset(fill, 'f', sizeof fill);
+	CHECK(write(p[1], fill, sizeof fill) == (ssize_t)sizeof fill);
+	/* a program that does not read: replies up to the limit, then none */
+	for (int i = 0; i < 5; i++)
+		CHECK(out_reply(&o, p[1], "0123456789", 10, 25));
+	CHECK(o.len == 30 && o.reply_len == 30);
+	/* a paste goes on, and does not count */
+	out_write(&o, p[1], "pasted", 6);
+	CHECK(o.len == 36 && o.reply_len == 30);
+	/* once the program reads, they go out and count no more */
+	static char got[65536];
+	size_t glen = 0;
+	drain(p[0], got, &glen, sizeof got);
+	out_flush(&o, p[1]);
+	CHECK(o.len == 0 && o.reply_len == 0);
+	drain(p[0], got, &glen, sizeof got);
+	CHECK(glen == 4096 + 36 && !memcmp(got + 4096, "012345678901234567890123456789pasted", 36));
+	CHECK(out_reply(&o, p[1], "after", 5, 25));
+	glen = 0;
+	drain(p[0], got, &glen, sizeof got);
+	CHECK(glen == 5);
+
+	/* a reply cut by the pipe counts what waits of it */
+	static char big[10000];
+	memset(big, 'r', sizeof big);
+	CHECK(out_reply(&o, p[1], big, sizeof big, 1 << 20));
+	CHECK(o.len == 10000 - 4096 && o.reply_len == o.len);
+	/* what goes out of it brings the count down with it */
+	glen = 0;
+	drain(p[0], got, &glen, sizeof got);
+	out_flush(&o, p[1]);
+	CHECK(o.len == 10000 - 2 * 4096 && o.reply_len == o.len);
+	drain(p[0], got, &glen, sizeof got);
+	out_flush(&o, p[1]);
+	CHECK(o.len == 0 && o.reply_len == 0);
+	/* out of memory */
+	glen = 0;
+	drain(p[0], got, &glen, sizeof got);
+	CHECK(write(p[1], fill, sizeof fill) == (ssize_t)sizeof fill);
+	out_free(&o); /* no buffer: the reply needs one */
+	countdown = 0;
+	CHECK(!out_reply(&o, p[1], "abc", 3, 25));
+	countdown = -1;
+	CHECK(o.reply_len == 0);
+	out_free(&o);
+	close(p[0]);
+	close(p[1]);
+}
+
+/* a pty whose slave is raw, but with ISIG, read without blocking */
+static void raw_pty(int *m, int *s)
+{
+	if (openpty(m, s, NULL, NULL, NULL) < 0) {
+		perror("openpty");
+		exit(1);
+	}
+	struct termios tm;
+	tcgetattr(*s, &tm);
+	cfmakeraw(&tm);
+	tm.c_lflag |= ISIG;
+	tcsetattr(*s, TCSANOW, &tm);
+	fcntl(*m, F_SETFL, O_NONBLOCK);
+	fcntl(*s, F_SETFL, O_NONBLOCK);
+}
+
+static void test_signal_char(void)
+{
+	int m, s;
+	if (openpty(&m, &s, NULL, NULL, NULL) < 0) {
+		perror("openpty");
+		exit(1);
+	}
+	CHECK(shell_signal_char(m, 0x03));
+	CHECK(shell_signal_char(m, 0x1c));
+	CHECK(shell_signal_char(m, 0x1a));
+	CHECK(!shell_signal_char(m, 'c'));
+	CHECK(!shell_signal_char(m, 0x04)); /* EOF raises nothing */
+	CHECK(!shell_signal_char(m, 0));
+	CHECK(!shell_signal_char(-1, 0x03));
+	/* as the program set it */
+	struct termios tm;
+	tcgetattr(s, &tm);
+	tm.c_cc[VINTR] = 'x';
+	tcsetattr(s, TCSANOW, &tm);
+	CHECK(shell_signal_char(m, 'x'));
+	CHECK(!shell_signal_char(m, 0x03));
+	tm.c_lflag &= ~ISIG;
+	tcsetattr(s, TCSANOW, &tm);
+	CHECK(!shell_signal_char(m, 'x'));
+	CHECK(!shell_signal_char(m, 0x1c));
+	close(s);
+	close(m);
+	/* not a terminal */
+	int p[2];
+	small_pipe(p);
+	CHECK(!shell_signal_char(p[1], 0x03));
+	close(p[0]);
+	close(p[1]);
+}
+
+static void test_drop(void)
+{
+	int m, s;
+	raw_pty(&m, &s);
+	struct out o = { 0 };
+	static char paste[200006], got[300000];
+	memcpy(paste, "\033[200~", 6);
+	memset(paste + 6, 'p', sizeof paste - 6);
+	size_t glen = 0;
+	/* a paste the program does not read: the kernel holds some, mwt the rest */
+	out_write(&o, m, paste, sizeof paste);
+	CHECK(o.len > 0 && o.brackets.open);
+	out_drop(&o, m);
+	/* it all goes, the kernel's too: the program reads only the closing bracket */
+	CHECK(o.len == 0 && !o.brackets.open);
+	drain(s, got, &glen, sizeof got);
+	CHECK(glen == 6 && !memcmp(got, "\033[201~", 6));
+
+	/* the opening bracket never went out: no closing either */
+	char fill[65536];
+	memset(fill, 'f', sizeof fill);
+	out_write(&o, m, fill, sizeof fill);
+	CHECK(o.len > 0 && !o.brackets.open);
+	out_write(&o, m, paste, sizeof paste);
+	out_drop(&o, m);
+	glen = 0;
+	drain(s, got, &glen, sizeof got);
+	CHECK(o.len == 0 && glen == 0);
+
+	/* nothing waits here: what the kernel holds stays, the program reads it */
+	out_write(&o, m, "typed", 5);
+	CHECK(o.len == 0);
+	out_drop(&o, m);
+	glen = 0;
+	drain(s, got, &glen, sizeof got);
+	CHECK(glen == 5 && !memcmp(got, "typed", 5));
+
+	/* a bracket cut off halfway is forgotten: the next one starts afresh */
+	out_write(&o, m, fill, sizeof fill);
+	CHECK(o.len > 0);
+	o.brackets.seen = 3; /* "\033[2" went out last */
+	out_drop(&o, m);
+	CHECK(o.brackets.seen == 0);
+	drain(s, got, &glen, sizeof got);
+	out_free(&o);
+	close(s);
+	close(m);
+}
+
+static void test_gone(void)
+{
+	struct child c = { 0, -1 };
+	CHECK(child_gone(&c));
+	/* not our child: ECHILD, gone, and no signal can follow */
+	c.pid = 1;
+	CHECK(child_gone(&c) && c.pid == 0);
+
+	pid_t pid = fork();
+	if (pid == 0)
+		_exit(0);
+	c = (struct child){ pid, -1 };
+	int64_t t0 = now_ms();
+	child_wait(&c, 5000);
+	CHECK(c.pid == 0 && now_ms() - t0 < 2000);
+
+	/* one that runs: not gone, the wait ends after ms */
+	pid = fork();
+	if (pid == 0) {
+		pause();
+		_exit(0);
+	}
+	c = (struct child){ pid, syscall_pidfd(pid) };
+	CHECK(!child_gone(&c) && c.pid == pid);
+	t0 = now_ms();
+	child_wait(&c, 200);
+	int64_t took = now_ms() - t0;
+	CHECK(c.pid == pid && took >= 190 && took < 2000);
+	__real_kill(pid, SIGKILL);
+	child_wait(&c, 5000);
+	CHECK(c.pid == 0);
+	close(c.fd);
+
+	/* without a pidfd it is asked every 20 ms */
+	pid = fork();
+	if (pid == 0) {
+		usleep(100000);
+		_exit(0);
+	}
+	c = (struct child){ pid, -1 };
+	t0 = now_ms();
+	child_wait(&c, 5000);
+	took = now_ms() - t0;
+	CHECK(c.pid == 0 && took >= 90 && took < 1000);
+
+	/* SIGCHLD ignored: the kernel reaped it, waitpid says ECHILD */
+	signal(SIGCHLD, SIG_IGN);
+	pid = fork();
+	if (pid == 0)
+		_exit(0);
+	for (int i = 0; i < 500 && __real_kill(pid, 0) == 0; i++)
+		usleep(2000);
+	c = (struct child){ pid, -1 };
+	CHECK(child_gone(&c) && c.pid == 0);
+	signal(SIGCHLD, SIG_DFL);
+}
+
+/* the shell's output until it ends, and its exit status */
+static int run(char **argv, const char *input, char *buf, size_t cap)
+{
+	struct child c;
+	int pty;
+	if (!child_spawn(&c, &pty, argv, "mwt-test", 80, 24)) {
+		failures++;
+		fprintf(stderr, "FAIL: child_spawn\n");
+		return -1;
+	}
+	if (input)
+		CHECK(write(pty, input, strlen(input)) == (ssize_t)strlen(input));
+	size_t len = 0;
+	for (int64_t end = now_ms() + 10000; now_ms() < end;) {
+		struct pollfd p = { pty, POLLIN, 0 };
+		poll(&p, 1, 100);
+		ssize_t n = read(pty, buf + len, cap - 1 - len);
+		if (n > 0)
+			len += (size_t)n;
+		else if (n < 0 && errno == EAGAIN)
+			continue;
+		else
+			break; /* EIO: the slave is closed */
+	}
+	buf[len] = 0;
+	close(pty);
+	int status = 0;
+	waitpid(c.pid, &status, 0);
+	close(c.fd);
+	return WIFEXITED(status) ? WEXITSTATUS(status) : 128 + WTERMSIG(status);
+}
+
+static void test_spawn(void)
+{
+	static char out[8192];
+	setenv("COLORTERM", "rgb", 1);
+	setenv("LINES", "5", 1);
+	setenv("COLUMNS", "7", 1);
+	char *env[] = { "sh", "-c",
+		"echo \"T=$TERM C=$COLORTERM L=${LINES-none} K=${COLUMNS-none}\"", NULL };
+	CHECK(run(env, NULL, out, sizeof out) == 0);
+	CHECK(strstr(out, "T=mwt-test C=truecolor L=none K=none"));
+	unsetenv("LINES");
+	unsetenv("COLUMNS");
+	unsetenv("COLORTERM");
+
+	char *size[] = { "stty", "size", NULL };
+	CHECK(run(size, NULL, out, sizeof out) == 0);
+	CHECK(strstr(out, "24 80"));
+
+	/* what mwt ignores or blocks is not for the shell */
+	signal(SIGINT, SIG_IGN);
+	signal(SIGQUIT, SIG_IGN);
+	sigset_t block, old;
+	sigemptyset(&block);
+	sigaddset(&block, SIGTERM);
+	sigaddset(&block, SIGUSR1);
+	sigprocmask(SIG_BLOCK, &block, &old);
+	char *sigs[] = { "grep", "^Sig\\(Ign\\|Blk\\)", "/proc/self/status", NULL };
+	CHECK(run(sigs, NULL, out, sizeof out) == 0);
+	CHECK(strstr(out, "SigBlk:\t0000000000000000"));
+	CHECK(strstr(out, "SigIgn:\t0000000000000000"));
+	sigprocmask(SIG_SETMASK, &old, NULL);
+	signal(SIGINT, SIG_DFL);
+	signal(SIGQUIT, SIG_DFL);
+
+	/* nor what it was given open */
+	int fd = open("/dev/null", O_RDONLY);
+	CHECK(dup2(fd, 50) == 50);
+	close(fd);
+	char *fds[] = { "sh", "-c", "ls /proc/$$/fd | tr '\\n' ' '", NULL };
+	CHECK(run(fds, NULL, out, sizeof out) == 0);
+	CHECK(strstr(out, "0 1 2 ") && !strstr(out, "50"));
+	close(50);
+
+	/* a program that is not there */
+	char *none[] = { "/nicht/da", NULL };
+	CHECK(run(none, NULL, out, sizeof out) == 127);
+	CHECK(strstr(out, "/nicht/da: No such file or directory"));
+
+	/* no command: $SHELL, else the passwd entry's */
+	setenv("SHELL", "/bin/sh", 1);
+	CHECK(run(NULL, "echo sh-$((6*7))\rexit 3\r", out, sizeof out) == 3);
+	CHECK(strstr(out, "sh-42"));
+	setenv("SHELL", "", 1);
+	CHECK(run(NULL, "echo pw-$((1+1))\rexit 4\r", out, sizeof out) == 4);
+	CHECK(strstr(out, "pw-2"));
+	unsetenv("SHELL");
+
+	/* the master: nonblocking, not for what mwt starts later; a pidfd */
+	struct child c;
+	int pty;
+	char *cat[] = { "cat", NULL };
+	CHECK(child_spawn(&c, &pty, cat, "mwt-test", 80, 24));
+	CHECK(fcntl(pty, F_GETFL) & O_NONBLOCK);
+	CHECK(fcntl(pty, F_GETFD) & FD_CLOEXEC);
+	CHECK(c.fd >= 0 && (fcntl(c.fd, F_GETFD) & FD_CLOEXEC));
+	nkills = 0;
+	child_hangup(&c, &pty, 5000);
+	CHECK(pty == -1 && c.pid == 0);
+	close(c.fd);
+}
+
+static void test_hangup(void)
+{
+	/* the shell gets SIGHUP and ends: no wait */
+	struct child c;
+	int pty;
+	char *sh[] = { "sh", "-c", "sleep 30", NULL };
+	CHECK(child_spawn(&c, &pty, sh, "mwt-test", 80, 24));
+	pid_t pid = c.pid;
+	usleep(100000);
+	nkills = 0;
+	int64_t t0 = now_ms();
+	child_hangup(&c, &pty, 5000);
+	CHECK(c.pid == 0 && pty == -1 && now_ms() - t0 < 2000);
+	CHECK(nkills == 1 && kills[0].pid == pid && kills[0].sig == SIGHUP);
+	close(c.fd);
+
+	/* one that ignores SIGHUP is waited for, then left: no SIGKILL */
+	char *nohup[] = { "sh", "-c", "trap '' HUP; exec sleep 30", NULL };
+	CHECK(child_spawn(&c, &pty, nohup, "mwt-test", 80, 24));
+	pid = c.pid;
+	usleep(200000);
+	nkills = 0;
+	t0 = now_ms();
+	child_hangup(&c, &pty, 300);
+	int64_t took = now_ms() - t0;
+	CHECK(took >= 290 && took < 2000);
+	CHECK(c.pid == pid && __real_kill(pid, 0) == 0);
+	CHECK(nkills == 1 && kills[0].sig == SIGHUP);
+	__real_kill(pid, SIGKILL);
+	waitpid(pid, NULL, 0);
+	close(c.fd);
+
+	/* Reaped already by the event loop, its pid may be someone else's: no
+	 * signal at all. */
+	char *quick[] = { "true", NULL };
+	CHECK(child_spawn(&c, &pty, quick, "mwt-test", 80, 24));
+	struct pollfd p = { c.fd, POLLIN, 0 };
+	CHECK(poll(&p, 1, 5000) == 1);
+	CHECK(child_gone(&c));
+	nkills = 0;
+	child_hangup(&c, &pty, 5000);
+	CHECK(nkills == 0);
+	close(c.fd);
+
+	/* SIGCHLD ignored, the pidfd saw the end, the kernel reaped it */
+	signal(SIGCHLD, SIG_IGN);
+	CHECK(child_spawn(&c, &pty, quick, "mwt-test", 80, 24));
+	p = (struct pollfd){ c.fd, POLLIN, 0 };
+	CHECK(poll(&p, 1, 5000) == 1);
+	nkills = 0;
+	child_hangup(&c, &pty, 5000);
+	CHECK(nkills == 0 && c.pid == 0);
+	close(c.fd);
+	signal(SIGCHLD, SIG_DFL);
+}
+
+int main(void)
+{
+	signal(SIGPIPE, SIG_IGN); /* as mwt */
+	test_write();
+	test_write_front();
+	test_write_random();
+	test_write_fail();
+	test_brackets_out();
+	test_reply();
+	test_signal_char();
+	test_drop();
+	test_gone();
+	test_spawn();
+	test_hangup();
+	printf("test_shell: %d/%d checks passed\n", checks - failures, checks);
+	return failures != 0;
+}

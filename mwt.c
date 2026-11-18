@@ -12,20 +12,15 @@
 #include <linux/input-event-codes.h>
 #include <locale.h>
 #include <poll.h>
-#include <pty.h>
-#include <pwd.h>
 #include <signal.h>
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <termios.h>
 #include <sys/ioctl.h>
 #include <sys/mman.h>
-#include <sys/syscall.h>
 #include <sys/timerfd.h>
-#include <sys/wait.h>
 #include <time.h>
 #include <unistd.h>
 
@@ -46,6 +41,7 @@
 #include "input.h"
 #include "paste.h"
 #include "sel.h"
+#include "shell.h"
 #include "vt.h"
 
 #define MIN(a, b) ((a) < (b) ? (a) : (b))
@@ -120,12 +116,8 @@ static struct {
 	/* terminal */
 	struct vt *vt;
 	int pty;
-	pid_t child;
-	int child_fd; /* pidfd: the shell can end while jobs keep the pty open */
-	char *out;          /* what waits for the pty: out_len bytes from out_off */
-	size_t out_off, out_len, out_cap;
-	size_t reply_len;   /* of those, at most this many are replies (vt_reply) */
-	struct brackets brackets; /* the paste brackets in what went out */
+	struct child child; /* a pidfd: the shell can end while jobs keep the pty open */
+	struct out out;     /* what waits for the pty */
 	bool was_alt;
 	int last_cx, last_cy;
 	bool last_shown;
@@ -180,7 +172,7 @@ static struct {
 		bool configured, dirty;
 	} menu;
 	struct wl_surface *ptr_surface; /* the surface the pointer is on */
-} t = { .pty = -1, .repeat_fd = -1, .paste_fd = -1, .child_fd = -1, .scale = 1 };
+} t = { .pty = -1, .repeat_fd = -1, .paste_fd = -1, .child = { 0, -1 }, .scale = 1 };
 
 static void die(const char *msg)
 {
@@ -199,7 +191,6 @@ static void die(const char *msg)
 #define DIM_ALPHA 140
 #define MENU_DISABLED_ALPHA 110
 #define MENU_SHORTCUT_ALPHA 150
-#define OUT_KEEP (64 * 1024)            /* an emptied buffer larger than this goes */
 #define PASTE_MAX (64 * 1024 * 1024)    /* a larger paste is dropped whole */
 #define PASTE_TURN_MAX (1024 * 1024)    /* read in one turn of the event loop */
 
@@ -211,63 +202,10 @@ static void paste_free(void)
 	t.paste_len = t.paste_cap = 0;
 }
 
-/* Nothing waits any more: a buffer a large paste grew is given back. */
-static void out_empty(void)
-{
-	t.out_off = t.out_len = t.reply_len = 0;
-	if (t.out_cap > OUT_KEEP) {
-		free(t.out);
-		t.out = NULL;
-		t.out_cap = 0;
-	}
-}
-
-/* The pty takes a few KiB a write. What it took is skipped, not moved: moving
- * the rest after each write copied a 17 MB paste 22 GB over. */
-static void flush_out(void)
-{
-	while (t.out_len) {
-		ssize_t n = write(t.pty, t.out + t.out_off, t.out_len);
-		if (n < 0) {
-			if (errno == EINTR)
-				continue;
-			if (errno != EAGAIN)
-				out_empty();
-			return;
-		}
-		track_brackets(&t.brackets, t.out + t.out_off, n);
-		t.out_off += n;
-		t.out_len -= n;
-		t.reply_len = MIN(t.reply_len, t.out_len);
-	}
-	out_empty();
-}
-
 static void pty_write(const char *s, size_t n)
 {
-	if (t.pty < 0 || !n)
-		return;
-	if (t.out_off + t.out_len + n > t.out_cap) {
-		/* moved to the front only when what waits is no more than what was
-		 * written, so each byte is moved a bounded number of times */
-		if (t.out_off && t.out_off >= t.out_len) {
-			memmove(t.out, t.out + t.out_off, t.out_len);
-			t.out_off = 0;
-		}
-		if (t.out_off + t.out_len + n > t.out_cap) {
-			size_t cap = MAX(t.out_cap * 2, t.out_off + t.out_len + n + 4096);
-			char *p = realloc(t.out, cap);
-			if (!p) {
-				fprintf(stderr, "mwt: %zu bytes to the program dropped: out of memory\n", n);
-				return;
-			}
-			t.out = p;
-			t.out_cap = cap;
-		}
-	}
-	memcpy(t.out + t.out_off + t.out_len, s, n);
-	t.out_len += n;
-	flush_out();
+	if (!out_write(&t.out, t.pty, s, n))
+		fprintf(stderr, "mwt: %zu bytes to the program dropped: out of memory\n", n);
 }
 
 static void pty_puts(const char *s)
@@ -285,50 +223,25 @@ static void send_input(const char *s, size_t n)
 	pty_write(s, n);
 }
 
-/*
- * A key that raises a signal must not wait behind a paste the program does not
- * read, here or in the kernel, whose line buffer takes no more once it is full.
- * So the rest of the paste goes first. TCSAFLUSH on the master flushes the
- * slave's input. A bracket that went out open gets closed; one still waiting
- * here goes with the rest, and the program never sees it, so it needs no
- * closing. What went out but was flushed in the kernel unread cannot be told
- * apart, and gets the closing too: a stray one costs less than one missing,
- * which would leave the program pasting whatever is typed next.
- */
+/* A key that raises a signal must not wait behind a paste the program does not
+ * read: the rest of the paste goes first (out_drop). */
 static void drop_paste_for_signal(unsigned char c)
 {
-	struct termios tm;
-	if (t.pty < 0 || !c || tcgetattr(t.pty, &tm) < 0 || !(tm.c_lflag & ISIG) ||
-	    (c != tm.c_cc[VINTR] && c != tm.c_cc[VQUIT] && c != tm.c_cc[VSUSP]))
+	if (!shell_signal_char(t.pty, c))
 		return;
 	if (t.paste_fd >= 0) {
 		close(t.paste_fd);
 		t.paste_fd = -1;
 		paste_free();
 	}
-	if (!t.out_len)
-		return;
-	out_empty();
-	tcflush(t.pty, TCOFLUSH);
-	tcsetattr(t.pty, TCSAFLUSH, &tm);
-	/* a bracket cut off halfway is ended by the ESC of the next */
-	t.brackets.seen = 0;
-	if (t.brackets.open)
-		pty_write("\033[201~", 6);
+	out_drop(&t.out, t.pty);
 }
 
 static void vt_reply(void *ud, const char *s, size_t n)
 {
 	(void)ud;
-	/* A program that asks and does not read would make this grow without limit.
-	 * With that much waiting it is not waiting for the answer either. Only
-	 * replies count: behind a large paste the program may well read on. */
-	if (t.reply_len > REPLY_BACKLOG_MAX)
-		return;
-	size_t before = t.out_len;
-	pty_write(s, n);
-	if (t.out_len > before)
-		t.reply_len += MIN(n, t.out_len - before);
+	if (!out_reply(&t.out, t.pty, s, n, REPLY_BACKLOG_MAX))
+		fprintf(stderr, "mwt: %zu bytes to the program dropped: out of memory\n", n);
 }
 
 /* Only noted: a program may set thousands in one read, and each would be a
@@ -529,7 +442,7 @@ static void paste_text(const char *s, size_t n)
 	/* Counted as UTF-8, which Latin-1 doubles, and with what still waits for the
 	 * program: pasting again into one that does not read would grow without end.
 	 * mwt's own selection comes here without passing read_paste. */
-	if (n > PASTE_MAX || t.out_len + n > PASTE_MAX) {
+	if (n > PASTE_MAX || t.out.len + n > PASTE_MAX) {
 		fprintf(stderr, "mwt: paste dropped: %s\n", n > PASTE_MAX ?
 			"larger than 64 MiB" : "64 MiB would wait for the program");
 		return;
@@ -2162,46 +2075,12 @@ static bool have_terminfo(const char *name)
 
 static void spawn(char **argv)
 {
-	struct winsize ws = { t.vt->rows, t.vt->cols, 0, 0 };
 	const char *term = have_terminfo(term_name) ? term_name : "xterm-256color";
 	if (term != term_name)
 		fprintf(stderr, "mwt: no terminfo for '%s', using %s "
 			"(run 'tic -x mwt.info')\n", term_name, term);
-	t.child = forkpty(&t.pty, NULL, NULL, &ws);
-	if (t.child < 0)
+	if (!child_spawn(&t.child, &t.pty, argv, term, t.vt->cols, t.vt->rows))
 		die("forkpty failed");
-	if (t.child == 0) {
-		setenv("TERM", term, 1);
-		setenv("COLORTERM", "truecolor", 1);
-		unsetenv("LINES");
-		unsetenv("COLUMNS");
-		/* what mwt ignores or was started ignoring is not for the shell:
-		 * `mwt &` from sh ignores SIGINT and SIGQUIT; nor what the program
-		 * that started mwt had blocked */
-		for (int sig = 1; sig < NSIG; sig++)
-			signal(sig, SIG_DFL);
-		sigset_t none;
-		sigemptyset(&none);
-		sigprocmask(SIG_SETMASK, &none, NULL);
-		/* nor what mwt was given open: what mwt opens is CLOEXEC, an fd
-		 * its parent left open would reach the shell and all it starts */
-		close_range(3, ~0U, 0);
-		if (argv && argv[0]) {
-			execvp(argv[0], argv);
-			perror(argv[0]);
-		} else {
-			const char *sh = getenv("SHELL");
-			struct passwd *pw = getpwuid(getuid());
-			if (!sh || !*sh)
-				sh = pw && pw->pw_shell && *pw->pw_shell ? pw->pw_shell : "/bin/sh";
-			execl(sh, sh, (char *)NULL);
-			perror(sh);
-		}
-		_exit(127);
-	}
-	fcntl(t.pty, F_SETFL, fcntl(t.pty, F_GETFL) | O_NONBLOCK);
-	fcntl(t.pty, F_SETFD, FD_CLOEXEC);
-	t.child_fd = (int)syscall(SYS_pidfd_open, t.child, 0);
 }
 
 static int64_t now_ms(void)
@@ -2243,53 +2122,6 @@ static void read_pty(void)
 }
 
 /* ---- main ------------------------------------------------------------- */
-
-/* Whether the shell is gone: reaped here, or already (ECHILD). Then t.child is 0,
- * so that no signal goes to its pid, which may be someone else's by now. */
-static bool child_gone(void)
-{
-	if (t.child <= 0)
-		return true;
-	pid_t r = waitpid(t.child, NULL, WNOHANG);
-	if (r == t.child || (r < 0 && errno == ECHILD)) {
-		t.child = 0;
-		return true;
-	}
-	return false;
-}
-
-/* reap the child if it ends within ms */
-static void wait_child(int ms)
-{
-	int64_t end = now_ms() + ms;
-	for (;;) {
-		if (child_gone())
-			return;
-		int64_t left = end - now_ms();
-		if (left <= 0)
-			return;
-		/* without a pidfd (kernel < 5.3) this polls every 20 ms */
-		struct pollfd p = { t.child_fd, POLLIN, 0 };
-		poll(&p, 1, t.child_fd >= 0 ? (int)left : (int)MIN(left, 20));
-	}
-}
-
-/*
- * Closing the master hangs up the session, SIGHUP goes to the shell as well.
- * mwt waits two seconds for it and then goes, leaving it to init. It sends no
- * SIGKILL: what ignores SIGHUP (nohup) or takes longer to clean up has a reason.
- */
-static void reap_child(void)
-{
-	if (t.pty >= 0) {
-		close(t.pty);
-		t.pty = -1;
-	}
-	if (child_gone()) /* no SIGHUP to a pid that may be reused */
-		return;
-	kill(t.child, SIGHUP);
-	wait_child(2000);
-}
 
 /* COLSxROWS within 1..VT_MAX_COLS and 1..VT_MAX_ROWS */
 static bool parse_geometry(const char *s, int *cols, int *rows)
@@ -2433,10 +2265,10 @@ done:;
 
 		struct pollfd fds[5 + MAX_XFERS] = {
 			{ wlfd, POLLIN | (wl_out ? POLLOUT : 0), 0 },
-			{ t.pty, POLLIN | (t.out_len ? POLLOUT : 0), 0 },
+			{ t.pty, POLLIN | (t.out.len ? POLLOUT : 0), 0 },
 			{ t.repeat_fd, POLLIN, 0 },
 			{ t.paste_fd, POLLIN, 0 },
-			{ t.child_fd, POLLIN, 0 },
+			{ t.child.fd, POLLIN, 0 },
 		};
 		int nx = t.nxfers;
 		for (int i = 0; i < nx; i++)
@@ -2444,13 +2276,13 @@ done:;
 		/* Without a pidfd (before Linux 5.3, or denied by seccomp) only the
 		 * pty's end shows the shell's, and jobs can keep the pty open: the
 		 * child is asked for four times a second instead. */
-		if (poll(fds, 5 + nx, t.child_fd >= 0 ? -1 : 250) < 0) {
+		if (poll(fds, 5 + nx, t.child.fd >= 0 ? -1 : 250) < 0) {
 			wl_display_cancel_read(t.display);
 			if (errno == EINTR)
 				continue;
 			break;
 		}
-		if (t.child_fd < 0 && child_gone())
+		if (t.child.fd < 0 && child_gone(&t.child))
 			t.running = false;
 		if (fds[0].revents & POLLIN)
 			wl_display_read_events(t.display);
@@ -2464,7 +2296,7 @@ done:;
 		if (fds[1].revents & (POLLIN | POLLHUP | POLLERR))
 			read_pty();
 		if (fds[1].revents & POLLOUT)
-			flush_out();
+			out_flush(&t.out, t.pty);
 		if (fds[2].revents & POLLIN) {
 			uint64_t n = 0;
 			if (read(t.repeat_fd, &n, sizeof n) == sizeof n && t.repeat_key)
@@ -2487,6 +2319,6 @@ done:;
 		xfer_drop(0);
 	wl_registry_destroy(t.registry);
 	wl_display_disconnect(t.display); /* the window goes first */
-	reap_child();
+	child_hangup(&t.child, &t.pty, 2000);
 	return 0;
 }
