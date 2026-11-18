@@ -1092,6 +1092,26 @@ static void test_dirty_scrolled_back(void)
 	w(vt, "\r\n");
 	CHECK(vt->dirty[0] && vt->dirty[3]);
 	vt_free(vt);
+
+	/* a region above a footer (DECSTBM): the history grows, the view moves,
+	 * and the footer below the region is shown a row lower */
+	vt = mk(10, 6, 20);
+	w(vt, "1\r\n2\r\n3\r\n4\r\n5\r\n6\r\n7\r\n8\r\n");
+	w(vt, "\033[4;1HF3\033[5;1HF4\033[6;1HF5\033[1;3r\033[3;1H");
+	vt_scroll_view(vt, 1);
+	CHECK_STR(row(vt, 4), "F3");
+	CHECK_STR(row(vt, 5), "F4");
+	memset(vt->dirty, 0, 6);
+	w(vt, "\n");
+	CHECK(vt->view == 2);
+	CHECK_STR(row(vt, 5), "F3");
+	CHECK(vt->dirty[5]);
+	/* with the view at the bottom nothing below the region moves */
+	vt_scroll_view(vt, -100);
+	memset(vt->dirty, 0, 6);
+	w(vt, "\n");
+	CHECK(!vt->dirty[3] && !vt->dirty[4] && !vt->dirty[5]);
+	vt_free(vt);
 }
 
 static void test_alloc_failures(void)

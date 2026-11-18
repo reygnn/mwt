@@ -238,6 +238,25 @@ def test_scrolled_back_output(win, mouse):
     settle()
 
 
+def test_scrolled_back_footer(win, mouse):
+    """Scrolled back, a line scrolling off a region above a footer (DECSTBM)
+    moves the footer a row down. Only the region was redrawn: the footer was
+    painted over in row 13 and never drawn in row 14."""
+    win.feed(RESET + b"".join(b"zeile %d\r\n" % i for i in range(100))
+             + b"\033[11;1H\033[41mFUSS\033[0m\033[1;10r\033[10;1H")
+    settle()
+    x, y, w, h = rect()
+    mouse.send("move", x + w // 2, y + h // 2)
+    mouse.send("wheel", -1)
+    settle()
+    win.feed(b"\n")
+    g = Grid(settle(), 80, 24)
+    check(COLORS16[1] in g.colors(0, 14), "the footer below a region shows in row 14, scrolled back by 4")
+    check(COLORS16[1] not in g.colors(0, 13), "and no longer in row 13")
+    win.feed(b"\033[r")
+    combo("End", "shift")
+    settle()
+
 def damage_since(path, start):
     """Heights of the window's damage_buffer requests logged by WAYLAND_DEBUG
     after offset start; the cursor surface damages INT32_MAX, it is left out."""
@@ -676,6 +695,7 @@ def main():
         test_selection(win, mouse)
         test_scrollback(win)
         test_scrolled_back_output(win, mouse)
+        test_scrolled_back_footer(win, mouse)
     test_partial_redraw()
     test_damage(mouse)
     test_zoom()

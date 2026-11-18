@@ -269,7 +269,8 @@ static void scroll_up(struct vt *vt, int orig, int n)
 	n = CLAMP(n, 0, vt->bot - orig + 1);
 	if (!n)
 		return;
-	if (orig == 0 && !(vt->mode & MODE_ALTSCREEN))
+	bool hist = orig == 0 && !(vt->mode & MODE_ALTSCREEN);
+	if (hist)
 		for (int i = 0; i < n; i++)
 			push_hist(vt, vt->line[i], vt->cols);
 	struct cell *tmp[n];
@@ -279,7 +280,9 @@ static void scroll_up(struct vt *vt, int orig, int n)
 	memcpy(&vt->line[vt->bot - n + 1], tmp, n * sizeof *tmp);
 	for (int r = vt->bot - n + 1; r <= vt->bot; r++)
 		fill_row(vt, vt->line[r], 0, vt->cols, blank(vt));
-	dirty_range(vt, orig, vt->bot);
+	/* scrolled back, push_hist moved the view: the rows below the region
+	 * did not change, but they are shown n rows lower now */
+	dirty_range(vt, orig, hist && vt->view > 0 ? vt->rows - 1 : vt->bot);
 }
 
 static void scroll_down(struct vt *vt, int orig, int n)
