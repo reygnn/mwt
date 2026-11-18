@@ -45,6 +45,7 @@
 #include "font.h"
 #include "input.h"
 #include "paste.h"
+#include "sel.h"
 #include "vt.h"
 
 #define MIN(a, b) ((a) < (b) ? (a) : (b))
@@ -67,7 +68,6 @@ struct xfer {
 };
 #define MAX_XFERS 16
 
-enum { SEL_CHAR = 1, SEL_WORD, SEL_LINE };
 
 static const char *mimes[] = {
 	"text/plain;charset=utf-8", "UTF8_STRING", "text/plain", "TEXT", "STRING",
@@ -153,17 +153,9 @@ static struct {
 	unsigned buttons;
 	double axis_acc;
 	bool axis_discrete; /* this frame's wheel notches are already counted */
-	uint32_t click_time;
-	int click_count, click_col;
-	int64_t click_abs;
+	struct clicks clicks;
 
-	/* selection: anchor (aa, ac) and moving end (ea, ec) */
-	struct {
-		bool active, dragging;
-		int mode;
-		int64_t aa, ea;
-		int ac, ec;
-	} sel;
+	struct sel sel;
 	char *clip_text, *prim_text;
 	struct wl_data_source *clip_src;
 	struct zwp_primary_selection_source_v1 *prim_src;
@@ -362,89 +354,12 @@ static bool send_title(void)
 
 /* ---- selection -------------------------------------------------------- */
 
-static bool is_word(uint32_t cp)
-{
-	return cp > 0x7f || (cp > ' ' && !strchr("\"'`()[]{}<>|;,", (int)cp));
-}
-
-static int cell_class(int64_t abs, int col)
-{
-	int len;
-	const struct cell *l = vt_abs_line(t.vt, abs, &len);
-	if (!l || col >= len || l[col].cp == ' ' || l[col].cp == 0)
-		return 0;
-	return is_word(l[col].cp) ? 1 : 2;
-}
-
-/* normalized selection range, inclusive */
-static void sel_range(int64_t *ba, int *bc, int64_t *ea, int *ec)
-{
-	*ba = t.sel.aa; *bc = t.sel.ac;
-	*ea = t.sel.ea; *ec = t.sel.ec;
-	if (*ea < *ba || (*ea == *ba && *ec < *bc)) {
-		int64_t ta = *ba; int tc = *bc;
-		*ba = *ea; *bc = *ec;
-		*ea = ta; *ec = tc;
-	}
-	if (t.sel.mode == SEL_LINE) {
-		*bc = 0;
-		*ec = INT_MAX; /* to the end of the line, whatever its length */
-	} else if (t.sel.mode == SEL_WORD) {
-		int k = cell_class(*ba, *bc);
-		if (k != 2)
-			while (*bc > 0 && cell_class(*ba, *bc - 1) == k)
-				(*bc)--;
-		k = cell_class(*ea, *ec);
-		if (k != 2)
-			while (*ec < t.vt->cols - 1 && cell_class(*ea, *ec + 1) == k)
-				(*ec)++;
-	}
-}
-
 static char *selection_text(void)
 {
-	if (!t.sel.active)
-		return NULL;
-	int64_t ba, ea;
-	int bc, ec;
-	sel_range(&ba, &bc, &ea, &ec);
-	char *buf = NULL;
-	size_t len = 0, cap = 0;
-	for (int64_t a = ba; a <= ea; a++) {
-		int n;
-		const struct cell *l = vt_abs_line(t.vt, a, &n);
-		if (!l)
-			continue;
-		int c0 = a == ba ? bc : 0;
-		int c1 = a == ea ? MIN(ec, n - 1) : n - 1;
-		size_t start = len;
-		for (int c = c0; c <= c1; c++)
-			if (!(l[c].attr & ATTR_WDUMMY) &&
-			    !put_utf8(&buf, &len, &cap, l[c].cp ? l[c].cp : ' '))
-				goto nomem;
-		bool wrapped = n > 0 && c1 == n - 1 && (l[n - 1].attr & ATTR_WRAP);
-		if (!wrapped) {
-			while (len > start && buf[len - 1] == ' ')
-				len--;
-			if (a != ea && !put_utf8(&buf, &len, &cap, '\n'))
-				goto nomem;
-		}
-	}
-	if (put_utf8(&buf, &len, &cap, 0))
-		return buf;
-nomem:
-	fputs("mwt: no memory for the selection\n", stderr);
-	free(buf);
-	return NULL;
-}
-
-/* The rows shown of absolute lines a to b are drawn anew */
-static void mark_lines(int64_t a, int64_t b)
-{
-	int64_t top = (int64_t)t.vt->scrolled - t.vt->view;
-	int64_t lo = MAX(MIN(a, b) - top, 0), hi = MIN(MAX(a, b) - top, t.vt->rows - 1);
-	for (int64_t r = lo; r <= hi; r++)
-		t.vt->dirty[r] = true;
+	char *s = sel_text(t.vt, &t.sel);
+	if (!s && t.sel.active)
+		fputs("mwt: no memory for the selection\n", stderr);
+	return s;
 }
 
 static void sel_clear(void)
@@ -601,26 +516,11 @@ static void copy_primary(void)
  * the alternate screen only that. Goes to the primary selection like a drag. */
 static void select_all(void)
 {
-	struct vt *vt = t.vt;
-	int64_t first = vt->mode & MODE_ALTSCREEN ? (int64_t)vt->scrolled : vt_abs_first(vt);
-	for (int64_t a = (int64_t)vt->scrolled + vt->rows - 1; a >= first; a--) {
-		int n;
-		const struct cell *l = vt_abs_line(vt, a, &n);
-		for (int c = 0; l && c < n; c++) {
-			if (l[c].cp == ' ' || l[c].cp == 0)
-				continue;
-			t.sel.mode = SEL_LINE;
-			t.sel.aa = first;
-			t.sel.ea = a;
-			t.sel.ac = t.sel.ec = 0;
-			t.sel.dragging = false;
-			t.sel.active = true;
-			vt_mark_all(vt);
-			t.need_redraw = true;
-			copy_primary();
-			return;
-		}
-	}
+	if (!sel_all(t.vt, &t.sel))
+		return;
+	vt_mark_all(t.vt);
+	t.need_redraw = true;
+	copy_primary();
 }
 
 static void paste_text(const char *s, size_t n)
@@ -979,8 +879,7 @@ static void draw_row(struct buffer *b, int r, bool sel, int64_t ba, int bc,
 				if (c.attr & ATTR_DIM)
 					fg = blend(bg, fg, DIM_ALPHA) & 0xffffff;
 			}
-			if (sel && abs >= ba && abs <= ea &&
-			    !(abs == ba && col + span - 1 < bc) && !(abs == ea && col > ec)) {
+			if (sel && sel_covers(ba, bc, ea, ec, abs, col, span)) {
 				fg = t.col.sel_fg;
 				bg = t.col.sel_bg;
 			}
@@ -1246,7 +1145,7 @@ static void draw(void)
 	int64_t ba = 0, ea = 0;
 	int bc = 0, ec = 0;
 	if (t.sel.active)
-		sel_range(&ba, &bc, &ea, &ec);
+		sel_range(vt, &t.sel, &ba, &bc, &ea, &ec);
 	for (int r = 0; r < vt->rows; r++) {
 		if (!vt->dirty[r])
 			continue;
@@ -1886,21 +1785,8 @@ static void ptr_motion(void *d, struct wl_pointer *p, uint32_t time, wl_fixed_t 
 	else if (t.py * t.scale >= t.pad + t.vt->rows * t.ch)
 		vt_scroll_view(t.vt, -1);
 	int64_t abs = (int64_t)t.vt->scrolled - t.vt->view + row;
-	if (abs != t.sel.ea || col != t.sel.ec || !t.sel.active) {
-		/* Only what changes: the rows from the old end to the new, and the
-		 * anchor's, whose word or line extends the other way once the end
-		 * passes it. Marking all redrew the screen at pointer rate. */
-		if (t.sel.active) {
-			mark_lines(t.sel.ea, abs);
-			mark_lines(t.sel.aa, t.sel.aa);
-		} else {
-			mark_lines(t.sel.aa, abs);
-		}
-		t.sel.ea = abs;
-		t.sel.ec = col;
-		t.sel.active = true;
+	if (sel_drag(t.vt, &t.sel, abs, col))
 		t.need_redraw = true;
-	}
 }
 
 static void ptr_button(void *d, struct wl_pointer *p, uint32_t serial, uint32_t time,
@@ -1932,25 +1818,11 @@ static void ptr_button(void *d, struct wl_pointer *p, uint32_t serial, uint32_t 
 	}
 	int64_t abs = (int64_t)t.vt->scrolled - t.vt->view + t.mrow;
 	if (b == 0 && press && t.sel.active && (input_mods(t.xkb_state) & VT_MOD_SHIFT)) {
-		t.sel.ea = abs; /* Shift extends the selection */
-		t.sel.ec = t.mcol;
-		t.sel.dragging = true;
+		sel_extend(&t.sel, abs, t.mcol); /* Shift extends the selection */
 		vt_mark_all(t.vt);
 		t.need_redraw = true;
 	} else if (b == 0 && press) {
-		if (time - t.click_time < (uint32_t)double_click_ms && abs == t.click_abs &&
-		    t.mcol == t.click_col)
-			t.click_count = t.click_count % 3 + 1;
-		else
-			t.click_count = 1;
-		t.click_time = time;
-		t.click_abs = abs;
-		t.click_col = t.mcol;
-		t.sel.mode = t.click_count;
-		t.sel.aa = t.sel.ea = abs;
-		t.sel.ac = t.sel.ec = t.mcol;
-		t.sel.dragging = true;
-		t.sel.active = t.click_count > 1;
+		sel_press(&t.sel, &t.clicks, time, abs, t.mcol, (uint32_t)double_click_ms);
 		vt_mark_all(t.vt);
 		t.need_redraw = true;
 	} else if (b == 0) {

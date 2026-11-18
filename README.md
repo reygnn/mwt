@@ -123,8 +123,9 @@ mwt is developed with Claude (Anthropic) as a coding assistant. I set the scope 
 architecture and review the changes; Claude writes most of the code and the tests. The
 checks:
 
-* `make check` runs the unit tests of the VT core, of what keys and the mouse send and
-  of what a paste becomes, and the kept fuzz findings, under ASan and UBSan; `make fuzz` searches for new ones with libFuzzer, and `make replay` plays
+* `make check` runs the unit tests of the VT core, of what keys and the mouse send, of
+  what a paste becomes and of the selection, and the kept fuzz findings, under ASan and
+  UBSan; `make fuzz` searches for new ones with libFuzzer, and `make replay` plays
   about 290 recorded terminal files through the core.
 * `make test`, `make keys`, `make pixel`, `make mouse` and `make keyboard` drive mwt
   under a headless sway with a simulated mouse and keyboard, and check what it sends to
