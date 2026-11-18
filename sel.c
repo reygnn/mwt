@@ -14,11 +14,14 @@ static bool is_word(uint32_t cp)
 	return cp > 0x7f || (cp > ' ' && !strchr("\"'`()[]{}<>|;,", (int)cp));
 }
 
-/* 0 blank, 1 word, 2 any other character */
+/* 0 blank, 1 word, 2 any other character. The right half of a wide character
+ * has no character of its own, it is of the left half's class. */
 static int cell_class(const struct vt *vt, int64_t abs, int col)
 {
 	int len;
 	const struct cell *l = vt_abs_line(vt, abs, &len);
+	if (l && col > 0 && col < len && (l[col].attr & ATTR_WDUMMY))
+		col--;
 	if (!l || col >= len || l[col].cp == ' ' || l[col].cp == 0)
 		return 0;
 	return is_word(l[col].cp) ? 1 : 2;
@@ -72,6 +75,9 @@ char *sel_text(const struct vt *vt, const struct sel *s)
 			continue;
 		int c0 = a == ba ? bc : 0;
 		int c1 = a == ea ? MIN(ec, n - 1) : n - 1;
+		/* begun on a right half: the character is highlighted, so copied */
+		if (c0 > 0 && c0 < n && (l[c0].attr & ATTR_WDUMMY))
+			c0--;
 		size_t start = len;
 		for (int c = c0; c <= c1; c++)
 			if (!(l[c].attr & ATTR_WDUMMY) &&

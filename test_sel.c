@@ -177,6 +177,30 @@ static void test_range(void)
 	vt_free(vt);
 }
 
+/* wide characters: the right half belongs to the left */
+static void test_range_wide(void)
+{
+	struct vt *vt = mk(20, 3, 0);
+	/* "a 日本語 b": 日 at 2-3, 本 4-5, 語 6-7 */
+	w(vt, "a \xe6\x97\xa5\xe6\x9c\xac\xe8\xaa\x9e b");
+	WORD(vt, 2, 2, 7);
+	WORD(vt, 4, 2, 7);
+	WORD(vt, 7, 2, 7);
+	WORD(vt, 3, 2, 7);
+	TEXT(vt, sel_of(SEL_WORD, line(vt, 0), 5, line(vt, 0), 5), "\xe6\x97\xa5\xe6\x9c\xac\xe8\xaa\x9e");
+	TEXT(vt, sel_of(SEL_WORD, line(vt, 0), 3, line(vt, 0), 3), "\xe6\x97\xa5\xe6\x9c\xac\xe8\xaa\x9e");
+	/* a blank after a right half stays a blank of its own */
+	WORD(vt, 8, 8, 8);
+	/* begun on a right half: what is highlighted is copied, 日 with it */
+	int64_t l0 = line(vt, 0);
+	CHECK(sel_covers(l0, 3, l0, 4, l0, 2, 2));
+	TEXT(vt, sel_of(SEL_CHAR, l0, 3, l0, 4), "\xe6\x97\xa5\xe6\x9c\xac");
+	TEXT(vt, sel_of(SEL_CHAR, l0, 5, l0, 3), "\xe6\x97\xa5\xe6\x9c\xac");
+	TEXT(vt, sel_of(SEL_CHAR, l0, 0, l0, 3), "a \xe6\x97\xa5"); /* ends on a right half */
+	TEXT(vt, sel_of(SEL_CHAR, l0, 7, l0, 9), "\xe8\xaa\x9e b");
+	vt_free(vt);
+}
+
 static void test_covers(void)
 {
 	/* from line 3 column 4 to line 5 column 2 */
@@ -475,6 +499,7 @@ int main(void)
 	if (!setlocale(LC_CTYPE, "C.UTF-8"))
 		setlocale(LC_CTYPE, "");
 	test_range();
+	test_range_wide();
 	test_covers();
 	test_text();
 	test_text_nomem();
