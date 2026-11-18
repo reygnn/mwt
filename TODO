@@ -41,12 +41,20 @@ Zu entscheiden, aus der dritten Review (docs/history/Review-2026-11-08.md):
   bei einem Resize und beim Wechsel in den oder aus dem Alternate Screen.
 * Ziehen über den oberen oder unteren Rand scrollt die Historie nur, solange
   die Maus sich bewegt; kein Timer scrollt weiter.
-* Die reine Logik aus mwt.c (paste_text, track_brackets, selection_text,
-  sel_range, to_latin1, die UTF-8-Prüfungen) in ein Modul ohne Wayland, das
-  make check testet. UTF-8 wird in mwt.c an vier Stellen kodiert oder
-  dekodiert, neben dem Decoder in vt.c. mwt.c hat gut 2500 Zeilen um den
-  globalen Zustand t; Selektion und Zwischenablage (etwa 550 Zeilen) und das
-  Kontextmenü könnten eigene Dateien sein.
+* Die reine Logik aus mwt.c in Module ohne Wayland, die make check testet.
+  Tasten und Maus sind in input.c (test_input). Noch offen, je ein Schritt:
+  - Paste: der Filter in paste_text, die Dekodierung in read_paste mit
+    utf8_seq, track_brackets, to_latin1. Ein Fuzz-Harness wie fuzz_vt dazu.
+  - Selektion: sel_range, cell_class, is_word, selection_text, mark_lines;
+    sie brauchen nur den VT-Kern. UTF-8 wird in mwt.c an vier Stellen kodiert
+    oder dekodiert, neben dem Decoder in vt.c: eine gemeinsame Stelle.
+  - Shell und pty über --wrap für waitpid, kill und write: child_gone,
+    reap_child (kein SIGHUP an eine wiederverwendete PID, bisher nur per
+    strace gezeigt), pty_write und flush_out bei Teil-Schreibvorgängen,
+    drop_paste_for_signal.
+  - Klein: parse_geometry, snap_size, buffer_fits, mime_rank, cursor_size,
+    menu_key (die Wahl des nächsten aktiven Eintrags).
+  Die Wayland-Callbacks bleiben bei den Black-Box-Tests unter sway.
 
 Tests, die noch fehlen, als Kür:
 

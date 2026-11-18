@@ -43,6 +43,7 @@
 #include "rc.h"
 #include "version.h"
 #include "font.h"
+#include "input.h"
 #include "vt.h"
 
 #define MIN(a, b) ((a) < (b) ? (a) : (b))
@@ -134,7 +135,6 @@ static struct {
 	struct xkb_keymap *keymap;
 	struct xkb_state *xkb_state;
 	struct xkb_compose_state *compose;
-	bool compose_fed; /* the key being handled went through compose */
 	struct wl_registry *registry;
 	int repeat_fd, repeat_rate, repeat_delay;
 	xkb_keycode_t repeat_key;
@@ -1791,200 +1791,41 @@ static void zoom(int delta)
 
 /* ---- keyboard --------------------------------------------------------- */
 
-static bool mod_active(const char *name)
+static void view(int delta)
 {
-	return xkb_state_mod_name_is_active(t.xkb_state, name, XKB_STATE_MODS_EFFECTIVE) > 0;
+	vt_scroll_view(t.vt, delta);
+	t.need_redraw = true;
 }
 
-static void send_alt(bool alt, const char *s, size_t n)
-{
-	char buf[80];
-	if (n + 1 > sizeof buf)
-		return;
-	if (!alt && n == 1)
-		drop_paste_for_signal((unsigned char)s[0]);
-	size_t o = 0;
-	if (alt)
-		buf[o++] = '\033';
-	memcpy(buf + o, s, n);
-	send_input(buf, o + n);
-}
-
-static xkb_keysym_t base_sym(xkb_keycode_t code)
-{
-	const xkb_keysym_t *syms;
-	xkb_layout_index_t layout = xkb_state_key_get_layout(t.xkb_state, code);
-	if (xkb_keymap_key_get_syms_by_level(t.keymap, code, layout, 0, &syms) > 0)
-		return syms[0];
-	return XKB_KEY_NoSymbol;
-}
-
-/*
- * With Ctrl, a letter that is not Latin (a Russian or Greek layout) still means
- * its Latin letter, or Ctrl+C would not interrupt anything: the one in another
- * layout of the keymap, else the one at that place on a QWERTY keyboard. Keys
- * without a Latin place keep what they are, like the German umlauts.
- */
-static xkb_keysym_t ctrl_latin(xkb_keycode_t code, xkb_keysym_t sym)
-{
-	if (xkb_keysym_to_utf32(sym) < 0x80) /* ASCII, or no text at all */
-		return sym;
-	xkb_layout_index_t layouts = xkb_keymap_num_layouts_for_key(t.keymap, code);
-	for (xkb_layout_index_t l = 0; l < layouts; l++) {
-		const xkb_keysym_t *syms;
-		if (xkb_keymap_key_get_syms_by_level(t.keymap, code, l, 0, &syms) == 1 &&
-		    syms[0] >= XKB_KEY_a && syms[0] <= XKB_KEY_z)
-			return syms[0];
-	}
-	static const struct { int first; const char *row; } rows[] = {
-		{ KEY_Q, "qwertyuiop" }, { KEY_A, "asdfghjkl" }, { KEY_Z, "zxcvbnm" },
-	};
-	int key = (int)code - 8;
-	for (size_t i = 0; i < LEN(rows); i++) {
-		int k = key - rows[i].first;
-		if (k >= 0 && k < (int)strlen(rows[i].row))
-			return (xkb_keysym_t)rows[i].row[k];
-	}
-	return sym;
-}
-
-/* The keysyms that vt_key() encodes; VT_KEY_COUNT for any other. The keypad
- * ones with NumLock off are the same keys: see CAVEATS.md on the keypad mode. */
-static enum vt_key vt_key_of(xkb_keysym_t sym)
-{
-	switch (sym) {
-	case XKB_KEY_Up: case XKB_KEY_KP_Up: return VT_KEY_UP;
-	case XKB_KEY_Down: case XKB_KEY_KP_Down: return VT_KEY_DOWN;
-	case XKB_KEY_Right: case XKB_KEY_KP_Right: return VT_KEY_RIGHT;
-	case XKB_KEY_Left: case XKB_KEY_KP_Left: return VT_KEY_LEFT;
-	case XKB_KEY_Home: case XKB_KEY_KP_Home: return VT_KEY_HOME;
-	case XKB_KEY_End: case XKB_KEY_KP_End: return VT_KEY_END;
-	case XKB_KEY_Insert: case XKB_KEY_KP_Insert: return VT_KEY_INSERT;
-	case XKB_KEY_Delete: case XKB_KEY_KP_Delete: return VT_KEY_DELETE;
-	case XKB_KEY_Prior: case XKB_KEY_KP_Prior: return VT_KEY_PAGE_UP;
-	case XKB_KEY_Next: case XKB_KEY_KP_Next: return VT_KEY_PAGE_DOWN;
-	case XKB_KEY_BackSpace: return VT_KEY_BACKSPACE;
-	case XKB_KEY_Return: case XKB_KEY_KP_Enter: return VT_KEY_ENTER;
-	case XKB_KEY_Tab: return VT_KEY_TAB;
-	case XKB_KEY_ISO_Left_Tab: return VT_KEY_BACKTAB;
-	case XKB_KEY_Escape: return VT_KEY_ESCAPE;
-	}
-	if (sym >= XKB_KEY_F1 && sym <= XKB_KEY_F12)
-		return (enum vt_key)(VT_KEY_F1 + (sym - XKB_KEY_F1));
-	return VT_KEY_COUNT;
-}
-
-static void key_action(xkb_keycode_t code)
-{
-	if (!t.xkb_state)
-		return;
-	xkb_keysym_t sym = xkb_state_key_get_one_sym(t.xkb_state, code);
-	bool ctrl = mod_active(XKB_MOD_NAME_CTRL);
-	bool alt = mod_active(XKB_MOD_NAME_ALT);
-	bool shift = mod_active(XKB_MOD_NAME_SHIFT);
-
-	if (ctrl && shift) {
-		switch (ctrl_latin(code, base_sym(code))) {
-		case XKB_KEY_a: select_all(); return;
-		case XKB_KEY_c: copy_clipboard(); return;
-		case XKB_KEY_v: paste(false); return;
-		case XKB_KEY_plus: case XKB_KEY_equal: zoom(1); return;
-		case XKB_KEY_minus: zoom(-1); return;
-		case XKB_KEY_0: zoom(0); return;
-		}
-	}
-	if (shift && !ctrl && !alt) {
-		switch (sym) {
-		case XKB_KEY_Insert: case XKB_KEY_KP_Insert:
-			paste(true);
-			return;
-		/* The alternate screen has no scrollback, these go to the program there. */
-		case XKB_KEY_Prior: case XKB_KEY_KP_Prior:
-			if (t.vt->mode & MODE_ALTSCREEN)
-				break;
-			vt_scroll_view(t.vt, t.vt->rows - 1);
-			t.need_redraw = true;
-			return;
-		case XKB_KEY_Next: case XKB_KEY_KP_Next:
-			if (t.vt->mode & MODE_ALTSCREEN)
-				break;
-			vt_scroll_view(t.vt, -(t.vt->rows - 1));
-			t.need_redraw = true;
-			return;
-		}
-		/* Not MODE_MOUSE via mouse_mode(): Shift always turns that off. Programs
-		 * that take the screen or the mouse keep these keys. */
-		if (!(t.vt->mode & (MODE_ALTSCREEN | MODE_MOUSE))) {
-			switch (sym) {
-			case XKB_KEY_Home: case XKB_KEY_KP_Home:
-				vt_scroll_view(t.vt, t.vt->hist_count);
-				t.need_redraw = true;
-				return;
-			case XKB_KEY_End: case XKB_KEY_KP_End:
-				vt_scroll_view(t.vt, -t.vt->view);
-				t.need_redraw = true;
-				return;
-			}
-		}
-	}
-
-	enum vt_key key = vt_key_of(sym);
-	if (key != VT_KEY_COUNT) {
-		char seq[16];
-		size_t n = vt_key(t.vt, key, (shift ? VT_MOD_SHIFT : 0) | (alt ? VT_MOD_ALT : 0) |
-				  (ctrl ? VT_MOD_CTRL : 0), seq, sizeof seq);
-		if (n == 1)
-			drop_paste_for_signal((unsigned char)seq[0]);
-		send_input(seq, n);
-		return;
-	}
-
-	if (ctrl) {
-		xkb_keysym_t latin = ctrl_latin(code, sym);
-		if (latin != sym && latin >= XKB_KEY_a && latin <= XKB_KEY_z) {
-			char c = (char)(latin & 0x1f);
-			send_alt(alt, &c, 1);
-			return;
-		}
-	}
-
-	char buf[64];
-	int n = 0;
-	if (t.compose && !ctrl && !alt) {
-		t.compose_fed = true;
-		xkb_compose_state_feed(t.compose, sym);
-		switch (xkb_compose_state_get_status(t.compose)) {
-		case XKB_COMPOSE_COMPOSING:
-			return;
-		case XKB_COMPOSE_CANCELLED:
-			xkb_compose_state_reset(t.compose);
-			return;
-		case XKB_COMPOSE_COMPOSED:
-			n = xkb_compose_state_get_utf8(t.compose, buf, sizeof buf);
-			xkb_compose_state_reset(t.compose);
-			break;
-		case XKB_COMPOSE_NOTHING:
-			break;
-		}
-	}
-	if (!n)
-		n = xkb_state_key_get_utf8(t.xkb_state, code, buf, sizeof buf);
-	if (n <= 0) {
-		if (ctrl && (sym == XKB_KEY_space || sym == XKB_KEY_at || sym == XKB_KEY_2))
-			send_alt(alt, "", 1); /* NUL */
-		return;
-	}
-	send_alt(alt, buf, MIN((size_t)n, sizeof buf - 1));
-}
-
-/* A key that does not go through compose ends what a dead key began, or that dead
- * key would still change a letter typed much later, and would swallow a Ctrl+C. */
+/* Does what input_key asks. A key that raises a signal is one byte. */
 static void handle_key(xkb_keycode_t code)
 {
-	t.compose_fed = false;
-	key_action(code);
-	if (t.compose && !t.compose_fed)
-		xkb_compose_state_reset(t.compose);
+	if (!t.xkb_state) {
+		if (t.compose)
+			xkb_compose_state_reset(t.compose);
+		return;
+	}
+	struct key_out k;
+	input_key(t.xkb_state, t.compose, t.vt, code, &k);
+	switch (k.act) {
+	case DO_NONE: break;
+	case DO_SEND:
+		if (k.n == 1)
+			drop_paste_for_signal((unsigned char)k.buf[0]);
+		send_input(k.buf, k.n);
+		break;
+	case DO_SELECT_ALL: select_all(); break;
+	case DO_COPY: copy_clipboard(); break;
+	case DO_PASTE: paste(false); break;
+	case DO_PASTE_PRIMARY: paste(true); break;
+	case DO_ZOOM_IN: zoom(1); break;
+	case DO_ZOOM_OUT: zoom(-1); break;
+	case DO_ZOOM_RESET: zoom(0); break;
+	case DO_VIEW_PAGE_UP: view(t.vt->rows - 1); break;
+	case DO_VIEW_PAGE_DOWN: view(-(t.vt->rows - 1)); break;
+	case DO_VIEW_TOP: view(t.vt->hist_count); break;
+	case DO_VIEW_BOTTOM: view(-t.vt->view); break;
+	}
 }
 
 static void kb_keymap(void *d, struct wl_keyboard *kb, uint32_t fmt, int fd, uint32_t size)
@@ -2099,36 +1940,19 @@ static const struct wl_keyboard_listener kb_listener = {
 
 static bool mouse_mode(void)
 {
-	return (t.vt->mode & MODE_MOUSE) && !(t.xkb_state && mod_active(XKB_MOD_NAME_SHIFT));
+	return input_mouse_mode(t.vt->mode, input_mods(t.xkb_state));
 }
 
 static void mouse_report(int code, bool press)
 {
-	if (t.xkb_state) {
-		code |= mod_active(XKB_MOD_NAME_SHIFT) ? 4 : 0;
-		code |= mod_active(XKB_MOD_NAME_ALT) ? 8 : 0;
-		code |= mod_active(XKB_MOD_NAME_CTRL) ? 16 : 0;
-	}
 	char buf[40];
-	int x = t.mcol + 1, y = t.mrow + 1;
-	if (t.vt->mode & MODE_MOUSE_SGR) {
-		snprintf(buf, sizeof buf, "\033[<%d;%d;%d%c", code, x, y, press ? 'M' : 'm');
-		pty_puts(buf);
-		return;
-	}
-	if (x > 223 || y > 223)
-		return;
-	if (!press)
-		code = (code & ~3) | 3;
-	snprintf(buf, sizeof buf, "\033[M%c%c%c", 32 + code, 32 + x, 32 + y);
-	pty_puts(buf);
+	pty_write(buf, input_mouse(t.vt->mode, code, input_mods(t.xkb_state), press,
+				   t.mcol, t.mrow, buf, sizeof buf));
 }
 
 static void pointer_cell(int *col, int *row)
 {
-	int x = (int)(t.px * t.scale) - t.pad, y = (int)(t.py * t.scale) - t.pad;
-	*col = x < 0 ? 0 : MIN(x / t.cw, t.vt->cols - 1);
-	*row = y < 0 ? 0 : MIN(y / t.ch, t.vt->rows - 1);
+	input_cell(t.px, t.py, t.scale, t.pad, t.cw, t.ch, t.vt->cols, t.vt->rows, col, row);
 }
 
 static void ptr_enter(void *d, struct wl_pointer *p, uint32_t serial,
@@ -2176,11 +2000,9 @@ static void ptr_motion(void *d, struct wl_pointer *p, uint32_t time, wl_fixed_t 
 		return;
 
 	if (mouse_mode()) {
-		unsigned m = t.vt->mode;
-		if (moved && ((m & MODE_MOUSE_ANY) || ((m & MODE_MOUSE_DRAG) && t.buttons))) {
-			int btn = t.buttons & 1 ? 0 : t.buttons & 2 ? 1 : t.buttons & 4 ? 2 : 3;
-			mouse_report(btn + 32, true);
-		}
+		int code = input_motion(t.vt->mode, t.buttons, moved);
+		if (code >= 0)
+			mouse_report(code, true);
 		return;
 	}
 	if (!t.sel.dragging)
@@ -2236,7 +2058,7 @@ static void ptr_button(void *d, struct wl_pointer *p, uint32_t serial, uint32_t 
 		return;
 	}
 	int64_t abs = (int64_t)t.vt->scrolled - t.vt->view + t.mrow;
-	if (b == 0 && press && t.sel.active && t.xkb_state && mod_active(XKB_MOD_NAME_SHIFT)) {
+	if (b == 0 && press && t.sel.active && (input_mods(t.xkb_state) & VT_MOD_SHIFT)) {
 		t.sel.ea = abs; /* Shift extends the selection */
 		t.sel.ec = t.mcol;
 		t.sel.dragging = true;
@@ -2286,7 +2108,7 @@ static void wheel(bool down)
 		}
 	} else {
 		/* Shift: a page at a time */
-		int n = t.xkb_state && mod_active(XKB_MOD_NAME_SHIFT) ? t.vt->rows - 1 : wheel_lines;
+		int n = input_mods(t.xkb_state) & VT_MOD_SHIFT ? t.vt->rows - 1 : wheel_lines;
 		vt_scroll_view(t.vt, down ? -n : n);
 		t.need_redraw = true;
 	}

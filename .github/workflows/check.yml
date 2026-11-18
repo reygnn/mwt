@@ -1,4 +1,5 @@
-# What runs without a compositor: the VT core under sanitizers (make check), the
+# What runs without a compositor: the VT core and the keys under sanitizers (make
+# check, test_input needs the layouts of xkb-data and libx11-data's Compose), the
 # terminfo entry against the VT core (make terminfo), the recorded files through
 # the VT core (make replay, which fetches them), and mwt itself built with
 # warnings as errors. The tests under sway and in Podman (make test, make evil,
@@ -14,7 +15,8 @@ jobs:
         run: |
           sudo apt-get update -q
           sudo apt-get install -y -q --no-install-recommends libwayland-dev \
-            libxkbcommon-dev wayland-protocols libfontconfig-dev libfreetype-dev
+            libxkbcommon-dev wayland-protocols libfontconfig-dev libfreetype-dev \
+            xkb-data libx11-data
       # ASan of GCC 13 can crash at start with the 32 bits of mmap randomness
       # newer kernels give; 28 is what it was made for.
       - name: Sanitizers and ASLR

@@ -16,7 +16,7 @@ primary-selection-unstable-v1_XML = $(WP)/unstable/primary-selection/primary-sel
 
 PROTO_H = $(PROTOS:=-client-protocol.h)
 PROTO_C = $(PROTOS:=-protocol.c)
-OBJ = mwt.o vt.o font.o rc.o $(PROTO_C:.c=.o)
+OBJ = mwt.o vt.o font.o rc.o input.o $(PROTO_C:.c=.o)
 
 all: mwt
 
@@ -24,13 +24,14 @@ mwt: $(OBJ)
 	$(CC) $(LDFLAGS) -o $@ $(OBJ) $(LDLIBS)
 
 # mwt that answers DECRQCRA, which esctest reads the screen with; see allow_checksum.
-mwt-esctest: mwt.c config.h version.h vt.h font.h rc.h $(PROTO_H) $(filter-out mwt.o,$(OBJ))
+mwt-esctest: mwt.c config.h version.h vt.h font.h rc.h input.h $(PROTO_H) $(filter-out mwt.o,$(OBJ))
 	$(CC) $(CFLAGS) -DMWT_ALLOW_CHECKSUM $(LDFLAGS) -o $@ mwt.c $(filter-out mwt.o,$(OBJ)) $(LDLIBS)
 
-mwt.o: mwt.c config.h version.h vt.h font.h rc.h $(PROTO_H)
+mwt.o: mwt.c config.h version.h vt.h font.h rc.h input.h $(PROTO_H)
 vt.o: vt.c vt.h version.h
 font.o: font.c font.h
 rc.o: rc.c rc.h
+input.o: input.c input.h vt.h
 
 %-client-protocol.h:
 	$(SCANNER) client-header $($*_XML) $@
@@ -46,12 +47,20 @@ test_rc: test_rc.c rc.c rc.h
 	$(CC) -std=c11 -Wall -Wextra -g -fsanitize=address,undefined -fno-sanitize-recover=all \
 		-o $@ test_rc.c rc.c -lm
 
-# test_vt and test_rc, mwt's command line without a compositor (tests/args.sh), then
-# every input kept in tests/fuzz-regress through the checks of tests/fuzz_vt.c; no
-# clang needed for that.
-check: test_vt test_rc fuzz_regress mwt
+# Keys and the mouse with keymaps compiled here: xkbcommon and its layouts, no
+# compositor.
+test_input: test_input.c input.c input.h vt.c vt.h version.h
+	$(CC) -std=c11 -Wall -Wextra -g -fsanitize=address,undefined -fno-sanitize-recover=all \
+		$(shell pkg-config --cflags xkbcommon) -o $@ test_input.c input.c vt.c \
+		$(shell pkg-config --libs xkbcommon)
+
+# test_vt, test_rc and test_input, mwt's command line without a compositor
+# (tests/args.sh), then every input kept in tests/fuzz-regress through the checks
+# of tests/fuzz_vt.c; no clang needed for that.
+check: test_vt test_rc test_input fuzz_regress mwt
 	./test_vt
 	./test_rc
+	./test_input
 	tests/args.sh
 	@./fuzz_regress tests/fuzz-regress/* 2>fuzz_regress.log || { cat fuzz_regress.log; exit 1; }
 	@rm -f fuzz_regress.log
@@ -182,6 +191,6 @@ uninstall:
 	rm -f $(DESTDIR)$(PREFIX)/share/terminfo/m/mwt $(DESTDIR)$(PREFIX)/share/terminfo/6d/mwt
 
 clean:
-	rm -f mwt mwt-esctest test_vt test_rc vtdump test_replay fuzz_vt fuzz_regress fuzz_regress.log font_oom font_cache font_style font_lookup *.o $(PROTO_H) $(PROTO_C)
+	rm -f mwt mwt-esctest test_vt test_rc test_input vtdump test_replay fuzz_vt fuzz_regress fuzz_regress.log font_oom font_cache font_style font_lookup *.o $(PROTO_H) $(PROTO_C)
 
 .PHONY: all check replay fuzz terminfo keys pixel mouse keyboard test evil fonts oldwayland width esctest profile install uninstall clean
