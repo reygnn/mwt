@@ -546,54 +546,87 @@ static void test_rep(void)
 	CHECK_STR(row(vt, 0), "abcdefghijkl");
 	CHECK_STR(row(vt, 1), "ll");
 	vt_free(vt);
+	/* the last copy takes the left half of a wide one: its right half goes */
+	vt = mk(4, 1, 0);
+	w(vt, "\033[1;3H\xe7\x95\x8c\033[Hx\033[2b");
+	CHECK(vt->pri[0][2].cp == 'x' && vt->pri[0][3].cp == ' ' && !vt->pri[0][3].attr);
+	vt_free(vt);
 
 	/* c ESC [ n b leaves the screen as c n + 1 times does, in any state: insert
-	 * mode, wide characters, autowrap off, DEC graphics, a scroll region */
-	static const char *chars[] = { "x", "\xe7\x95\x8c", "q", "\xc3\xa9" };
+	 * mode, wide characters, autowrap off, DEC graphics, a scroll region, origin
+	 * mode, a pending wrap; over rows written in these modes */
+	static const char *chars[] = { "x", "\xe7\x95\x8c", "q", "\xc3\xa9", "\xf0\x9f\x98\x80" };
+	static const int widths[] = { 1, 2, 1, 1, 2 };
 	static const char *prep[] = {
 		"", "\033[4h", "\033[?7l", "\033(0", "\033[4h\033(0", "\033[4h\033[?7l",
 		"\033[2;3r", "\033[4h\033[2;4r", "\033[41m", "\033[4h\033[1;7;44m",
-		"\033)0\016", "\033[?1049h\033[4h",
+		"\033)0\016", "\033[?1049h\033[4h", "\033[2;3r\033[?6h", "\033[4h\033[1;2r",
 	};
-	long bad = 0, inserted = 0;
+	long bad = 0, inserted = 0, cut = 0, pending = 0;
 	fuzz_state = 0x2545f4914f6cdd1dULL; /* xorshift stays at 0 from 0 */
-	for (int round = 0; round < 2000; round++) {
-		int cols = 1 + (int)(fuzz_rand() % 30), rows = 1 + (int)(fuzz_rand() % 6);
-		char fill[600], seq[700];
-		size_t f = 0;
-		for (int i = 0; i < cols * rows && f < sizeof fill - 8; i++) {
-			const char *s = fuzz_rand() % 5 ? "." : fuzz_rand() % 3 == 0 ? "\033[42m," :
-					fuzz_rand() % 2 ? "\xe7\x95\x8c" : " ";
-			f += (size_t)snprintf(fill + f, sizeof fill - f, "%s", s);
-		}
-		const char *c = chars[fuzz_rand() % 4];
-		int n = (int)(fuzz_rand() % (unsigned)(2 * cols * rows + 3));
-		snprintf(seq, sizeof seq, "%s\033[%d;%dH%s", prep[fuzz_rand() % 12],
-			 1 + (int)(fuzz_rand() % (unsigned)rows), 1 + (int)(fuzz_rand() % (unsigned)cols), c);
+	for (int round = 0; round < 4000; round++) {
+		int cols = 1 + (int)(fuzz_rand() % (round % 2 ? 40 : 6));
+		int rows = 1 + (int)(fuzz_rand() % (round % 2 ? 6 : 3));
 		struct vt *a = mk(cols, rows, 20), *b = mk(cols, rows, 20);
-		w(a, fill), w(b, fill);
-		w(a, "\033[H"), w(b, "\033[H");
-		w(a, seq), w(b, seq);
-		char r[32];
-		snprintf(r, sizeof r, "\033[%db", n);
-		w(a, r);
-		int times = n < 1 ? 1 : n;
-		for (int i = 0; i < times; i++)
+		char s[64];
+		/* the fill: text, wide ones, colours, moves, insert mode and autowrap */
+		for (int i = (int)(fuzz_rand() % (unsigned)(2 * cols * rows + 1)); i > 0; i--) {
+			switch (fuzz_rand() % 10) {
+			case 0:
+				snprintf(s, sizeof s, "\033[%d;%dH", 1 + (int)(fuzz_rand() % (unsigned)rows),
+					 1 + (int)(fuzz_rand() % (unsigned)cols));
+				break;
+			case 1: snprintf(s, sizeof s, "\033[%um", 40 + fuzz_rand() % 3); break;
+			case 2: snprintf(s, sizeof s, "\033[4%c", fuzz_rand() % 2 ? 'h' : 'l'); break;
+			case 3: snprintf(s, sizeof s, "\033[?7%c", fuzz_rand() % 2 ? 'h' : 'l'); break;
+			case 4: case 5: snprintf(s, sizeof s, "\xe7\x95\x8c"); break;
+			default: snprintf(s, sizeof s, "%c", 'a' + (int)(fuzz_rand() % 26)); break;
+			}
+			w(a, s), w(b, s);
+		}
+		w(a, "\033[0m\033[4l\033[?7h"), w(b, "\033[0m\033[4l\033[?7h");
+		const char *p = prep[fuzz_rand() % (sizeof prep / sizeof prep[0])];
+		w(a, p), w(b, p);
+		snprintf(s, sizeof s, "\033[%d;%dH", 1 + (int)(fuzz_rand() % (unsigned)rows),
+			 1 + (int)(fuzz_rand() % (unsigned)cols));
+		w(a, s), w(b, s);
+		if (fuzz_rand() % 4 == 0) { /* a pending wrap, kept or not by autowrap after */
+			snprintf(s, sizeof s, "\033[?7h\033[%dCZ\033[?7%c", cols, fuzz_rand() % 2 ? 'h' : 'l');
+			w(a, s), w(b, s);
+			pending += a->c.wrapnext;
+		}
+		int k = (int)(fuzz_rand() % (sizeof chars / sizeof chars[0]));
+		const char *c = chars[k];
+		w(a, c), w(b, c);
+		int n = (int)(fuzz_rand() % (unsigned)(3 * cols * rows + 3));
+		int limit = cols * rows + cols / widths[k]; /* past it REP cuts the count */
+		memset(a->dirty, 0, (size_t)rows);
+		memset(b->dirty, 0, (size_t)rows);
+		snprintf(s, sizeof s, "\033[%db", n);
+		w(a, s);
+		for (int i = 0; i < (n < 1 ? 1 : n); i++)
 			w(b, c);
-		/* past a screenful REP stops adding lines to the history */
-		bool same = fuzz_cursor(&a->c, &b->c) &&
-			    (n <= cols * rows || a->hist_count <= b->hist_count);
-		if (n <= cols * rows)
-			same &= a->hist_count == b->hist_count;
+		bool same = fuzz_cursor(&a->c, &b->c) && a->hist_count <= b->hist_count;
 		for (int y = 0; y < rows; y++)
-			same &= fuzz_cells(a->line[y], b->line[y], cols + 1); /* with USED */
+			same &= fuzz_cells(a->line[y], b->line[y], cols + 1) && /* with USED */
+				a->dirty[y] >= b->dirty[y];
+		if (n <= limit) { /* the history too, line by line */
+			same &= a->hist_count == b->hist_count;
+			for (int64_t i = vt_abs_first(a); same && i < vt_abs_first(a) + a->hist_count; i++) {
+				int la, lb;
+				const struct cell *ca = vt_abs_line(a, i, &la), *cb = vt_abs_line(b, i, &lb);
+				same = ca && cb && la == lb && fuzz_cells(ca, cb, la);
+			}
+		}
 		bad += !same;
 		inserted += (a->mode & MODE_INSERT) && n > 1;
+		cut += n > limit && cols >= widths[k];
 		vt_free(a);
 		vt_free(b);
 	}
 	CHECK(bad == 0);
-	CHECK(inserted > 300); /* the rounds did reach insert mode */
+	/* the rounds did reach insert mode, the cut count and a pending wrap */
+	CHECK(inserted > 600 && cut > 600 && pending > 300);
 }
 
 /* DECALN, DECSCUSR and DECSTR as xterm 407 */
