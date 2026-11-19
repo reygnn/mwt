@@ -132,6 +132,17 @@ static enum key_do shift_key(xkb_keysym_t sym, unsigned vt_mode)
 	return DO_NONE;
 }
 
+/* With NumLock a keypad key is a digit, and Shift turns it back into its cursor
+ * key: Shift is used up then, as xkb says, and is no Shift for the key. xkb
+ * says so without NumLock too, where Shift changes nothing on the keypad. */
+static bool keypad_shift(struct xkb_state *st, xkb_keycode_t code)
+{
+	struct xkb_keymap *km = xkb_state_get_keymap(st);
+	return xkb_state_mod_name_is_active(st, XKB_MOD_NAME_NUM, XKB_STATE_MODS_EFFECTIVE) > 0 &&
+	       xkb_state_mod_index_is_consumed(st, code,
+					       xkb_keymap_mod_get_index(km, XKB_MOD_NAME_SHIFT)) > 0;
+}
+
 /* true when compose took the key */
 static bool key_bytes(struct xkb_state *st, struct xkb_compose_state *compose,
 		      const struct vt *vt, xkb_keycode_t code, struct key_out *out)
@@ -139,6 +150,8 @@ static bool key_bytes(struct xkb_state *st, struct xkb_compose_state *compose,
 	xkb_keysym_t sym = xkb_state_key_get_one_sym(st, code);
 	unsigned mods = input_mods(st);
 	bool ctrl = mods & VT_MOD_CTRL, alt = mods & VT_MOD_ALT, shift = mods & VT_MOD_SHIFT;
+	/* the modifiers of a key that is no text: without a Shift the keypad used */
+	unsigned kmods = keypad_shift(st, code) ? mods & ~VT_MOD_SHIFT : mods;
 
 	if (ctrl && shift) {
 		out->act = shortcut(input_ctrl_latin(xkb_state_get_keymap(st), code,
@@ -146,7 +159,7 @@ static bool key_bytes(struct xkb_state *st, struct xkb_compose_state *compose,
 		if (out->act != DO_NONE)
 			return false;
 	}
-	if (shift && !ctrl && !alt) {
+	if ((kmods & VT_MOD_SHIFT) && !ctrl && !alt) {
 		out->act = shift_key(sym, vt->mode);
 		if (out->act != DO_NONE)
 			return false;
@@ -154,7 +167,7 @@ static bool key_bytes(struct xkb_state *st, struct xkb_compose_state *compose,
 
 	enum vt_key key = input_vt_key(sym);
 	if (key != VT_KEY_COUNT) {
-		out->n = vt_key(vt, key, mods, out->buf, sizeof out->buf);
+		out->n = vt_key(vt, key, kmods, out->buf, sizeof out->buf);
 		out->act = DO_SEND;
 		return false;
 	}

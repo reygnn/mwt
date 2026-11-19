@@ -234,6 +234,20 @@ static void test_shortcuts(void)
 	CHECK(key(&k, KEY_KP9, S).act == DO_VIEW_PAGE_UP);
 	CHECK(key(&k, KEY_KP7, S).act == DO_VIEW_TOP);
 	CHECK(key(&k, KEY_KP0, S).act == DO_PASTE_PRIMARY);
+	/* With NumLock, Shift makes the digit a cursor key again and is used up:
+	 * the key without Shift, no paste and no jump in the history */
+	CHECK_SEND(key(&k, KEY_KP0, S | NUM), "\033[2~");
+	CHECK_SEND(key(&k, KEY_KP7, S | NUM), "\033[H");
+	CHECK_SEND(key(&k, KEY_KP1, S | NUM), "\033[F");
+	CHECK_SEND(key(&k, KEY_KP9, S | NUM), "\033[5~");
+	CHECK_SEND(key(&k, KEY_KP8, S | NUM), "\033[A");
+	CHECK_SEND(key(&k, KEY_KP8, S | C | NUM), "\033[1;5A");
+	CHECK(key(&k, KEY_KP5, S | NUM).act == DO_NONE); /* KP_Begin */
+	/* the keys of their own keep Shift with NumLock */
+	CHECK(key(&k, KEY_INSERT, S | NUM).act == DO_PASTE_PRIMARY);
+	CHECK(key(&k, KEY_PAGEUP, S | NUM).act == DO_VIEW_PAGE_UP);
+	CHECK_SEND(key(&k, KEY_UP, S | NUM), "\033[1;2A");
+	CHECK(key(&k, KEY_C, C | S | NUM).act == DO_COPY);
 	/* with Ctrl or Alt they go to the program */
 	CHECK_SEND(key(&k, KEY_PAGEUP, S | C), "\033[5;6~");
 	CHECK_SEND(key(&k, KEY_PAGEUP, S | A), "\033[5;4~");
