@@ -1710,7 +1710,10 @@ static void ptr_button(void *d, struct wl_pointer *p, uint32_t serial, uint32_t 
 		return;
 	}
 	if (to_program) {
-		mouse_report(b, press);
+		char buf[40];
+		pty_write(buf, input_button_report(&t.buttons, b, t.vt->mode, b,
+						   input_mods(t.xkb_state), press, t.mcol,
+						   t.mrow, buf, sizeof buf));
 		return;
 	}
 	int64_t abs = (int64_t)t.vt->scrolled - t.vt->view + t.mrow;
@@ -1740,19 +1743,27 @@ static void ptr_button(void *d, struct wl_pointer *p, uint32_t serial, uint32_t 
 
 static void wheel(bool down)
 {
-	if (mouse_mode()) {
+	unsigned mods = input_mods(t.xkb_state);
+	switch (input_wheel(t.vt->mode, mods)) {
+	case WHEEL_REPORT:
 		mouse_report(down ? 65 : 64, true);
-	} else if (t.vt->mode & MODE_ALTSCREEN) {
+		break;
+	case WHEEL_KEYS:
 		for (int i = 0; i < wheel_lines; i++) {
 			char seq[16];
 			size_t n = vt_key(t.vt, down ? VT_KEY_DOWN : VT_KEY_UP, 0, seq, sizeof seq);
 			send_input(seq, n);
 		}
-	} else {
+		break;
+	case WHEEL_SCROLL: {
 		/* Shift: a page at a time */
-		int n = input_mods(t.xkb_state) & VT_MOD_SHIFT ? t.vt->rows - 1 : wheel_lines;
+		int n = mods & VT_MOD_SHIFT ? t.vt->rows - 1 : wheel_lines;
 		vt_scroll_view(t.vt, down ? -n : n);
 		t.need_redraw = true;
+		break;
+	}
+	case WHEEL_NONE:
+		break;
 	}
 }
 

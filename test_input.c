@@ -432,6 +432,9 @@ static void test_mouse(void)
 	CHECK(!strcmp(report(BTN, 0, 0, true, 222, 222), "\033[M \xff\xff"));
 	CHECK(!strcmp(report(BTN, 0, 0, true, 223, 0), ""));
 	CHECK(!strcmp(report(BTN, 0, 0, true, 0, 223), ""));
+	/* a release past it at 223: the program must learn the button is up */
+	CHECK(!strcmp(report(BTN, 0, 0, false, 300, 5), "\033[M#\xff&"));
+	CHECK(!strcmp(report(BTN, 2, C, false, 5, 1000), "\033[M3&\xff"));
 
 	/* SGR: decimal, the release keeps the button and ends in m */
 	CHECK(!strcmp(report(BTN | SGR, 0, 0, true, 0, 0), "\033[<0;1;1M"));
@@ -470,7 +473,7 @@ static void test_motion(void)
 
 static void test_buttons(void)
 {
-	struct buttons bs = { 0, 0 };
+	struct buttons bs = { 0 };
 	/* the program's from the press to the release, also if Shift came between */
 	CHECK(input_button(&bs, 0, true, true));
 	CHECK(bs.held == 1 && bs.program == 1);
@@ -498,6 +501,60 @@ static void test_buttons(void)
 	CHECK(input_button(&bs, 2, true, true));
 	CHECK(!input_button(&bs, 2, true, false) && bs.program == 0);
 	CHECK(!input_button(&bs, 2, false, true));
+}
+
+static void test_button_report(void)
+{
+	enum { BTN = MODE_MOUSE_BTN, SGR = MODE_MOUSE_SGR };
+	struct buttons bs = { 0 };
+	char buf[64];
+	size_t n;
+	/* a drag out past column 223: the release comes, at 223 */
+	input_button(&bs, 0, true, true);
+	n = input_button_report(&bs, 0, BTN, 0, 0, true, 200, 2, buf, sizeof buf);
+	CHECK(n == 6 && !memcmp(buf, "\033[M \xe9#", 6));
+	input_button(&bs, 0, false, true);
+	n = input_button_report(&bs, 0, BTN, 0, 0, false, 400, 2, buf, sizeof buf);
+	CHECK(n == 6 && !memcmp(buf, "\033[M#\xff#", 6));
+	/* a press it could not send: no release either */
+	input_button(&bs, 0, true, true);
+	CHECK(input_button_report(&bs, 0, BTN, 0, 0, true, 300, 2, buf, sizeof buf) == 0);
+	input_button(&bs, 0, false, true);
+	CHECK(input_button_report(&bs, 0, BTN, 0, 0, false, 5, 2, buf, sizeof buf) == 0);
+	/* SGR has no limit */
+	input_button(&bs, 1, true, true);
+	CHECK(input_button_report(&bs, 1, BTN | SGR, 1, 0, true, 300, 2, buf, sizeof buf) > 0);
+	input_button(&bs, 1, false, true);
+	n = input_button_report(&bs, 1, BTN | SGR, 1, 0, false, 300, 2, buf, sizeof buf);
+	buf[n] = 0;
+	CHECK(!strcmp(buf, "\033[<1;301;3m"));
+	/* each button its own; a release twice is reported once */
+	input_button(&bs, 0, true, true);
+	input_button(&bs, 2, true, true);
+	CHECK(input_button_report(&bs, 0, BTN, 0, 0, true, 1, 1, buf, sizeof buf) == 6);
+	CHECK(input_button_report(&bs, 2, BTN, 2, 0, true, 300, 1, buf, sizeof buf) == 0);
+	input_button(&bs, 2, false, true);
+	CHECK(input_button_report(&bs, 2, BTN, 2, 0, false, 1, 1, buf, sizeof buf) == 0);
+	input_button(&bs, 0, false, true);
+	CHECK(input_button_report(&bs, 0, BTN, 0, 0, false, 1, 1, buf, sizeof buf) == 6);
+	CHECK(input_button_report(&bs, 0, BTN, 0, 0, false, 1, 1, buf, sizeof buf) == 0);
+	CHECK(bs.held == 0 && bs.program == 0 && bs.sent == 0);
+}
+
+static void test_wheel(void)
+{
+	enum { ALT = MODE_ALTSCREEN, BTN = MODE_MOUSE_BTN, ANY = MODE_MOUSE_ANY };
+	CHECK(input_wheel(0, 0) == WHEEL_SCROLL);
+	CHECK(input_wheel(0, S) == WHEEL_SCROLL);
+	CHECK(input_wheel(BTN, 0) == WHEEL_REPORT);
+	CHECK(input_wheel(BTN, C) == WHEEL_REPORT);
+	CHECK(input_wheel(BTN, S) == WHEEL_SCROLL);
+	CHECK(input_wheel(ALT, 0) == WHEEL_KEYS);
+	CHECK(input_wheel(ALT, S) == WHEEL_KEYS);
+	CHECK(input_wheel(ALT | ANY, 0) == WHEEL_REPORT);
+	/* Shift took the mouse back, and there is no history to scroll */
+	CHECK(input_wheel(ALT | BTN, S) == WHEEL_NONE);
+	CHECK(input_wheel(ALT | ANY, S | C) == WHEEL_NONE);
 }
 
 static void test_cell(void)
@@ -543,6 +600,8 @@ int main(void)
 	test_mouse();
 	test_motion();
 	test_buttons();
+	test_button_report();
+	test_wheel();
 	test_cell();
 	vt_free(vt);
 	xkb_context_unref(ctx);

@@ -166,6 +166,15 @@ def test_wheel_alternate_screen():
     mouse.send("wheel", -1)
     expect(log, "with DECCKM in application form", b"\033OA" * 3)
     log.close()
+    log = session(b"\033[?1049h\033[?1000;1006h")
+    at(9, 4)
+    mouse.send("hold", "shift")
+    mouse.send("wheel", -1)
+    mouse.send("release", "shift")
+    expect(log, "Shift+wheel where a program has the mouse: no arrows it did not ask for", b"")
+    mouse.send("wheel", -1)
+    expect(log, "and without Shift the wheel is reported", sgr(64, 9, 4))
+    log.close()
 
 
 def test_modifiers():
@@ -230,6 +239,12 @@ def test_x10_limit():
     at(223, 2, cols, rows)
     mouse.send("click", "left")
     expect(log, "X10: past it nothing, rather than a wrong column", b"")
+    at(222, 2, cols, rows)
+    mouse.send("down", "left")
+    log.take(x10(0, 222, 2))
+    at(230, 2, cols, rows)
+    mouse.send("up", "left")
+    expect(log, "X10: a drag out past it is released at the last column", x10(3, 222, 2))
     log.close()
     log = session(b"\033[?1000;1006h", geometry=f"{cols}x{rows}", font="monospace:size=5")
     at(239, 4, cols, rows)

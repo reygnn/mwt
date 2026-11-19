@@ -237,8 +237,10 @@ size_t input_mouse(unsigned vt_mode, int code, unsigned mods, bool press, int co
 	if (vt_mode & MODE_MOUSE_SGR) {
 		n = snprintf(buf, cap, "\033[<%d;%d;%d%c", code, x, y, press ? 'M' : 'm');
 	} else {
-		if (x > 223 || y > 223)
+		if (press && (x > 223 || y > 223))
 			return 0;
+		x = MIN(x, 223);
+		y = MIN(y, 223);
 		if (!press)
 			code = (code & ~3) | 3;
 		n = snprintf(buf, cap, "\033[M%c%c%c", 32 + code, 32 + x, 32 + y);
@@ -257,7 +259,29 @@ bool input_button(struct buttons *bs, int b, bool press, bool mouse)
 		bs->held &= ~bit;
 		bs->program &= ~bit;
 	}
+	if (press && !mouse)
+		bs->sent &= ~bit; /* input_button_report clears it at the release */
 	return to_program;
+}
+
+size_t input_button_report(struct buttons *bs, int b, unsigned vt_mode, int code,
+			   unsigned mods, bool press, int col, int row, char *buf, size_t cap)
+{
+	unsigned bit = 1u << b;
+	if (!press && !(bs->sent & bit))
+		return 0;
+	size_t n = input_mouse(vt_mode, code, mods, press, col, row, buf, cap);
+	bs->sent = press && n ? bs->sent | bit : bs->sent & ~bit;
+	return n;
+}
+
+enum wheel_do input_wheel(unsigned vt_mode, unsigned mods)
+{
+	if (input_mouse_mode(vt_mode, mods))
+		return WHEEL_REPORT;
+	if (vt_mode & MODE_ALTSCREEN)
+		return vt_mode & MODE_MOUSE ? WHEEL_NONE : WHEEL_KEYS;
+	return WHEEL_SCROLL;
 }
 
 bool input_move(const struct buttons *bs, bool mouse)
