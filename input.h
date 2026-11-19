@@ -37,8 +37,7 @@ unsigned input_mods(struct xkb_state *st);
 enum vt_key input_vt_key(xkb_keysym_t sym);
 
 /* With Ctrl, the Latin letter a key of a non-Latin layout means: from another
- * layout of the keymap, else from its place on QWERTY; sym when there is none.
- * For a script that is not Latin also [ and ], for Ctrl+[ and Ctrl+]. */
+ * layout of the keymap, else from its place on QWERTY; sym when there is none. */
 xkb_keysym_t input_ctrl_latin(struct xkb_keymap *km, xkb_keycode_t code, xkb_keysym_t sym);
 
 /* A press of code in st, through compose when it is not NULL. The modes of vt
@@ -51,10 +50,11 @@ void input_key(struct xkb_state *st, struct xkb_compose_state *compose,
  * held, which takes it back for selecting. */
 bool input_mouse_mode(unsigned vt_mode, unsigned mods);
 
-/* The report of button code (0 to 2, 3 for none, +32 for a move, 64 and 65 for
- * the wheel) with VT_MOD_* mods at the cell col, row counted from 0: its length,
- * or 0 when it cannot be sent, past cell 223 without SGR or no room in buf. A
- * release past it is sent at 223. */
+/* The report of button code (0 to 2, 128 to 131 for the side buttons, 3 for
+ * none, +32 for a move, 64 to 67 for the wheel) with VT_MOD_* mods at the cell
+ * col, row counted from 0: its length, or 0 when buf has no room. The X10 form
+ * has no byte past cell 223 and sends 0 there; its release is button 3. Both as
+ * xterm. */
 size_t input_mouse(unsigned vt_mode, int code, unsigned mods, bool press, int col,
 		   int row, char *buf, size_t cap);
 
@@ -68,7 +68,6 @@ int input_button_bit(uint32_t evdev, int *code);
 struct buttons {
 	unsigned held;
 	unsigned program; /* of those, the ones whose press went to the program */
-	unsigned sent;    /* and of those, the ones whose press was reported */
 };
 
 /* A press or release of button b, with the mouse the program's now (mouse) or
@@ -79,21 +78,25 @@ bool input_button(struct buttons *bs, int b, bool press, bool mouse);
  * is held and the mouse is its. */
 bool input_move(const struct buttons *bs, bool mouse);
 
-/* The report of button b's press or release, code as for input_mouse: a
- * release only after its press was reported, where X10 cannot express the cell
- * at the last one it can, so the program does not hold the button for good. */
-size_t input_button_report(struct buttons *bs, int b, unsigned vt_mode, int code,
-			   unsigned mods, bool press, int col, int row, char *buf, size_t cap);
+/* The report of a press or release that goes to the program, as input_mouse:
+ * none for a release once the program has turned the mouse off, as xterm. */
+size_t input_button_report(unsigned vt_mode, int code, unsigned mods, bool press,
+			   int col, int row, char *buf, size_t cap);
 
-/* What the wheel does: reports to a program that has the mouse; arrow keys in
- * the alternate screen, where there is no history; scrolls the history. With
- * Shift, which takes the mouse back, nothing in the alternate screen of a
- * program that has the mouse: no history, and the keys are not asked for. */
+/* What a step of the wheel does: reports to a program that has the mouse; arrow
+ * keys in the alternate screen, where there is no history; scrolls the
+ * history. With Shift, which takes the mouse back, nothing in the alternate
+ * screen of a program that has the mouse: no history, and the keys are not
+ * asked for. Sideways it only reports. */
 enum wheel_do { WHEEL_REPORT, WHEEL_KEYS, WHEEL_SCROLL, WHEEL_NONE };
-enum wheel_do input_wheel(unsigned vt_mode, unsigned mods);
+enum wheel_do input_wheel(unsigned vt_mode, unsigned mods, bool sideways);
 
-/* The code to report for a move to another cell with buttons (bit 0 left, 1
- * middle, 2 right) held, or -1 when the mode does not report it. */
+/* Its code: 64 up, 65 down, 66 left, 67 right, as xterm. */
+int input_wheel_code(bool sideways, bool positive);
+
+/* The code to report for a move to another cell with buttons held (bits as in
+ * struct buttons; left before middle before right before the side buttons, as
+ * xterm), or -1 when the mode does not report it. */
 int input_motion(unsigned vt_mode, unsigned buttons, bool moved);
 
 /* The cell at the pointer, px, py in logical pixels, clamped to the grid. */

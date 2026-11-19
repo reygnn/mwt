@@ -3,6 +3,7 @@
 the wheel and modifiers, in SGR and in the old X10 form. A program in raw mode
 logs what it gets, as in tests/keys.py. Run with `make mouse`, which goes through
 tests/headless.sh. Selection and the menu under Shift are in tests/run.sh."""
+import os
 import subprocess
 import sys
 import time
@@ -238,18 +239,79 @@ def test_x10_limit():
     expect(log, "X10: column 223 is the last it can express", x10(0, 222, 2) + x10(3, 222, 2))
     at(223, 2, cols, rows)
     mouse.send("click", "left")
-    expect(log, "X10: past it nothing, rather than a wrong column", b"")
+    past = b"\033[M \0#" + b"\033[M#\0#"
+    expect(log, "X10: past it a 0 for the column, press and release, as xterm", past)
     at(222, 2, cols, rows)
     mouse.send("down", "left")
     log.take(x10(0, 222, 2))
     at(230, 2, cols, rows)
     mouse.send("up", "left")
-    expect(log, "X10: a drag out past it is released at the last column", x10(3, 222, 2))
+    expect(log, "X10: a drag out past it is released there", b"\033[M#\0#")
     log.close()
     log = session(b"\033[?1000;1006h", geometry=f"{cols}x{rows}", font="monospace:size=5")
     at(239, 4, cols, rows)
     mouse.send("click", "left")
     expect(log, "SGR has no such limit", sgr(0, 239, 4) + sgr(0, 239, 4, False))
+    log.close()
+
+
+QUITTER = r"""
+import os, sys, tty
+log = sys.argv[1]
+tty.setraw(0)
+os.write(1, b"\033[?1000h")
+press = b""
+while len(press) < 6:
+    press += os.read(0, 6 - len(press))
+os.write(1, b"\033[?1000l")
+with open(log, "w") as f:
+    f.write("press " + press.hex() + "\n")
+    f.flush()
+    while True:
+        b = os.read(0, 4096)
+        if not b:
+            break
+        f.write(b.hex() + "\n")
+        f.flush()
+"""
+
+
+def test_release_after_mouse_off():
+    """A program takes the press and turns the mouse off before the button
+    comes up, as one that quits on a click does: the release went to the pty
+    anyway, into the shell that followed."""
+    path = os.path.join(mwtlib.DIR, "quitter.log")
+    win = mwtlib.Window("python3", "-c", QUITTER, path)
+    at(4, 4)
+    mouse.send("down", "left")
+    for _ in range(50):
+        if os.path.exists(path) and os.path.getsize(path):
+            break
+        time.sleep(0.05)
+    mouse.send("up", "left")
+    time.sleep(0.4)
+    with open(path) as f:
+        lines = f.read().split()
+    check(lines[:2] == ["press", x10(0, 4, 4).hex()], "the press went to the program", repr(lines))
+    check(lines[2:] == [], "and no release after it turned the mouse off", repr(lines[2:]))
+    win.close()
+
+
+def test_release_with_menu_open():
+    """The program holds the left button, Shift and the right one open the menu,
+    then the left comes up: the release is the program's, menu or not."""
+    log = session(b"\033[?1000;1006h")
+    at(6, 6)
+    mouse.send("down", "left")
+    log.take(sgr(0, 6, 6))
+    mouse.send("hold", "shift")
+    mouse.send("click", "right")
+    mouse.send("release", "shift")
+    time.sleep(0.4)
+    mouse.send("up", "left")
+    expect(log, "the program's release with the menu open", sgr(0, 6, 6, False))
+    mouse.send("click", "left")  # closes the menu
+    time.sleep(0.3)
     log.close()
 
 
@@ -310,6 +372,8 @@ def main():
     test_off()
     test_x10_limit()
     test_shift_let_go_first()
+    test_release_after_mouse_off()
+    test_release_with_menu_open()
     test_device_gone()  # last: it takes the mouse away
     mouse.close()
     return finish()

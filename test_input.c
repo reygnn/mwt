@@ -219,7 +219,8 @@ static void test_special_keys(void)
 	CHECK(key(&k, KEY_F13, 0).act == DO_NONE);
 	/* the modes of the terminal: DECCKM, LNM */
 	kb_free(&k);
-	/* where they are F13 to F24: Shift+F1 to F12, as xterm */
+	/* where they are F13 to F24: Shift+F1 to F12, kf13 to kf24 of mwt.info and of
+	 * xterm's terminfo (xterm itself sends CSI 25 ~ and on) */
 	k = kb_opt("us", NULL, "fkeys:basic_13-24");
 	CHECK_SEND(key(&k, KEY_F13, 0), "\033[1;2P");
 	CHECK_SEND(key(&k, KEY_F16, 0), "\033[1;2S");
@@ -263,15 +264,15 @@ static void test_shortcuts(void)
 	CHECK(key(&k, KEY_KP9, S).act == DO_VIEW_PAGE_UP);
 	CHECK(key(&k, KEY_KP7, S).act == DO_VIEW_TOP);
 	CHECK(key(&k, KEY_KP0, S).act == DO_PASTE_PRIMARY);
-	/* With NumLock, Shift makes the digit a cursor key again and is used up:
-	 * the key without Shift, no paste and no jump in the history */
-	CHECK_SEND(key(&k, KEY_KP0, S | NUM), "\033[2~");
-	CHECK_SEND(key(&k, KEY_KP7, S | NUM), "\033[H");
-	CHECK_SEND(key(&k, KEY_KP1, S | NUM), "\033[F");
-	CHECK_SEND(key(&k, KEY_KP9, S | NUM), "\033[5~");
-	CHECK_SEND(key(&k, KEY_KP8, S | NUM), "\033[A");
-	CHECK_SEND(key(&k, KEY_KP8, S | C | NUM), "\033[1;5A");
-	CHECK_SEND(key(&k, KEY_KP5, S | NUM), "\033[E"); /* KP_Begin */
+	/* With NumLock, Shift makes the digit a cursor key again: no paste and no
+	 * jump in the history, the key goes out with Shift, as xterm 407 sends it */
+	CHECK_SEND(key(&k, KEY_KP0, S | NUM), "\033[2;2~");
+	CHECK_SEND(key(&k, KEY_KP7, S | NUM), "\033[1;2H");
+	CHECK_SEND(key(&k, KEY_KP1, S | NUM), "\033[1;2F");
+	CHECK_SEND(key(&k, KEY_KP9, S | NUM), "\033[5;2~");
+	CHECK_SEND(key(&k, KEY_KP8, S | NUM), "\033[1;2A");
+	CHECK_SEND(key(&k, KEY_KP8, S | C | NUM), "\033[1;6A");
+	CHECK_SEND(key(&k, KEY_KP5, S | NUM), "\033[1;2E"); /* KP_Begin */
 	/* the keys of their own keep Shift with NumLock */
 	CHECK(key(&k, KEY_INSERT, S | NUM).act == DO_PASTE_PRIMARY);
 	CHECK(key(&k, KEY_PAGEUP, S | NUM).act == DO_VIEW_PAGE_UP);
@@ -323,11 +324,9 @@ static void test_non_latin(void)
 	CHECK(key(&k, KEY_A, C | S).act == DO_SELECT_ALL);
 	/* Alt alone keeps the letter */
 	CHECK_SEND(key(&k, KEY_C, A), "\033с");
-	/* х and ъ are where [ and ] are: Ctrl+[ is ESC, Ctrl+] GS */
-	CHECK_SEND(key(&k, KEY_LEFTBRACE, 0), "х");
-	CHECK_SEND(key(&k, KEY_LEFTBRACE, C), "\033");
-	CHECK_SEND(key(&k, KEY_RIGHTBRACE, C), "\x1d");
-	CHECK_SEND(key(&k, KEY_RIGHTBRACE, C | A), "\033\x1d");
+	/* х and ъ are where [ and ] are; with no Latin layout in the keymap Ctrl
+	 * keeps them (CAVEATS.md), us,ru below gives ESC */
+	CHECK_SEND(key(&k, KEY_LEFTBRACE, C), "х");
 	kb_free(&k);
 
 	k = kb_new("gr", NULL);
@@ -337,7 +336,8 @@ static void test_non_latin(void)
 	CHECK(key(&k, KEY_C, C | S).act == DO_COPY);
 	kb_free(&k);
 
-	/* two layouts, the Cyrillic one active: [ of the Latin one */
+	/* two layouts, the Cyrillic one active: [ of the Latin one, which xkbcommon
+	 * gives for Ctrl itself */
 	k = kb_new("us,ru", NULL);
 	{
 		struct key_out o2;
@@ -443,14 +443,16 @@ static void test_mods(void)
 	kb_free(&k);
 }
 
-/* the report as a string, or "" when there is none */
-static const char *report(unsigned m, int code, unsigned mods, bool press, int col, int row)
+/* whether the report is exactly want, a literal that may hold a 0 byte */
+static bool rep_is(unsigned m, int code, unsigned mods, bool press, int col, int row,
+		   const char *want, size_t wn)
 {
-	static char buf[64];
+	char buf[64];
 	size_t n = input_mouse(m, code, mods, press, col, row, buf, sizeof buf);
-	buf[n] = 0;
-	return buf;
+	return n == wn && !memcmp(buf, want, n);
 }
+#define REPORT(m, code, mods, press, col, row, want) \
+	CHECK(rep_is(m, code, mods, press, col, row, want, sizeof want - 1))
 
 static void test_mouse(void)
 {
@@ -465,30 +467,31 @@ static void test_mouse(void)
 	CHECK(!input_mouse_mode(ANY, S | C));
 
 	/* X10 encoding: 32 + code, 32 + column, 32 + row, from 1 */
-	CHECK(!strcmp(report(BTN, 0, 0, true, 0, 0), "\033[M !!"));
-	CHECK(!strcmp(report(BTN, 2, 0, true, 9, 4), "\033[M\"*%"));
+	REPORT(BTN, 0, 0, true, 0, 0, "\033[M !!");
+	REPORT(BTN, 2, 0, true, 9, 4, "\033[M\"*%");
 	/* a release is button 3, whichever went up */
-	CHECK(!strcmp(report(BTN, 2, 0, false, 0, 0), "\033[M#!!"));
-	CHECK(!strcmp(report(BTN, 32, 0, false, 0, 0), "\033[MC!!"));
+	REPORT(BTN, 2, 0, false, 0, 0, "\033[M#!!");
+	REPORT(BTN, 32, 0, false, 0, 0, "\033[M#!!"); /* only button 3 and the modifiers */
 	/* Shift 4, Alt 8, Ctrl 16 */
-	CHECK(!strcmp(report(BTN, 0, S, true, 0, 0), "\033[M$!!"));
-	CHECK(!strcmp(report(BTN, 1, A | C, true, 0, 0), "\033[M9!!"));
-	CHECK(!strcmp(report(BTN, 64, 0, true, 0, 0), "\033[M`!!"));
-	CHECK(!strcmp(report(BTN, 65, C, true, 0, 0), "\033[Mq!!"));
-	/* up to cell 223, the last byte 255; past it nothing */
-	CHECK(!strcmp(report(BTN, 0, 0, true, 222, 222), "\033[M \xff\xff"));
-	CHECK(!strcmp(report(BTN, 0, 0, true, 223, 0), ""));
-	CHECK(!strcmp(report(BTN, 0, 0, true, 0, 223), ""));
-	/* a release past it at 223: the program must learn the button is up */
-	CHECK(!strcmp(report(BTN, 0, 0, false, 300, 5), "\033[M#\xff&"));
-	CHECK(!strcmp(report(BTN, 2, C, false, 5, 1000), "\033[M3&\xff"));
+	REPORT(BTN, 0, S, true, 0, 0, "\033[M$!!");
+	REPORT(BTN, 1, A | C, true, 0, 0, "\033[M9!!");
+	REPORT(BTN, 64, 0, true, 0, 0, "\033[M`!!");
+	REPORT(BTN, 65, C, true, 0, 0, "\033[Mq!!");
+	/* up to cell 223, the last byte 255; past it 0, as xterm, press and
+	 * release alike */
+	REPORT(BTN, 0, 0, true, 222, 222, "\033[M \xff\xff");
+	REPORT(BTN, 0, 0, true, 223, 0, "\033[M \0!");
+	REPORT(BTN, 0, 0, true, 0, 223, "\033[M !\0");
+	REPORT(BTN, 0, 0, false, 300, 5, "\033[M#\0&");
+	REPORT(BTN, 2, C, false, 5, 1000, "\033[M3&\0");
+	REPORT(BTN, 32, 0, true, 250, 250, "\033[M@\0\0");
 
 	/* SGR: decimal, the release keeps the button and ends in m */
-	CHECK(!strcmp(report(BTN | SGR, 0, 0, true, 0, 0), "\033[<0;1;1M"));
-	CHECK(!strcmp(report(BTN | SGR, 2, 0, false, 9, 4), "\033[<2;10;5m"));
-	CHECK(!strcmp(report(BTN | SGR, 35, S | A | C, true, 0, 0), "\033[<63;1;1M"));
-	CHECK(!strcmp(report(BTN | SGR, 64, 0, true, 499, 299), "\033[<64;500;300M"));
-	CHECK(!strcmp(report(BTN | SGR, 0, 0, true, 9999, 9999), "\033[<0;10000;10000M"));
+	REPORT(BTN | SGR, 0, 0, true, 0, 0, "\033[<0;1;1M");
+	REPORT(BTN | SGR, 2, 0, false, 9, 4, "\033[<2;10;5m");
+	REPORT(BTN | SGR, 35, S | A | C, true, 0, 0, "\033[<63;1;1M");
+	REPORT(BTN | SGR, 64, 0, true, 499, 299, "\033[<64;500;300M");
+	REPORT(BTN | SGR, 0, 0, true, 9999, 9999, "\033[<0;10000;10000M");
 
 	/* no room: nothing rather than a cut report */
 	char small[16];
@@ -567,68 +570,60 @@ static void test_button_bits(void)
 	CHECK(input_button_bit(0, &code) == -1);
 	/* as xterm reports them, with modifiers and the wheel sideways */
 	enum { BTN = MODE_MOUSE_BTN, SGR = MODE_MOUSE_SGR };
-	CHECK(!strcmp(report(BTN | SGR, 128, 0, true, 0, 0), "\033[<128;1;1M"));
-	CHECK(!strcmp(report(BTN | SGR, 131, C, false, 4, 2), "\033[<147;5;3m"));
-	CHECK(!strcmp(report(BTN, 129, 0, true, 0, 0), "\033[M\xa1!!"));
-	CHECK(!strcmp(report(BTN, 129, 0, false, 0, 0), "\033[M\xa3!!"));
-	CHECK(!strcmp(report(BTN | SGR, 66, 0, true, 0, 0), "\033[<66;1;1M"));
-	CHECK(!strcmp(report(BTN | SGR, 67, S, true, 0, 0), "\033[<71;1;1M"));
-	/* a side button held during a move counts as none */
-	CHECK(input_motion(MODE_MOUSE_DRAG, 1u << 3, true) == 35);
+	REPORT(BTN | SGR, 128, 0, true, 0, 0, "\033[<128;1;1M");
+	REPORT(BTN | SGR, 131, C, false, 4, 2, "\033[<147;5;3m");
+	REPORT(BTN, 129, 0, true, 0, 0, "\033[M\xa1!!");
+	/* the X10 release is button 3 with the modifiers, the side buttons too */
+	REPORT(BTN, 129, 0, false, 0, 0, "\033[M#!!");
+	REPORT(BTN, 131, S | C, false, 0, 0, "\033[M7!!");
+	REPORT(BTN | SGR, 66, 0, true, 0, 0, "\033[<66;1;1M");
+	REPORT(BTN | SGR, 67, S, true, 0, 0, "\033[<71;1;1M");
+	/* a move with a side button held is a drag of it: 160 for button 8 */
+	CHECK(input_motion(MODE_MOUSE_DRAG, 1u << 3, true) == 160);
+	CHECK(input_motion(MODE_MOUSE_DRAG, 1u << 6, true) == 163);
+	CHECK(input_motion(MODE_MOUSE_DRAG, 1u << 6 | 1u << 4, true) == 161);
+	CHECK(input_motion(MODE_MOUSE_DRAG, 1u << 5 | 4, true) == 34);
 }
 
 static void test_button_report(void)
 {
 	enum { BTN = MODE_MOUSE_BTN, SGR = MODE_MOUSE_SGR };
-	struct buttons bs = { 0 };
 	char buf[64];
-	size_t n;
-	/* a drag out past column 223: the release comes, at 223 */
-	input_button(&bs, 0, true, true);
-	n = input_button_report(&bs, 0, BTN, 0, 0, true, 200, 2, buf, sizeof buf);
-	CHECK(n == 6 && !memcmp(buf, "\033[M \xe9#", 6));
-	input_button(&bs, 0, false, true);
-	n = input_button_report(&bs, 0, BTN, 0, 0, false, 400, 2, buf, sizeof buf);
-	CHECK(n == 6 && !memcmp(buf, "\033[M#\xff#", 6));
-	/* a press it could not send: no release either */
-	input_button(&bs, 0, true, true);
-	CHECK(input_button_report(&bs, 0, BTN, 0, 0, true, 300, 2, buf, sizeof buf) == 0);
-	input_button(&bs, 0, false, true);
-	CHECK(input_button_report(&bs, 0, BTN, 0, 0, false, 5, 2, buf, sizeof buf) == 0);
-	/* SGR has no limit */
-	input_button(&bs, 1, true, true);
-	CHECK(input_button_report(&bs, 1, BTN | SGR, 1, 0, true, 300, 2, buf, sizeof buf) > 0);
-	input_button(&bs, 1, false, true);
-	n = input_button_report(&bs, 1, BTN | SGR, 1, 0, false, 300, 2, buf, sizeof buf);
-	buf[n] = 0;
-	CHECK(!strcmp(buf, "\033[<1;301;3m"));
-	/* each button its own; a release twice is reported once */
-	input_button(&bs, 0, true, true);
-	input_button(&bs, 2, true, true);
-	CHECK(input_button_report(&bs, 0, BTN, 0, 0, true, 1, 1, buf, sizeof buf) == 6);
-	CHECK(input_button_report(&bs, 2, BTN, 2, 0, true, 300, 1, buf, sizeof buf) == 0);
-	input_button(&bs, 2, false, true);
-	CHECK(input_button_report(&bs, 2, BTN, 2, 0, false, 1, 1, buf, sizeof buf) == 0);
-	input_button(&bs, 0, false, true);
-	CHECK(input_button_report(&bs, 0, BTN, 0, 0, false, 1, 1, buf, sizeof buf) == 6);
-	CHECK(input_button_report(&bs, 0, BTN, 0, 0, false, 1, 1, buf, sizeof buf) == 0);
-	CHECK(bs.held == 0 && bs.program == 0 && bs.sent == 0);
+	/* a drag out past column 223: press and release, the release with 0 */
+	CHECK(input_button_report(BTN, 0, 0, true, 200, 2, buf, sizeof buf) == 6 &&
+	      !memcmp(buf, "\033[M \xe9#", 6));
+	CHECK(input_button_report(BTN, 0, 0, false, 400, 2, buf, sizeof buf) == 6 &&
+	      !memcmp(buf, "\033[M#\0#", 6));
+	/* the program turned the mouse off before the button came up: no release
+	 * typed into the shell */
+	CHECK(input_button_report(0, 0, 0, false, 5, 2, buf, sizeof buf) == 0);
+	CHECK(input_button_report(SGR, 0, 0, false, 5, 2, buf, sizeof buf) == 0);
+	CHECK(input_button_report(MODE_MOUSE_ANY, 0, 0, false, 5, 2, buf, sizeof buf) == 6);
+	size_t n = input_button_report(BTN | SGR, 1, 0, false, 300, 2, buf, sizeof buf);
+	CHECK(n == 11 && !memcmp(buf, "\033[<1;301;3m", 11));
 }
 
 static void test_wheel(void)
 {
 	enum { ALT = MODE_ALTSCREEN, BTN = MODE_MOUSE_BTN, ANY = MODE_MOUSE_ANY };
-	CHECK(input_wheel(0, 0) == WHEEL_SCROLL);
-	CHECK(input_wheel(0, S) == WHEEL_SCROLL);
-	CHECK(input_wheel(BTN, 0) == WHEEL_REPORT);
-	CHECK(input_wheel(BTN, C) == WHEEL_REPORT);
-	CHECK(input_wheel(BTN, S) == WHEEL_SCROLL);
-	CHECK(input_wheel(ALT, 0) == WHEEL_KEYS);
-	CHECK(input_wheel(ALT, S) == WHEEL_KEYS);
-	CHECK(input_wheel(ALT | ANY, 0) == WHEEL_REPORT);
+	CHECK(input_wheel(0, 0, false) == WHEEL_SCROLL);
+	CHECK(input_wheel(0, S, false) == WHEEL_SCROLL);
+	CHECK(input_wheel(BTN, 0, false) == WHEEL_REPORT);
+	CHECK(input_wheel(BTN, C, false) == WHEEL_REPORT);
+	CHECK(input_wheel(BTN, S, false) == WHEEL_SCROLL);
+	CHECK(input_wheel(ALT, 0, false) == WHEEL_KEYS);
+	CHECK(input_wheel(ALT, S, false) == WHEEL_KEYS);
+	CHECK(input_wheel(ALT | ANY, 0, false) == WHEEL_REPORT);
 	/* Shift took the mouse back, and there is no history to scroll */
-	CHECK(input_wheel(ALT | BTN, S) == WHEEL_NONE);
-	CHECK(input_wheel(ALT | ANY, S | C) == WHEEL_NONE);
+	CHECK(input_wheel(ALT | BTN, S, false) == WHEEL_NONE);
+	CHECK(input_wheel(ALT | ANY, S | C, false) == WHEEL_NONE);
+	/* sideways only to a program that has the mouse */
+	CHECK(input_wheel(BTN, 0, true) == WHEEL_REPORT);
+	CHECK(input_wheel(BTN, S, true) == WHEEL_NONE);
+	CHECK(input_wheel(0, 0, true) == WHEEL_NONE);
+	CHECK(input_wheel(ALT, 0, true) == WHEEL_NONE);
+	CHECK(input_wheel_code(false, false) == 64 && input_wheel_code(false, true) == 65);
+	CHECK(input_wheel_code(true, false) == 66 && input_wheel_code(true, true) == 67);
 }
 
 static void test_cell(void)

@@ -1699,6 +1699,14 @@ static void ptr_button(void *d, struct wl_pointer *p, uint32_t serial, uint32_t 
 	/* a press on the menu goes to neither, nor does its release */
 	bool to_program = input_button(&t.buttons, b, press,
 				       mouse_mode() && !in_menu() && !t.menu.popup);
+	if (to_program) { /* the release of its press too, with the menu open */
+		char buf[40];
+		pty_write(buf, input_button_report(t.vt->mode, code, input_mods(t.xkb_state),
+						   press, t.mcol, t.mrow, buf, sizeof buf));
+		return;
+	}
+	if (b > 2) /* the side buttons are only for a program that has the mouse */
+		return;
 
 	if (in_menu()) {
 		menu_button(press);
@@ -1707,13 +1715,6 @@ static void ptr_button(void *d, struct wl_pointer *p, uint32_t serial, uint32_t 
 	if (t.menu.popup) { /* on the window, where a grab may let it through */
 		if (press)
 			menu_close();
-		return;
-	}
-	if (to_program) {
-		char buf[40];
-		pty_write(buf, input_button_report(&t.buttons, b, t.vt->mode, code,
-						   input_mods(t.xkb_state), press, t.mcol,
-						   t.mrow, buf, sizeof buf));
 		return;
 	}
 	int64_t abs = (int64_t)t.vt->scrolled - t.vt->view + t.mrow;
@@ -1741,46 +1742,32 @@ static void ptr_button(void *d, struct wl_pointer *p, uint32_t serial, uint32_t 
 	}
 }
 
-static void wheel(bool down)
+/* one step of the wheel on axis a, positive down or right */
+static void wheel_step(uint32_t a, bool positive)
 {
+	bool sideways = a == WL_POINTER_AXIS_HORIZONTAL_SCROLL;
 	unsigned mods = input_mods(t.xkb_state);
-	switch (input_wheel(t.vt->mode, mods)) {
+	switch (input_wheel(t.vt->mode, mods, sideways)) {
 	case WHEEL_REPORT:
-		mouse_report(down ? 65 : 64, true);
+		mouse_report(input_wheel_code(sideways, positive), true);
 		break;
 	case WHEEL_KEYS:
 		for (int i = 0; i < wheel_lines; i++) {
 			char seq[16];
-			size_t n = vt_key(t.vt, down ? VT_KEY_DOWN : VT_KEY_UP, 0, seq, sizeof seq);
+			size_t n = vt_key(t.vt, positive ? VT_KEY_DOWN : VT_KEY_UP, 0, seq, sizeof seq);
 			send_input(seq, n);
 		}
 		break;
 	case WHEEL_SCROLL: {
 		/* Shift: a page at a time */
 		int n = mods & VT_MOD_SHIFT ? t.vt->rows - 1 : wheel_lines;
-		vt_scroll_view(t.vt, down ? -n : n);
+		vt_scroll_view(t.vt, positive ? -n : n);
 		t.need_redraw = true;
 		break;
 	}
 	case WHEEL_NONE:
 		break;
 	}
-}
-
-/* Sideways only for a program that has the mouse: 66 left, 67 right, as xterm. */
-static void hwheel(bool right)
-{
-	if (mouse_mode())
-		mouse_report(right ? 67 : 66, true);
-}
-
-/* one step of the wheel on axis a, vertical or horizontal */
-static void wheel_step(uint32_t a, bool positive)
-{
-	if (a == WL_POINTER_AXIS_VERTICAL_SCROLL)
-		wheel(positive);
-	else
-		hwheel(positive);
 }
 
 static void ptr_axis(void *d, struct wl_pointer *p, uint32_t time, uint32_t axis, wl_fixed_t v)
@@ -1823,7 +1810,8 @@ static void ptr_axis_discrete(void *d, struct wl_pointer *p, uint32_t a, int32_t
 	t.axis_discrete[a] = true;
 	if (t.menu.popup)
 		return;
-	for (int i = n < 0 ? -n : n; i > 0; i--)
+	/* a few notches at most, whatever a compositor counts */
+	for (int i = n < -10 || n > 10 ? 10 : n < 0 ? -n : n; i > 0; i--)
 		wheel_step(a, n > 0);
 }
 

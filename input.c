@@ -1,7 +1,6 @@
 /* input.c - keys and mouse reports; see input.h */
 #define _GNU_SOURCE
 #include <linux/input-event-codes.h>
-#include <stdint.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -54,31 +53,17 @@ enum vt_key input_vt_key(xkb_keysym_t sym)
 
 /* Without Ctrl+C a Russian or Greek layout would interrupt nothing. Keys without
  * a Latin place keep what they are, like the German umlauts. */
-/* [ and ] are taken for a script that is not Latin: Russian puts letters on
- * those keys, German its umlauts, which stay what they are. */
-static bool latin_place(xkb_keysym_t s, bool script)
-{
-	return (s >= XKB_KEY_a && s <= XKB_KEY_z) ||
-	       (script && (s == XKB_KEY_bracketleft || s == XKB_KEY_bracketright));
-}
-
 xkb_keysym_t input_ctrl_latin(struct xkb_keymap *km, xkb_keycode_t code, xkb_keysym_t sym)
 {
-	uint32_t cp = xkb_keysym_to_utf32(sym);
-	if (cp < 0x80) /* ASCII, or no text at all */
+	if (xkb_keysym_to_utf32(sym) < 0x80) /* ASCII, or no text at all */
 		return sym;
-	bool script = cp >= 0x370; /* Greek, Cyrillic and on */
 	xkb_layout_index_t layouts = xkb_keymap_num_layouts_for_key(km, code);
 	for (xkb_layout_index_t l = 0; l < layouts; l++) {
 		const xkb_keysym_t *syms;
 		if (xkb_keymap_key_get_syms_by_level(km, code, l, 0, &syms) == 1 &&
-		    latin_place(syms[0], script))
+		    syms[0] >= XKB_KEY_a && syms[0] <= XKB_KEY_z)
 			return syms[0];
 	}
-	if (script && code == KEY_LEFTBRACE + 8)
-		return XKB_KEY_bracketleft;
-	if (script && code == KEY_RIGHTBRACE + 8)
-		return XKB_KEY_bracketright;
 	static const struct { int first; const char *row; } rows[] = {
 		{ KEY_Q, "qwertyuiop" }, { KEY_A, "asdfghjkl" }, { KEY_Z, "zxcvbnm" },
 	};
@@ -150,8 +135,9 @@ static enum key_do shift_key(xkb_keysym_t sym, unsigned vt_mode)
 }
 
 /* With NumLock a keypad key is a digit, and Shift turns it back into its cursor
- * key: Shift is used up then, as xkb says, and is no Shift for the key. xkb
- * says so without NumLock too, where Shift changes nothing on the keypad. */
+ * key. That Shift does not paste or scroll, as xterm, whose Shift+Insert and
+ * Shift+PgUp are the keys of their own; the key still goes out with Shift. xkb
+ * counts Shift as used without NumLock too, where it changes nothing. */
 static bool keypad_shift(struct xkb_state *st, xkb_keycode_t code)
 {
 	struct xkb_keymap *km = xkb_state_get_keymap(st);
@@ -167,8 +153,7 @@ static bool key_bytes(struct xkb_state *st, struct xkb_compose_state *compose,
 	xkb_keysym_t sym = xkb_state_key_get_one_sym(st, code);
 	unsigned mods = input_mods(st);
 	bool ctrl = mods & VT_MOD_CTRL, alt = mods & VT_MOD_ALT, shift = mods & VT_MOD_SHIFT;
-	/* the modifiers of a key that is no text: without a Shift the keypad used */
-	unsigned kmods = keypad_shift(st, code) ? mods & ~VT_MOD_SHIFT : mods;
+	unsigned kmods = mods;
 
 	if (ctrl && shift) {
 		out->act = shortcut(input_ctrl_latin(xkb_state_get_keymap(st), code,
@@ -176,14 +161,16 @@ static bool key_bytes(struct xkb_state *st, struct xkb_compose_state *compose,
 		if (out->act != DO_NONE)
 			return false;
 	}
-	if ((kmods & VT_MOD_SHIFT) && !ctrl && !alt) {
+	if (shift && !ctrl && !alt && !keypad_shift(st, code)) {
 		out->act = shift_key(sym, vt->mode);
 		if (out->act != DO_NONE)
 			return false;
 	}
 
 	enum vt_key key = input_vt_key(sym);
-	if (sym >= XKB_KEY_F13 && sym <= XKB_KEY_F24) { /* Shift+F1 to F12, as xterm */
+	/* Shift+F1 to F12, as kf13 to kf24 of xterm's terminfo and of mwt.info;
+	 * xterm itself sends CSI 25 ~ and on for them */
+	if (sym >= XKB_KEY_F13 && sym <= XKB_KEY_F24) {
 		key = (enum vt_key)(VT_KEY_F1 + (sym - XKB_KEY_F13));
 		kmods |= VT_MOD_SHIFT;
 	}
@@ -195,7 +182,7 @@ static bool key_bytes(struct xkb_state *st, struct xkb_compose_state *compose,
 
 	if (ctrl) {
 		xkb_keysym_t latin = input_ctrl_latin(xkb_state_get_keymap(st), code, sym);
-		if (latin != sym && latin_place(latin, true)) {
+		if (latin != sym && latin >= XKB_KEY_a && latin <= XKB_KEY_z) {
 			char c = (char)(latin & 0x1f);
 			send(out, alt, &c, 1);
 			return false;
@@ -262,13 +249,11 @@ size_t input_mouse(unsigned vt_mode, int code, unsigned mods, bool press, int co
 	if (vt_mode & MODE_MOUSE_SGR) {
 		n = snprintf(buf, cap, "\033[<%d;%d;%d%c", code, x, y, press ? 'M' : 'm');
 	} else {
-		if (press && (x > 223 || y > 223))
-			return 0;
-		x = MIN(x, 223);
-		y = MIN(y, 223);
 		if (!press)
-			code = (code & ~3) | 3;
-		n = snprintf(buf, cap, "\033[M%c%c%c", 32 + code, 32 + x, 32 + y);
+			code = (code & (4 | 8 | 16)) | 3; /* button 3, the modifiers kept */
+		/* snprintf counts the NUL of %c, so a 0 byte does not cut it */
+		n = snprintf(buf, cap, "\033[M%c%c%c", 32 + code, x > 223 ? 0 : 32 + x,
+			     y > 223 ? 0 : 32 + y);
 	}
 	return n > 0 && (size_t)n < cap ? (size_t)n : 0;
 }
@@ -300,24 +285,28 @@ bool input_button(struct buttons *bs, int b, bool press, bool mouse)
 	return to_program;
 }
 
-size_t input_button_report(struct buttons *bs, int b, unsigned vt_mode, int code,
-			   unsigned mods, bool press, int col, int row, char *buf, size_t cap)
+size_t input_button_report(unsigned vt_mode, int code, unsigned mods, bool press,
+			   int col, int row, char *buf, size_t cap)
 {
-	unsigned bit = 1u << b;
-	if (!press && !(bs->sent & bit))
+	if (!press && !(vt_mode & MODE_MOUSE))
 		return 0;
-	size_t n = input_mouse(vt_mode, code, mods, press, col, row, buf, cap);
-	bs->sent = press && n ? bs->sent | bit : bs->sent & ~bit;
-	return n;
+	return input_mouse(vt_mode, code, mods, press, col, row, buf, cap);
 }
 
-enum wheel_do input_wheel(unsigned vt_mode, unsigned mods)
+enum wheel_do input_wheel(unsigned vt_mode, unsigned mods, bool sideways)
 {
 	if (input_mouse_mode(vt_mode, mods))
 		return WHEEL_REPORT;
+	if (sideways)
+		return WHEEL_NONE;
 	if (vt_mode & MODE_ALTSCREEN)
 		return vt_mode & MODE_MOUSE ? WHEEL_NONE : WHEEL_KEYS;
 	return WHEEL_SCROLL;
+}
+
+int input_wheel_code(bool sideways, bool positive)
+{
+	return 64 + (sideways ? 2 : 0) + (positive ? 1 : 0);
 }
 
 bool input_move(const struct buttons *bs, bool mouse)
@@ -329,7 +318,10 @@ int input_motion(unsigned vt_mode, unsigned buttons, bool moved)
 {
 	if (!moved || !((vt_mode & MODE_MOUSE_ANY) || ((vt_mode & MODE_MOUSE_DRAG) && buttons)))
 		return -1;
-	return 32 + (buttons & 1 ? 0 : buttons & 2 ? 1 : buttons & 4 ? 2 : 3);
+	for (int i = 0; i < 7; i++)
+		if (buttons & 1u << i)
+			return 32 + (i < 3 ? i : 128 + i - 3);
+	return 32 + 3;
 }
 
 void input_cell(double px, double py, int scale, int pad, int cw, int ch, int cols,

@@ -126,7 +126,16 @@ mwt binds the first seat the compositor announces. Should that seat go away, ano
 it announced already is not taken up; only a seat announced later is.
 
 A mouse that goes off the seat with its button down on an item of the context menu runs
-the item: sway sends the release itself, and mwt cannot tell it from one let go.
+the item. sway sends the release itself, which mwt cannot tell from one let go; where a
+compositor does not, mwt makes one up for each button held, and it runs the item too.
+
+With Ctrl, a letter of a layout that is not Latin is taken as the Latin letter in its
+place, so Ctrl+C interrupts on a Russian layout. The keys of [ and ] are not: with only
+such a layout in the keymap, Ctrl on them sends the letter there. With a Latin layout
+beside it (`us,ru`), xkbcommon gives ESC and GS as for Ctrl+[ and Ctrl+].
+
+Ctrl+Shift with `+` or `=` zooms in, also where `?` is Shift on the `+` key (Swedish,
+Finnish, Norwegian, Danish): there Ctrl+? zooms in rather than sending DEL.
 
 
 ## Installation
