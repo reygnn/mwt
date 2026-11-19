@@ -108,6 +108,8 @@ background, set `color7` and `color15` too.
 * Wide characters, and emoji as outlines if a fallback font has them
 * HiDPI through `wl_surface.preferred_buffer_scale`, integer scales only
 
+COMPAT.md goes through the VT100's sequences, and those after it, one by one.
+
 
 ## Deliberately left out
 
