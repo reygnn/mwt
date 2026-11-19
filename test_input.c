@@ -76,30 +76,36 @@ static struct kb kb_new(const char *layout, const char *variant)
 	return k;
 }
 
-/* us with F13 to F24 on their keys, which xkb's rules give XF86 keysyms and
- * whose fkeys option older xkeyboard-config (Ubuntu 24.04) lacks */
-static struct kb kb_fkeys(void)
+/* us with the keys given changed: from parts every xkeyboard-config has, as
+ * older ones (Ubuntu 24.04) lack options such as fkeys:basic_13-24 */
+static struct kb kb_text(const char *keys)
 {
-	static const char text[] =
-		"xkb_keymap {\n"
-		"  xkb_keycodes { include \"evdev+aliases(qwerty)\" };\n"
-		"  xkb_types { include \"complete\" };\n"
-		"  xkb_compat { include \"complete\" };\n"
-		"  xkb_symbols { include \"pc+us\"\n"
-		"    key <FK13> { [ F13 ] }; key <FK14> { [ F14 ] }; key <FK15> { [ F15 ] };\n"
-		"    key <FK16> { [ F16 ] }; key <FK17> { [ F17 ] }; key <FK18> { [ F18 ] };\n"
-		"    key <FK19> { [ F19 ] }; key <FK20> { [ F20 ] }; key <FK21> { [ F21 ] };\n"
-		"    key <FK22> { [ F22 ] }; key <FK23> { [ F23 ] }; key <FK24> { [ F24 ] };\n"
-		"  };\n"
-		"};\n";
+	char text[2048];
+	snprintf(text, sizeof text,
+		 "xkb_keymap {\n"
+		 "  xkb_keycodes { include \"evdev+aliases(qwerty)\" };\n"
+		 "  xkb_types { include \"complete\" };\n"
+		 "  xkb_compat { include \"complete\" };\n"
+		 "  xkb_symbols { include \"pc+us\"\n%s  };\n"
+		 "};\n", keys);
 	struct kb k = { xkb_keymap_new_from_string(ctx, text, XKB_KEYMAP_FORMAT_TEXT_V1,
 						   XKB_KEYMAP_COMPILE_NO_FLAGS), NULL };
 	if (!k.km) {
-		fprintf(stderr, "test_input: the keymap with F13 to F24 does not compile\n");
+		fprintf(stderr, "test_input: the keymap does not compile:\n%s", keys);
 		exit(1);
 	}
 	k.st = xkb_state_new(k.km);
 	return k;
+}
+
+/* us with F13 to F24 on their keys, which xkb's rules give XF86 keysyms */
+static struct kb kb_fkeys(void)
+{
+	return kb_text(
+		"    key <FK13> { [ F13 ] }; key <FK14> { [ F14 ] }; key <FK15> { [ F15 ] };\n"
+		"    key <FK16> { [ F16 ] }; key <FK17> { [ F17 ] }; key <FK18> { [ F18 ] };\n"
+		"    key <FK19> { [ F19 ] }; key <FK20> { [ F20 ] }; key <FK21> { [ F21 ] };\n"
+		"    key <FK22> { [ F22 ] }; key <FK23> { [ F23 ] }; key <FK24> { [ F24 ] };\n");
 }
 
 static void kb_free(struct kb *k)
@@ -194,6 +200,8 @@ static void test_text(void)
 	CHECK_SEND(key(&k, KEY_SLASH, C | S), "\x7f");
 	CHECK_SEND(key(&k, KEY_SLASH, C | S | A), "\033\x7f");
 	CHECK_SEND(key(&k, KEY_SLASH, S), "?");
+	CHECK_SEND(key(&k, KEY_SLASH, C), "\x1f"); /* Ctrl+/ stays US */
+	CHECK_SEND(key(&k, KEY_SLASH, C | A), "\033\x1f");
 	/* Ctrl+Shift+letter that is no shortcut: the control byte as without Shift */
 	CHECK_SEND(key(&k, KEY_B, C | S), "\x02");
 	/* NUL from Ctrl+Space, Ctrl+2 and Ctrl+@; xkbcommon 1.13 gives it itself,
@@ -401,6 +409,18 @@ static void test_non_latin(void)
 	CHECK(input_ctrl_latin(k.km, KEY_Y + 8, XKB_KEY_Cyrillic_en) == XKB_KEY_z);
 	kb_free(&k);
 
+	/* Ctrl+? where ? needs no Shift */
+	k = kb_text("    key <AB10> { [ question, slash ] };\n");
+	CHECK_SEND(key(&k, KEY_SLASH, C), "\x7f");
+	CHECK_SEND(key(&k, KEY_SLASH, C | S), "\x1f");
+	kb_free(&k);
+	/* beside us xkbcommon takes Ctrl on any key as us has it: Ctrl+Shift on the
+	 * key of § on fr is Ctrl+? (CAVEATS.md) */
+	k = kb_new("fr,us", NULL);
+	CHECK(xkb_state_key_get_one_sym(k.st, KEY_SLASH + 8) == XKB_KEY_exclam);
+	CHECK_SEND(key(&k, KEY_SLASH, C | S), "\x7f");
+	CHECK_SEND(key(&k, KEY_SLASH, C), "!"); /* ASCII: no fallback */
+	kb_free(&k);
 	/* Ctrl+? where ? comes from the Latin layout of the keymap: DEL too */
 	k = kb_new("ara,us", NULL);
 	CHECK_SEND(key(&k, KEY_SLASH, C | S), "\x7f");
@@ -595,6 +615,11 @@ static void test_buttons(void)
 	CHECK(!input_button(&bs, 3, false, true));
 	CHECK(input_button(&bs, 4, true, true) && bs.held == 1u << 4);
 	CHECK(input_button(&bs, 4, false, false) && bs.held == 0);
+	/* a press the menu took, whose release never came: the next press decides
+	 * anew, the menu's bit goes */
+	bs.menu = 1;
+	CHECK(!input_button(&bs, 0, true, false) && bs.menu == 0);
+	CHECK(!input_button(&bs, 0, false, false));
 	/* a press again: decided anew */
 	CHECK(input_button(&bs, 2, true, true));
 	CHECK(!input_button(&bs, 2, true, false) && bs.program == 0);

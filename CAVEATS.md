@@ -133,15 +133,18 @@ the item. sway sends the release itself, which mwt cannot tell from one let go; 
 compositor does not, mwt makes one up for each button held, and it runs the item too.
 
 With Ctrl, a letter of a layout that is not Latin is taken as the Latin letter in its
-place, so Ctrl+C interrupts on a Russian layout. The keys of [, ] and ` are not: with
-only such a layout in the keymap, Ctrl on them sends the letter there. With a Latin
-layout beside it, xkbcommon gives what that layout has on the key: ESC and GS beside
-`us`, the letter and `+` beside `de`.
+place, so Ctrl+C interrupts on a Russian layout. Keys outside the three rows of letters
+are not: with only such a layout in the keymap, Ctrl on them sends what the layout has
+there: on a Ukrainian layout Ctrl+\ gives ґ rather than raising SIGQUIT. With a Latin
+layout beside it, xkbcommon gives for Ctrl what that layout has on the key: ESC and GS
+for the keys of [ and ] beside `us`, the letter and `+` beside `de`. Beside `us` that
+holds for Latin layouts too: Ctrl+Shift on the key of § on `fr,us` is Ctrl+? there.
 
 Ctrl+? sends DEL, unless Ctrl+Shift on the key of `?` is a shortcut of mwt: on the key of
-`+`, `=`, `-` or `0` it zooms, in on the Nordic, Estonian and Faroese layouts and
-`pl(qwertz)`, out on `fr(ergol)`, back on Mongolian; on the key of A, C or V, where a
-layout that is not Latin may have `?` (`ca(ike)`), it selects, copies or pastes.
+`+`, `=`, `-` or `0` it zooms, in on the Danish, Finnish, Norwegian, Swedish, Estonian
+and Faroese layouts, `pl(qwertz)` and `ro(winkeys)`, out on `fr(ergol)`, back on
+Mongolian; on the key of A, C or V, where a layout that is not Latin may have `?`
+(`ca(ike)`), it selects, copies or pastes.
 
 
 ## Installation

@@ -280,6 +280,7 @@ bool input_button(struct buttons *bs, int b, bool press, bool mouse)
 		return false;
 	bool to_program = press ? mouse : (bs->program & bit) != 0;
 	if (press) {
+		bs->menu &= ~bit; /* mwt.c sets it again if the menu takes this one */
 		bs->held |= bit;
 		bs->program = mouse ? bs->program | bit : bs->program & ~bit;
 	} else {
