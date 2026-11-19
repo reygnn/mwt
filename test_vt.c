@@ -498,7 +498,6 @@ static void fuzz_report(long seed, const char *what, const char *why)
 	fprintf(stderr, "fuzz seed %ld: %s: %s\n", seed, what, why);
 }
 
-/* VT_FUZZ_SEEDS=100000 ./test_vt for a long run */
 /* REP as xterm 407 has it: only what was printed just before, through DEC
  * graphics again, and its own output not again */
 static void test_rep(void)
@@ -513,6 +512,19 @@ static void test_rep(void)
 		{ "a\033(0\033[3b", "a" }, { "a\x18\033[3b", "a" },
 		{ "a\033P1$r\033\\\033[3b", "a" }, { "a\033[1;2<3b\033[3b", "a" },
 		{ "\xc3\xa9\033[2b", "\xc3\xa9\xc3\xa9\xc3\xa9" },
+		/* a control within a sequence, or a string cut off by ESC, ends
+		 * nothing: only what ends in the ground state does */
+		{ "a\033[\r3b", "aaa" }, { "a\033\r[3b", "aaa" }, { "a\033[3\007b", "aaaa" },
+		{ "a\033Px\033[3b", "aaaa" }, { "a\033]0;t\033[3b", "aaaa" },
+		{ "a\033_x\033[3b", "aaaa" }, { "a\033Xx\033[3b", "aaaa" },
+		/* a C1 in UTF-8, a format character, a sequence cut off by a
+		 * character that is not ASCII end it; a combining mark keeps the base */
+		{ "a\xc2\x85\033[3b", "a" }, { "a\xc2\x9c\033[3b", "a" },
+		{ "a\xe2\x80\x8b\033[2b", "a" }, { "a\xe2\x80\x8d\033[2b", "a" },
+		{ "a\033[\xc3\xa9\033[2b", "a" }, { "e\xcc\x81\033[2b", "eee" },
+		/* wide, and at the edge without autowrap */
+		{ "\xe7\x95\x8c\033[2b", "\xe7\x95\x8c\xe7\x95\x8c\xe7\x95\x8c" },
+		{ "\033[?7l\033[1;11Hab\033[5b", "          ab" },
 	};
 	for (size_t i = 0; i < sizeof cases / sizeof cases[0]; i++) {
 		struct vt *vt = mk(12, 3, 0);
@@ -540,7 +552,8 @@ static void test_rep(void)
 	static const char *chars[] = { "x", "\xe7\x95\x8c", "q", "\xc3\xa9" };
 	static const char *prep[] = {
 		"", "\033[4h", "\033[?7l", "\033(0", "\033[4h\033(0", "\033[4h\033[?7l",
-		"\033[2;3r", "\033[4h\033[2;4r",
+		"\033[2;3r", "\033[4h\033[2;4r", "\033[41m", "\033[4h\033[1;7;44m",
+		"\033)0\016", "\033[?1049h\033[4h",
 	};
 	long bad = 0, inserted = 0;
 	fuzz_state = 0x2545f4914f6cdd1dULL; /* xorshift stays at 0 from 0 */
@@ -549,12 +562,13 @@ static void test_rep(void)
 		char fill[600], seq[700];
 		size_t f = 0;
 		for (int i = 0; i < cols * rows && f < sizeof fill - 8; i++) {
-			const char *s = fuzz_rand() % 5 ? "." : fuzz_rand() % 2 ? "\xe7\x95\x8c" : " ";
+			const char *s = fuzz_rand() % 5 ? "." : fuzz_rand() % 3 == 0 ? "\033[42m," :
+					fuzz_rand() % 2 ? "\xe7\x95\x8c" : " ";
 			f += (size_t)snprintf(fill + f, sizeof fill - f, "%s", s);
 		}
 		const char *c = chars[fuzz_rand() % 4];
 		int n = (int)(fuzz_rand() % (unsigned)(2 * cols * rows + 3));
-		snprintf(seq, sizeof seq, "%s\033[%d;%dH%s", prep[fuzz_rand() % 8],
+		snprintf(seq, sizeof seq, "%s\033[%d;%dH%s", prep[fuzz_rand() % 12],
 			 1 + (int)(fuzz_rand() % (unsigned)rows), 1 + (int)(fuzz_rand() % (unsigned)cols), c);
 		struct vt *a = mk(cols, rows, 20), *b = mk(cols, rows, 20);
 		w(a, fill), w(b, fill);
@@ -564,13 +578,15 @@ static void test_rep(void)
 		snprintf(r, sizeof r, "\033[%db", n);
 		w(a, r);
 		int times = n < 1 ? 1 : n;
-		if (times > cols * rows)
-			times = cols * rows;
 		for (int i = 0; i < times; i++)
 			w(b, c);
-		bool same = fuzz_cursor(&a->c, &b->c) && a->hist_count == b->hist_count;
+		/* past a screenful REP stops adding lines to the history */
+		bool same = fuzz_cursor(&a->c, &b->c) &&
+			    (n <= cols * rows || a->hist_count <= b->hist_count);
+		if (n <= cols * rows)
+			same &= a->hist_count == b->hist_count;
 		for (int y = 0; y < rows; y++)
-			same &= fuzz_cells(a->pri[y], b->pri[y], cols);
+			same &= fuzz_cells(a->line[y], b->line[y], cols + 1); /* with USED */
 		bad += !same;
 		inserted += (a->mode & MODE_INSERT) && n > 1;
 		vt_free(a);
@@ -600,8 +616,23 @@ static void test_xterm_resets(void)
 	w(vt, "\033[!p");
 	CHECK(vt->cursor_style == CURSOR_BLOCK && vt->dirty[vt->c.y]);
 	vt_free(vt);
+
+	/* DECALN keeps the colours of SGR, not the rest */
+	vt = mk(10, 4, 0);
+	w(vt, "\033[1;3;4;7;41;32m\033#8\033[1;3HQ");
+	CHECK(vt->pri[0][2].cp == 'Q' && vt->pri[0][2].attr == 0 &&
+	      vt->pri[0][2].bg == 1 && vt->pri[0][2].fg == 2);
+	vt_free(vt);
+	/* DECSTR keeps a pending wrap, and resets only this screen's saved cursor */
+	vt = mk(10, 4, 0);
+	w(vt, "\033[1;10HZ\033[!pY");
+	CHECK(vt->pri[0][9].cp == 'Z' && vt->pri[1][0].cp == 'Y');
+	w(vt, "\033[2;5H\0337\033[?1049h\033[!p\033[?1049l\033[4;1H\0338X");
+	CHECK(vt->c.y == 1 && vt->c.x == 5 && vt->pri[1][4].cp == 'X');
+	vt_free(vt);
 }
 
+/* VT_FUZZ_SEEDS=100000 ./test_vt for a long run */
 static void test_fuzz(void)
 {
 	const char *env = getenv("VT_FUZZ_SEEDS");
@@ -972,14 +1003,14 @@ static void test_charset_and_misc(void)
 	CHECK(vt->pri[2][0].cp == 0x800 && vt->pri[2][1].cp == 0x10000);
 	vt_free(vt);
 
-	/* REP writes at most a screenful, so a few bytes cannot ask for 65535
-	 * cells: on 10x3 an x and 30 more, the last wrapping into a new line, so
-	 * one line goes into the history instead of about 6550 */
+	/* REP writes about a screenful, so a few bytes cannot ask for 65535
+	 * cells, but leaves the last row as all 65536 x would: 6 on 10x3; two
+	 * lines go into the history instead of about 6550 */
 	vt = mk(10, 3, 100);
 	w(vt, "x\033[65535b");
-	CHECK(vt->hist_count == 1);
+	CHECK(vt->hist_count == 2);
 	CHECK_STR(row(vt, 1), "xxxxxxxxxx");
-	CHECK_STR(row(vt, 2), "x");
+	CHECK_STR(row(vt, 2), "xxxxxx");
 	vt_free(vt);
 }
 

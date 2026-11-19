@@ -410,12 +410,16 @@ static void soft_reset(struct vt *vt)
 	vt->top = 0;
 	vt->bot = vt->rows - 1;
 	int x = vt->c.x, y = vt->c.y;
+	bool wrapnext = vt->c.wrapnext; /* kept, as xterm */
 	default_cursor(&vt->c);
 	vt->c.x = x;
 	vt->c.y = y;
-	vt->saved_pri = vt->saved_alt = vt->c;
-	vt->saved_pri.x = vt->saved_pri.y = 0;
-	vt->saved_alt.x = vt->saved_alt.y = 0;
+	vt->c.wrapnext = wrapnext;
+	/* only the saved cursor of the screen it is on, as xterm */
+	struct vt_cursor *saved = vt->mode & MODE_ALTSCREEN ? &vt->saved_alt : &vt->saved_pri;
+	*saved = vt->c;
+	saved->x = saved->y = 0;
+	saved->wrapnext = false;
 }
 
 void vt_reset(struct vt *vt)
@@ -567,11 +571,23 @@ bool vt_resize(struct vt *vt, int cols, int rows)
 
 /* ---- printing --------------------------------------------------------- */
 
-static void put(struct vt *vt, uint32_t cp)
+/* Format characters (Unicode Cf): of width 0, but not marks on the one before.
+ * Out of put()'s way: inlined, it made UTF-8 text 8 % slower. */
+__attribute__((noinline, cold)) static bool format_char(uint32_t cp)
+{
+	return (cp >= 0x200b && cp <= 0x200f) || (cp >= 0x202a && cp <= 0x202e) ||
+	       (cp >= 0x2060 && cp <= 0x206f) || cp == 0xfeff || (cp >= 0xfff9 && cp <= 0xfffb) ||
+	       (cp >= 0x600 && cp <= 0x605) || cp == 0x61c || cp == 0x6dd || cp == 0x70f ||
+	       cp == 0x180e || cp == 0xe0001 || (cp >= 0xe0020 && cp <= 0xe007f);
+}
+
+/* true when REP may still repeat what it had: a character was printed, or a
+ * combining mark went on it; false for what ends it, as xterm 407 has it */
+static bool put(struct vt *vt, uint32_t cp)
 {
 	struct vt_cursor *c = &vt->c;
 	if (cp >= 0x80 && cp < 0xa0)
-		return; /* C1 controls are not supported in UTF-8 mode */
+		return false; /* C1 controls are not supported in UTF-8 mode */
 	uint32_t orig = cp; /* for REP, which goes through DEC graphics again */
 	uint16_t gfx = 0;
 	if (c->charset[c->gl] && cp >= 0x5f && cp <= 0x7e) {
@@ -579,8 +595,10 @@ static void put(struct vt *vt, uint32_t cp)
 		gfx = ATTR_DECGFX;
 	}
 	int w = charwidth(cp);
-	if (w == 0 || w > vt->cols)
-		return; /* combining characters are dropped */
+	if (w == 0) /* combining characters are dropped */
+		return !format_char(cp);
+	if (w > vt->cols)
+		return false;
 
 	bool wrap = vt->mode & MODE_AUTOWRAP;
 	if (wrap && (c->wrapnext || c->x + w > vt->cols)) {
@@ -621,37 +639,45 @@ static void put(struct vt *vt, uint32_t cp)
 		c->x = vt->cols - 1;
 		c->wrapnext = wrap;
 	}
+	return true;
 }
 
-/* REP of a narrow character: n copies a row at a time, as n calls of put()
- * would leave them, the row moved once in insert mode rather than n times. */
-static void rep_narrow(struct vt *vt, uint32_t cp, int n)
+/* REP: n copies of cp, a character w cells wide, a row at a time, as n calls of
+ * put() would leave them; in insert mode each row moves once rather than n
+ * times. Without autowrap the cursor stops at the edge, and what comes after
+ * writes the same cell again: nothing more to do. */
+static void rep_row(struct vt *vt, uint32_t cp, int w, int n)
 {
 	struct vt_cursor *c = &vt->c;
 	while (n > 0) {
 		int x0 = c->x, y0 = c->y;
-		put(vt, cp); /* wraps, DEC graphics, the cell to copy */
+		put(vt, cp); /* wraps, DEC graphics, the cells to copy */
 		n--;
-		/* only once put() went one cell on in the row: then the cell is at
-		 * x - 1; not after a wrap, nor at the edge without autowrap */
-		if (!n || c->wrapnext || c->y != y0 || c->x != x0 + 1)
+		if (!(vt->mode & MODE_AUTOWRAP) && c->x == x0 && c->y == y0)
+			return;
+		/* only once put() went w cells on in the row: then the copy is at
+		 * x - w; not after a wrap */
+		if (!n || c->wrapnext || c->y != y0 || c->x != x0 + w)
 			continue;
 		struct cell *l = vt->line[c->y];
-		int x = c->x, k = MIN(n, vt->cols - x);
-		struct cell cell = l[x - 1]; /* put() mended a wide pair at x - 1 */
+		int x = c->x, k = MIN(n, (vt->cols - x) / w);
+		if (!k)
+			continue;
+		struct cell cell[2] = { l[x - w], l[x - 1] }; /* put() mended the edges */
 		if (vt->mode & MODE_INSERT) {
-			memmove(&l[x + k], &l[x], (size_t)(vt->cols - x - k) * sizeof *l);
+			memmove(&l[x + k * w], &l[x], (size_t)(vt->cols - x - k * w) * sizeof *l);
 			if (l[vt->cols - 1].attr & ATTR_WIDE)
 				set_cell(vt, l, vt->cols - 1, blank(vt));
 		} else {
-			fix_wide(vt, l, x, x + k - 1); /* as put_ascii */
+			fix_wide(vt, l, x, x + k * w - 1); /* as put_ascii */
 		}
-		for (int i = 0; i < k; i++)
-			l[x + i] = cell;
-		touch(vt, l, (vt->mode & MODE_INSERT) ? MIN((int)USED(vt, l) + k, vt->cols) : x + k);
+		for (int i = 0; i < k * w; i++)
+			l[x + i] = cell[i % w == 0 ? 0 : 1];
+		touch(vt, l, (vt->mode & MODE_INSERT) ? MIN((int)USED(vt, l) + k * w, vt->cols) :
+						      x + k * w);
 		mark_row(vt, c->y);
 		n -= k;
-		c->x += k;
+		c->x += k * w;
 		if (c->x >= vt->cols) {
 			c->x = vt->cols - 1;
 			c->wrapnext = vt->mode & MODE_AUTOWRAP;
@@ -661,7 +687,6 @@ static void rep_narrow(struct vt *vt, uint32_t cp, int n)
 
 static void control(struct vt *vt, uint32_t cp)
 {
-	vt->lastcp = 0; /* REP repeats only what was printed just before */
 	switch (cp) {
 	case 0x07:
 		if (vt->cb.bell)
@@ -701,7 +726,6 @@ static void control(struct vt *vt, uint32_t cp)
 
 static void esc_dispatch(struct vt *vt, uint32_t f)
 {
-	vt->lastcp = 0;
 	if (vt->ninter == 0) {
 		switch (f) {
 		/* only what moves the cursor drops a pending wrap: ESC = and ESC >
@@ -733,7 +757,9 @@ static void esc_dispatch(struct vt *vt, uint32_t f)
 				fill_row(vt, vt->line[r], 0, vt->cols, e);
 			vt->top = 0;
 			vt->bot = vt->rows - 1;
-			vt->c.origin = false; /* as xterm */
+			vt->c.origin = false; /* as xterm, which keeps only the colours */
+			vt->c.tmpl.attr &= ~(ATTR_BOLD | ATTR_DIM | ATTR_ITALIC | ATTR_UNDERLINE |
+					     ATTR_BLINK | ATTR_REVERSE | ATTR_INVISIBLE | ATTR_STRIKE);
 			moveto(vt, 0, 0);
 			vt_mark_all(vt);
 		}
@@ -1030,8 +1056,7 @@ static void csi_dispatch(struct vt *vt, uint32_t f)
 {
 	struct vt_cursor *c = &vt->c;
 	int n = arg(vt, 0, 1);
-	uint32_t rep_cp = vt->lastcp; /* for REP; any sequence ends what it repeats */
-	vt->lastcp = 0;
+	uint32_t rep_cp = vt->lastcp; /* for REP; feed() forgets it after this */
 
 	if (vt->priv == '?') {
 		if (vt->ninter == 1 && vt->inter[0] == '$' && f == 'p') { /* DECRQM */
@@ -1169,19 +1194,20 @@ static void csi_dispatch(struct vt *vt, uint32_t f)
 		break;
 	case 'Z': tab(vt, -n); break;
 	case 'b': /* REP */
-		/* At most a screenful: more only adds the same lines to the history,
-		 * and 8 bytes asking for 65535 cells would stall reading for long.
-		 * A narrow one a row at a time, which also moves each row once in
-		 * insert mode. */
-		if (!rep_cp)
+	{
+		/* Past a screenful and a row more, more only adds the same lines to
+		 * the history: the count is cut to that, keeping what it leaves in
+		 * the last row, so 8 bytes cannot ask for 65535 rows of work. */
+		int w = rep_cp ? charwidth(c->charset[c->gl] && rep_cp >= 0x5f && rep_cp <= 0x7e ?
+					   dec_graphics[rep_cp - 0x5f] : rep_cp) : 0;
+		if (w < 1 || w > vt->cols)
 			break;
-		if (charwidth(rep_cp) == 1)
-			rep_narrow(vt, rep_cp, MIN(n, vt->cols * vt->rows));
-		else
-			for (int i = 0; i < MIN(n, vt->cols * vt->rows); i++)
-				put(vt, rep_cp);
-		vt->lastcp = 0; /* what REP printed is not repeated again, as xterm */
+		int per_row = vt->cols / w, limit = vt->cols * vt->rows + per_row;
+		if (n > limit)
+			n = limit + (n - limit) % per_row;
+		rep_row(vt, rep_cp, w, n);
 		break;
+	}
 	case 'c':
 		if (arg(vt, 0, 0) == 0)
 			reply(vt, DA1);
@@ -1303,7 +1329,6 @@ static void osc_colors(struct vt *vt, int num, char *args)
 
 static void osc_dispatch(struct vt *vt)
 {
-	vt->lastcp = 0;
 	vt->osc[vt->osc_len] = 0;
 	char *semi = strchr(vt->osc, ';');
 	if (!semi)
@@ -1396,12 +1421,16 @@ static void feed(struct vt *vt, uint32_t cp)
 		return;
 	}
 
+	/* REP repeats what was printed just before: a code point that ends in
+	 * the ground state without being printed ends that, as in xterm 407; a
+	 * control within a sequence, or one cut off by ESC, does not */
+	bool keep = false;
 	switch (vt->state) {
 	case ST_GROUND:
 		if (cp < 0x20 || cp == 0x7f)
 			control(vt, cp);
 		else
-			put(vt, cp);
+			keep = put(vt, cp);
 		break;
 	case ST_ESC:
 		if (cp < 0x20)
@@ -1416,7 +1445,6 @@ static void feed(struct vt *vt, uint32_t cp)
 			vt->state = ST_OSC;
 		} else if (cp == 'P' || cp == 'X' || cp == '^' || cp == '_') {
 			vt->state = ST_STR_IGNORE; /* DCS, SOS, PM, APC */
-			vt->lastcp = 0;
 		} else if (cp < 0x7f) {
 			esc_dispatch(vt, cp);
 			vt->state = ST_GROUND;
@@ -1473,10 +1501,8 @@ static void feed(struct vt *vt, uint32_t cp)
 	case ST_CSI_IGNORE:
 		if (cp < 0x20)
 			control(vt, cp);
-		else if (cp >= 0x40 && cp < 0x7f) {
+		else if (cp >= 0x40 && cp < 0x7f)
 			vt->state = ST_GROUND;
-			vt->lastcp = 0;
-		}
 		break;
 	case ST_OSC:
 		if (cp == 0x07) {
@@ -1491,6 +1517,8 @@ static void feed(struct vt *vt, uint32_t cp)
 	case ST_STR_IGNORE:
 		break;
 	}
+	if (vt->state == ST_GROUND && !keep)
+		vt->lastcp = 0;
 }
 
 /* A run of printable ASCII in the ground state, as put() writes it one by one, up
