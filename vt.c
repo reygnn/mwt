@@ -404,6 +404,8 @@ static void soft_reset(struct vt *vt)
 {
 	vt->mode &= ~(MODE_INSERT | MODE_HIDECURSOR | MODE_APPCURSOR |
 		      MODE_APPKEYPAD);
+	vt->cursor_style = CURSOR_BLOCK; /* as xterm, so is2 undoes a bar vim left */
+	mark_row(vt, vt->c.y);
 	vt->mode |= MODE_AUTOWRAP;
 	vt->top = 0;
 	vt->bot = vt->rows - 1;
@@ -570,6 +572,7 @@ static void put(struct vt *vt, uint32_t cp)
 	struct vt_cursor *c = &vt->c;
 	if (cp >= 0x80 && cp < 0xa0)
 		return; /* C1 controls are not supported in UTF-8 mode */
+	uint32_t orig = cp; /* for REP, which goes through DEC graphics again */
 	uint16_t gfx = 0;
 	if (c->charset[c->gl] && cp >= 0x5f && cp <= 0x7e) {
 		cp = dec_graphics[cp - 0x5f];
@@ -611,7 +614,7 @@ static void put(struct vt *vt, uint32_t cp)
 	}
 	touch(vt, l, c->x + w);
 	mark_row(vt, c->y);
-	vt->lastcp = cp;
+	vt->lastcp = orig;
 
 	c->x += w;
 	if (c->x >= vt->cols) {
@@ -620,8 +623,45 @@ static void put(struct vt *vt, uint32_t cp)
 	}
 }
 
+/* REP of a narrow character: n copies a row at a time, as n calls of put()
+ * would leave them, the row moved once in insert mode rather than n times. */
+static void rep_narrow(struct vt *vt, uint32_t cp, int n)
+{
+	struct vt_cursor *c = &vt->c;
+	while (n > 0) {
+		int x0 = c->x, y0 = c->y;
+		put(vt, cp); /* wraps, DEC graphics, the cell to copy */
+		n--;
+		/* only once put() went one cell on in the row: then the cell is at
+		 * x - 1; not after a wrap, nor at the edge without autowrap */
+		if (!n || c->wrapnext || c->y != y0 || c->x != x0 + 1)
+			continue;
+		struct cell *l = vt->line[c->y];
+		int x = c->x, k = MIN(n, vt->cols - x);
+		struct cell cell = l[x - 1]; /* put() mended a wide pair at x - 1 */
+		if (vt->mode & MODE_INSERT) {
+			memmove(&l[x + k], &l[x], (size_t)(vt->cols - x - k) * sizeof *l);
+			if (l[vt->cols - 1].attr & ATTR_WIDE)
+				set_cell(vt, l, vt->cols - 1, blank(vt));
+		} else {
+			fix_wide(vt, l, x, x + k - 1); /* as put_ascii */
+		}
+		for (int i = 0; i < k; i++)
+			l[x + i] = cell;
+		touch(vt, l, (vt->mode & MODE_INSERT) ? MIN((int)USED(vt, l) + k, vt->cols) : x + k);
+		mark_row(vt, c->y);
+		n -= k;
+		c->x += k;
+		if (c->x >= vt->cols) {
+			c->x = vt->cols - 1;
+			c->wrapnext = vt->mode & MODE_AUTOWRAP;
+		}
+	}
+}
+
 static void control(struct vt *vt, uint32_t cp)
 {
+	vt->lastcp = 0; /* REP repeats only what was printed just before */
 	switch (cp) {
 	case 0x07:
 		if (vt->cb.bell)
@@ -661,6 +701,7 @@ static void control(struct vt *vt, uint32_t cp)
 
 static void esc_dispatch(struct vt *vt, uint32_t f)
 {
+	vt->lastcp = 0;
 	if (vt->ninter == 0) {
 		switch (f) {
 		/* only what moves the cursor drops a pending wrap: ESC = and ESC >
@@ -692,6 +733,7 @@ static void esc_dispatch(struct vt *vt, uint32_t f)
 				fill_row(vt, vt->line[r], 0, vt->cols, e);
 			vt->top = 0;
 			vt->bot = vt->rows - 1;
+			vt->c.origin = false; /* as xterm */
 			moveto(vt, 0, 0);
 			vt_mark_all(vt);
 		}
@@ -988,6 +1030,8 @@ static void csi_dispatch(struct vt *vt, uint32_t f)
 {
 	struct vt_cursor *c = &vt->c;
 	int n = arg(vt, 0, 1);
+	uint32_t rep_cp = vt->lastcp; /* for REP; any sequence ends what it repeats */
+	vt->lastcp = 0;
 
 	if (vt->priv == '?') {
 		if (vt->ninter == 1 && vt->inter[0] == '$' && f == 'p') { /* DECRQM */
@@ -1014,6 +1058,8 @@ static void csi_dispatch(struct vt *vt, uint32_t f)
 	if (vt->ninter) {
 		if (vt->inter[0] == ' ' && f == 'q') { /* DECSCUSR */
 			int s = arg(vt, 0, 0);
+			if (s > 6) /* xterm keeps the style */
+				return;
 			vt->cursor_style = s <= 2 ? CURSOR_BLOCK :
 					   s <= 4 ? CURSOR_UNDERLINE : CURSOR_BAR;
 			mark_row(vt, c->y);
@@ -1123,11 +1169,18 @@ static void csi_dispatch(struct vt *vt, uint32_t f)
 		break;
 	case 'Z': tab(vt, -n); break;
 	case 'b': /* REP */
-		/* at most a screenful: more only adds the same lines to the history,
-		 * and 8 bytes asking for 65535 cells would stall reading for long */
-		if (vt->lastcp)
+		/* At most a screenful: more only adds the same lines to the history,
+		 * and 8 bytes asking for 65535 cells would stall reading for long.
+		 * A narrow one a row at a time, which also moves each row once in
+		 * insert mode. */
+		if (!rep_cp)
+			break;
+		if (charwidth(rep_cp) == 1)
+			rep_narrow(vt, rep_cp, MIN(n, vt->cols * vt->rows));
+		else
 			for (int i = 0; i < MIN(n, vt->cols * vt->rows); i++)
-				put(vt, vt->lastcp);
+				put(vt, rep_cp);
+		vt->lastcp = 0; /* what REP printed is not repeated again, as xterm */
 		break;
 	case 'c':
 		if (arg(vt, 0, 0) == 0)
@@ -1250,6 +1303,7 @@ static void osc_colors(struct vt *vt, int num, char *args)
 
 static void osc_dispatch(struct vt *vt)
 {
+	vt->lastcp = 0;
 	vt->osc[vt->osc_len] = 0;
 	char *semi = strchr(vt->osc, ';');
 	if (!semi)
@@ -1329,6 +1383,7 @@ static void feed(struct vt *vt, uint32_t cp)
 	/* "anywhere" transitions */
 	if (cp == 0x18 || cp == 0x1a) {
 		vt->state = ST_GROUND;
+		vt->lastcp = 0;
 		return;
 	}
 	if (cp == 0x1b) {
@@ -1361,6 +1416,7 @@ static void feed(struct vt *vt, uint32_t cp)
 			vt->state = ST_OSC;
 		} else if (cp == 'P' || cp == 'X' || cp == '^' || cp == '_') {
 			vt->state = ST_STR_IGNORE; /* DCS, SOS, PM, APC */
+			vt->lastcp = 0;
 		} else if (cp < 0x7f) {
 			esc_dispatch(vt, cp);
 			vt->state = ST_GROUND;
@@ -1417,8 +1473,10 @@ static void feed(struct vt *vt, uint32_t cp)
 	case ST_CSI_IGNORE:
 		if (cp < 0x20)
 			control(vt, cp);
-		else if (cp >= 0x40 && cp < 0x7f)
+		else if (cp >= 0x40 && cp < 0x7f) {
 			vt->state = ST_GROUND;
+			vt->lastcp = 0;
+		}
 		break;
 	case ST_OSC:
 		if (cp == 0x07) {

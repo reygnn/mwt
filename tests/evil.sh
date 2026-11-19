@@ -856,6 +856,33 @@ flood_ctrl_c() {
 	T 'echo flood-ende' -k Return
 	try 10 'flood-ende' || gap "no prompt after the flood"
 }
+# REP of a screenful, in insert mode and without, a megabyte of it on a large
+# grid. Cell by cell it moved each row once per cell in insert mode: 0.7 s for
+# each 4 KB at 480x135, minutes in all.
+rep_flood() {
+	if ldd "$MWT" | grep -q asan; then
+		info "skipped: a measure of time, run without sanitizers"
+		return 0
+	fi
+	LOG=$DIR/log.$CASE
+	(cd "$HOME" && sh -c '"$0" -g 480x135 -f monospace:size=4 >"$1" 2>&1 &' "$MWT" "$LOG")
+	wait_mwt || { gap "no window"; return 0; }
+	T "stty size > $DIR/rep.size" -k Return
+	sleep 0.5
+	info "grid $(cat "$DIR/rep.size" 2>/dev/null)"
+	python3 -c 'import sys
+u = b"\033[4h\033[Hx\033[65535b\033[4l\033[Hy\033[65535b"
+sys.stdout.buffer.write(u * (1048576 // len(u)) + b"\033[4l\033[2J\033[H")' >"$DIR/rep"
+	rm -f "$DIR/rep.done"
+	local t0 i
+	t0=$(date +%s%N)
+	T "cat $DIR/rep; touch $DIR/rep.done" -k Return
+	for ((i = 0; i < 300; i++)); do [ -e "$DIR/rep.done" ] && break; sleep 0.1; done
+	local ms=$((($(date +%s%N) - t0) / 1000000))
+	if [ -e "$DIR/rep.done" ]; then ok "a megabyte of REP read in $ms ms"
+	else gap "a megabyte of REP not read in 30 s"; fi
+	C c
+}
 # Queries answered faster than the program reads: the answers wait in mwt. These
 # two measure memory, which ASan's quarantine of freed blocks would otherwise fill.
 SMALL_QUARANTINE=ASAN_OPTIONS=detect_leaks=0:quarantine_size_mb=1
@@ -1513,7 +1540,7 @@ for c in dcs_swallow osc_swallow_cat fuzz noncharacters \
 	mid_char_selection drag_during_flood select_history click_clusters \
 	paste_integrity paste_bidi paste_escape paste_controls paste_queue_limit paste_latin1_limit ctrl_c_behind_paste paste_holds_until_return line_limits paste_over_16mb paste_memory reply_behind_paste \
 	snippet_typed snippet_paste snippet_paste_no_newline \
-	stty_raw_read_in_shell inlcr tcoff cyrillic_ctrl_c cyrillic_raw copy_on_ru raw_paste_ctrl_c paste_bracket_on_signal python_repl flood_ctrl_c flood_rss soak reply_flood reply_flood_raw title_flood title_flood_stalled \
+	stty_raw_read_in_shell inlcr tcoff cyrillic_ctrl_c cyrillic_raw copy_on_ru raw_paste_ctrl_c paste_bracket_on_signal python_repl flood_ctrl_c flood_rss rep_flood soak reply_flood reply_flood_raw title_flood title_flood_stalled \
 	args shells closed_stdio blocked_signals terminfo_dirs cwd_tricks exit_with_jobs no_pidfd no_pidfd_sigchld close_ignores_hup \
 	tiny resize_storm fd_leak fd_to_child stalled_readers stalled_pipes silent_source plain_source flood_source fd_limit low_memory menu_abuse buffer_fail first_buffer_fail zoom_limit compositor_dies; do
 	run "$c"

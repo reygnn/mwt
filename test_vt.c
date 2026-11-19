@@ -499,6 +499,109 @@ static void fuzz_report(long seed, const char *what, const char *why)
 }
 
 /* VT_FUZZ_SEEDS=100000 ./test_vt for a long run */
+/* REP as xterm 407 has it: only what was printed just before, through DEC
+ * graphics again, and its own output not again */
+static void test_rep(void)
+{
+	static const struct { const char *in, *want; } cases[] = {
+		{ "a\033[3b", "aaaa" }, { "a\033[b", "aa" }, { "a\033[0b", "aa" },
+		{ "a\r\033[3b", "a" }, { "a\033[1m\033[3b", "a" }, { "a\033[C\033[3b", "a" },
+		{ "a\0337\0338\033[3b", "a" }, { "a\033]0;t\007\033[3b", "a" },
+		{ "ab\033[2D\033[3b", "ab" }, { "a\033[0m\033[3b", "a" },
+		{ "a\033[4h\033[3b", "a" }, { "a\033[2b\033[2b", "aaa" },
+		{ "a\033[?2b", "a" }, { "a\033[ b", "a" }, { "\033[3b", "" },
+		{ "a\033(0\033[3b", "a" }, { "a\x18\033[3b", "a" },
+		{ "a\033P1$r\033\\\033[3b", "a" }, { "a\033[1;2<3b\033[3b", "a" },
+		{ "\xc3\xa9\033[2b", "\xc3\xa9\xc3\xa9\xc3\xa9" },
+	};
+	for (size_t i = 0; i < sizeof cases / sizeof cases[0]; i++) {
+		struct vt *vt = mk(12, 3, 0);
+		w(vt, cases[i].in);
+		CHECK_STR(row(vt, 0), cases[i].want);
+		vt_free(vt);
+	}
+	/* DEC graphics: the line drawing character again, not a plain one */
+	struct vt *vt = mk(12, 3, 0);
+	w(vt, "\033(0q\033[3b");
+	bool gfx = true;
+	for (int x = 0; x < 4; x++)
+		gfx &= vt->pri[0][x].cp == 0x2500 && (vt->pri[0][x].attr & ATTR_DECGFX);
+	CHECK(gfx && vt->pri[0][4].cp == ' ');
+	vt_free(vt);
+	/* across the end of a row */
+	vt = mk(12, 3, 0);
+	w(vt, "abcdefghijkl\033[2b");
+	CHECK_STR(row(vt, 0), "abcdefghijkl");
+	CHECK_STR(row(vt, 1), "ll");
+	vt_free(vt);
+
+	/* c ESC [ n b leaves the screen as c n + 1 times does, in any state: insert
+	 * mode, wide characters, autowrap off, DEC graphics, a scroll region */
+	static const char *chars[] = { "x", "\xe7\x95\x8c", "q", "\xc3\xa9" };
+	static const char *prep[] = {
+		"", "\033[4h", "\033[?7l", "\033(0", "\033[4h\033(0", "\033[4h\033[?7l",
+		"\033[2;3r", "\033[4h\033[2;4r",
+	};
+	long bad = 0, inserted = 0;
+	fuzz_state = 0x2545f4914f6cdd1dULL; /* xorshift stays at 0 from 0 */
+	for (int round = 0; round < 2000; round++) {
+		int cols = 1 + (int)(fuzz_rand() % 30), rows = 1 + (int)(fuzz_rand() % 6);
+		char fill[600], seq[700];
+		size_t f = 0;
+		for (int i = 0; i < cols * rows && f < sizeof fill - 8; i++) {
+			const char *s = fuzz_rand() % 5 ? "." : fuzz_rand() % 2 ? "\xe7\x95\x8c" : " ";
+			f += (size_t)snprintf(fill + f, sizeof fill - f, "%s", s);
+		}
+		const char *c = chars[fuzz_rand() % 4];
+		int n = (int)(fuzz_rand() % (unsigned)(2 * cols * rows + 3));
+		snprintf(seq, sizeof seq, "%s\033[%d;%dH%s", prep[fuzz_rand() % 8],
+			 1 + (int)(fuzz_rand() % (unsigned)rows), 1 + (int)(fuzz_rand() % (unsigned)cols), c);
+		struct vt *a = mk(cols, rows, 20), *b = mk(cols, rows, 20);
+		w(a, fill), w(b, fill);
+		w(a, "\033[H"), w(b, "\033[H");
+		w(a, seq), w(b, seq);
+		char r[32];
+		snprintf(r, sizeof r, "\033[%db", n);
+		w(a, r);
+		int times = n < 1 ? 1 : n;
+		if (times > cols * rows)
+			times = cols * rows;
+		for (int i = 0; i < times; i++)
+			w(b, c);
+		bool same = fuzz_cursor(&a->c, &b->c) && a->hist_count == b->hist_count;
+		for (int y = 0; y < rows; y++)
+			same &= fuzz_cells(a->pri[y], b->pri[y], cols);
+		bad += !same;
+		inserted += (a->mode & MODE_INSERT) && n > 1;
+		vt_free(a);
+		vt_free(b);
+	}
+	CHECK(bad == 0);
+	CHECK(inserted > 300); /* the rounds did reach insert mode */
+}
+
+/* DECALN, DECSCUSR and DECSTR as xterm 407 */
+static void test_xterm_resets(void)
+{
+	struct vt *vt = mk(10, 4, 0);
+	/* DECALN resets the margins and origin mode */
+	w(vt, "\033[2;3r\033[?6h\033#8\033[1;1HX");
+	CHECK(!vt->c.origin && vt->top == 0 && vt->bot == 3);
+	CHECK_STR(row(vt, 0), "XEEEEEEEEE");
+	/* DECSCUSR 7 and up keep the style */
+	w(vt, "\033[3 q\033[7 q");
+	CHECK(vt->cursor_style == CURSOR_UNDERLINE);
+	w(vt, "\033[99 q");
+	CHECK(vt->cursor_style == CURSOR_UNDERLINE);
+	w(vt, "\033[6 q");
+	CHECK(vt->cursor_style == CURSOR_BAR);
+	/* DECSTR resets it, and redraws the cursor's row */
+	memset(vt->dirty, 0, 4);
+	w(vt, "\033[!p");
+	CHECK(vt->cursor_style == CURSOR_BLOCK && vt->dirty[vt->c.y]);
+	vt_free(vt);
+}
+
 static void test_fuzz(void)
 {
 	const char *env = getenv("VT_FUZZ_SEEDS");
@@ -1219,6 +1322,8 @@ int main(void)
 	test_cursor_style_redraw();
 	test_index_and_charsets();
 	test_alloc_failures();
+	test_rep();
+	test_xterm_resets();
 	test_fuzz();
 	printf("%d/%d checks passed\n", checks - failures, checks);
 	return failures != 0;
