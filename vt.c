@@ -1526,11 +1526,11 @@ void vt_write(struct vt *vt, const char *buf, size_t len)
  * front instead. The keypad mode changes nothing, see CAVEATS.md. */
 size_t vt_key(const struct vt *vt, enum vt_key key, unsigned mods, char *buf, size_t cap)
 {
-	static const char cursor[] = "BCDHF"; /* after A for VT_KEY_UP */
+	static const char cursor[] = "BCDHFE"; /* after A for VT_KEY_UP */
 	static const char fn[] = "PQRS";
 	static const int tilde[] = {
 		[VT_KEY_INSERT] = 2, [VT_KEY_DELETE] = 3, [VT_KEY_PAGE_UP] = 5,
-		[VT_KEY_PAGE_DOWN] = 6, [VT_KEY_F5] = 15, [VT_KEY_F6] = 17,
+		[VT_KEY_PAGE_DOWN] = 6, [VT_KEY_MENU] = 29, [VT_KEY_F5] = 15, [VT_KEY_F6] = 17,
 		[VT_KEY_F7] = 18, [VT_KEY_F8] = 19, [VT_KEY_F9] = 20, [VT_KEY_F10] = 21,
 		[VT_KEY_F11] = 23, [VT_KEY_F12] = 24,
 	};
@@ -1542,7 +1542,7 @@ size_t vt_key(const struct vt *vt, enum vt_key key, unsigned mods, char *buf, si
 
 	if ((unsigned)key >= VT_KEY_COUNT)
 		return 0;
-	if (key <= VT_KEY_END) {
+	if (key <= VT_KEY_BEGIN) {
 		char c = key == VT_KEY_UP ? 'A' : cursor[key - VT_KEY_DOWN];
 		n = m > 1 ? snprintf(tmp, sizeof tmp, "\033[1;%d%c", m, c) :
 		    snprintf(tmp, sizeof tmp, (vt->mode & MODE_APPCURSOR) ? "\033O%c" : "\033[%c", c);

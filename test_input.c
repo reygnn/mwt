@@ -63,9 +63,9 @@ struct kb {
 	struct xkb_state *st;
 };
 
-static struct kb kb_new(const char *layout, const char *variant)
+static struct kb kb_opt(const char *layout, const char *variant, const char *options)
 {
-	struct xkb_rule_names names = { .layout = layout, .variant = variant };
+	struct xkb_rule_names names = { .layout = layout, .variant = variant, .options = options };
 	struct kb k = { xkb_keymap_new_from_names(ctx, &names, XKB_KEYMAP_COMPILE_NO_FLAGS),
 			NULL };
 	if (!k.km) {
@@ -74,6 +74,11 @@ static struct kb kb_new(const char *layout, const char *variant)
 	}
 	k.st = xkb_state_new(k.km);
 	return k;
+}
+
+static struct kb kb_new(const char *layout, const char *variant)
+{
+	return kb_opt(layout, variant, NULL);
 }
 
 static void kb_free(struct kb *k)
@@ -131,7 +136,8 @@ static void test_vt_key_map(void)
 		/* text, and keys mwt does not encode */
 		{ XKB_KEY_a, VT_KEY_COUNT }, { XKB_KEY_space, VT_KEY_COUNT },
 		{ XKB_KEY_F13, VT_KEY_COUNT }, { XKB_KEY_KP_5, VT_KEY_COUNT },
-		{ XKB_KEY_KP_Begin, VT_KEY_COUNT }, { XKB_KEY_NoSymbol, VT_KEY_COUNT },
+		{ XKB_KEY_KP_Begin, VT_KEY_BEGIN }, { XKB_KEY_Menu, VT_KEY_MENU },
+		{ XKB_KEY_NoSymbol, VT_KEY_COUNT },
 	};
 	for (size_t i = 0; i < sizeof map / sizeof map[0]; i++) {
 		checks++;
@@ -161,6 +167,10 @@ static void test_text(void)
 	CHECK_SEND(key(&k, KEY_C, C | A), "\033\x03");
 	CHECK_SEND(key(&k, KEY_LEFTBRACE, C), "\033");
 	CHECK_SEND(key(&k, KEY_BACKSLASH, C), "\x1c");
+	/* Ctrl+? is DEL, as xterm */
+	CHECK_SEND(key(&k, KEY_SLASH, C | S), "\x7f");
+	CHECK_SEND(key(&k, KEY_SLASH, C | S | A), "\033\x7f");
+	CHECK_SEND(key(&k, KEY_SLASH, S), "?");
 	/* Ctrl+Shift+letter that is no shortcut: the control byte as without Shift */
 	CHECK_SEND(key(&k, KEY_B, C | S), "\x02");
 	/* NUL from Ctrl+Space, Ctrl+2 and Ctrl+@; xkbcommon 1.13 gives it itself,
@@ -171,7 +181,7 @@ static void test_text(void)
 	CHECK_SEND(key(&k, KEY_SPACE, C | A), "\033\0");
 	/* keys without text send nothing */
 	CHECK(key(&k, KEY_LEFTSHIFT, 0).act == DO_NONE);
-	CHECK(key(&k, KEY_F13, 0).act == DO_NONE);
+	CHECK(key(&k, KEY_PAUSE, 0).act == DO_NONE);
 	CHECK(key(&k, KEY_CAPSLOCK, 0).act == DO_NONE);
 	kb_free(&k);
 }
@@ -199,7 +209,26 @@ static void test_special_keys(void)
 	CHECK_SEND(key(&k, KEY_KP8, NUM), "8");
 	CHECK_SEND(key(&k, KEY_KP9, 0), "\033[5~");
 	CHECK_SEND(key(&k, KEY_KPENTER, 0), "\r");
+	/* the keypad's 5 and Menu, as xterm */
+	CHECK_SEND(key(&k, KEY_KP5, 0), "\033[E");
+	CHECK_SEND(key(&k, KEY_KP5, C), "\033[1;5E");
+	CHECK_SEND(key(&k, KEY_KP5, NUM), "5");
+	CHECK_SEND(key(&k, KEY_COMPOSE, 0), "\033[29~");
+	CHECK_SEND(key(&k, KEY_COMPOSE, A), "\033[29;3~");
+	/* F13 and up are XF86 keys in xkb's default keymaps */
+	CHECK(key(&k, KEY_F13, 0).act == DO_NONE);
 	/* the modes of the terminal: DECCKM, LNM */
+	kb_free(&k);
+	/* where they are F13 to F24: Shift+F1 to F12, as xterm */
+	k = kb_opt("us", NULL, "fkeys:basic_13-24");
+	CHECK_SEND(key(&k, KEY_F13, 0), "\033[1;2P");
+	CHECK_SEND(key(&k, KEY_F16, 0), "\033[1;2S");
+	CHECK_SEND(key(&k, KEY_F17, 0), "\033[15;2~");
+	CHECK_SEND(key(&k, KEY_F24, 0), "\033[24;2~");
+	CHECK_SEND(key(&k, KEY_F13, C), "\033[1;6P");
+	CHECK_SEND(key(&k, KEY_F1, 0), "\033OP");
+	kb_free(&k);
+	k = kb_new("us", NULL);
 	mode("\033[?1h");
 	CHECK_SEND(key(&k, KEY_UP, 0), "\033OA");
 	CHECK_SEND(key(&k, KEY_UP, C), "\033[1;5A");
@@ -242,7 +271,7 @@ static void test_shortcuts(void)
 	CHECK_SEND(key(&k, KEY_KP9, S | NUM), "\033[5~");
 	CHECK_SEND(key(&k, KEY_KP8, S | NUM), "\033[A");
 	CHECK_SEND(key(&k, KEY_KP8, S | C | NUM), "\033[1;5A");
-	CHECK(key(&k, KEY_KP5, S | NUM).act == DO_NONE); /* KP_Begin */
+	CHECK_SEND(key(&k, KEY_KP5, S | NUM), "\033[E"); /* KP_Begin */
 	/* the keys of their own keep Shift with NumLock */
 	CHECK(key(&k, KEY_INSERT, S | NUM).act == DO_PASTE_PRIMARY);
 	CHECK(key(&k, KEY_PAGEUP, S | NUM).act == DO_VIEW_PAGE_UP);
@@ -294,6 +323,11 @@ static void test_non_latin(void)
 	CHECK(key(&k, KEY_A, C | S).act == DO_SELECT_ALL);
 	/* Alt alone keeps the letter */
 	CHECK_SEND(key(&k, KEY_C, A), "\033с");
+	/* х and ъ are where [ and ] are: Ctrl+[ is ESC, Ctrl+] GS */
+	CHECK_SEND(key(&k, KEY_LEFTBRACE, 0), "х");
+	CHECK_SEND(key(&k, KEY_LEFTBRACE, C), "\033");
+	CHECK_SEND(key(&k, KEY_RIGHTBRACE, C), "\x1d");
+	CHECK_SEND(key(&k, KEY_RIGHTBRACE, C | A), "\033\x1d");
 	kb_free(&k);
 
 	k = kb_new("gr", NULL);
@@ -301,6 +335,16 @@ static void test_non_latin(void)
 	CHECK_SEND(key(&k, KEY_W, C), "\x17"); /* final sigma */
 	CHECK_SEND(key(&k, KEY_Q, C), ";"); /* gr has ';' there: ASCII stays */
 	CHECK(key(&k, KEY_C, C | S).act == DO_COPY);
+	kb_free(&k);
+
+	/* two layouts, the Cyrillic one active: [ of the Latin one */
+	k = kb_new("us,ru", NULL);
+	{
+		struct key_out o2;
+		hold(&k, C, 1);
+		input_key(k.st, NULL, vt, KEY_LEFTBRACE + 8, &o2);
+		CHECK_SEND(o2, "\033");
+	}
 	kb_free(&k);
 
 	/* two layouts, the Cyrillic one active: the letter of the Latin one */
@@ -323,9 +367,12 @@ static void test_non_latin(void)
 	CHECK(input_ctrl_latin(k.km, KEY_Y + 8, XKB_KEY_Cyrillic_en) == XKB_KEY_z);
 	kb_free(&k);
 
-	/* letters without a Latin place stay what they are, also with Ctrl */
+	/* letters without a Latin place stay what they are, also with Ctrl;
+	 * German ü is where [ is, and stays ü */
 	k = kb_new("de", NULL);
 	CHECK_SEND(key(&k, KEY_SEMICOLON, C), "ö");
+	CHECK_SEND(key(&k, KEY_LEFTBRACE, C), "ü");
+	CHECK_SEND(key(&k, KEY_RIGHTBRACE, C), "+");
 	CHECK(input_ctrl_latin(k.km, KEY_SEMICOLON + 8, XKB_KEY_odiaeresis) ==
 	      XKB_KEY_odiaeresis);
 	CHECK(input_ctrl_latin(k.km, KEY_A + 8, XKB_KEY_a) == XKB_KEY_a);
@@ -503,6 +550,33 @@ static void test_buttons(void)
 	CHECK(!input_button(&bs, 2, false, true));
 }
 
+static void test_button_bits(void)
+{
+	static const struct { uint32_t evdev; int bit, code; } map[] = {
+		{ BTN_LEFT, 0, 0 }, { BTN_MIDDLE, 1, 1 }, { BTN_RIGHT, 2, 2 },
+		{ BTN_SIDE, 3, 128 }, { BTN_EXTRA, 4, 129 }, { BTN_FORWARD, 5, 130 },
+		{ BTN_BACK, 6, 131 },
+	};
+	for (size_t i = 0; i < sizeof map / sizeof map[0]; i++) {
+		int code = -9;
+		CHECK(input_button_bit(map[i].evdev, &code) == map[i].bit && code == map[i].code);
+	}
+	int code = -9;
+	CHECK(input_button_bit(BTN_TASK, &code) == -1 && code == -9);
+	CHECK(input_button_bit(BTN_TOUCH, &code) == -1);
+	CHECK(input_button_bit(0, &code) == -1);
+	/* as xterm reports them, with modifiers and the wheel sideways */
+	enum { BTN = MODE_MOUSE_BTN, SGR = MODE_MOUSE_SGR };
+	CHECK(!strcmp(report(BTN | SGR, 128, 0, true, 0, 0), "\033[<128;1;1M"));
+	CHECK(!strcmp(report(BTN | SGR, 131, C, false, 4, 2), "\033[<147;5;3m"));
+	CHECK(!strcmp(report(BTN, 129, 0, true, 0, 0), "\033[M\xa1!!"));
+	CHECK(!strcmp(report(BTN, 129, 0, false, 0, 0), "\033[M\xa3!!"));
+	CHECK(!strcmp(report(BTN | SGR, 66, 0, true, 0, 0), "\033[<66;1;1M"));
+	CHECK(!strcmp(report(BTN | SGR, 67, S, true, 0, 0), "\033[<71;1;1M"));
+	/* a side button held during a move counts as none */
+	CHECK(input_motion(MODE_MOUSE_DRAG, 1u << 3, true) == 35);
+}
+
 static void test_button_report(void)
 {
 	enum { BTN = MODE_MOUSE_BTN, SGR = MODE_MOUSE_SGR };
@@ -600,6 +674,7 @@ int main(void)
 	test_mouse();
 	test_motion();
 	test_buttons();
+	test_button_bits();
 	test_button_report();
 	test_wheel();
 	test_cell();

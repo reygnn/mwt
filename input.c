@@ -1,6 +1,7 @@
 /* input.c - keys and mouse reports; see input.h */
 #define _GNU_SOURCE
 #include <linux/input-event-codes.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -43,6 +44,8 @@ enum vt_key input_vt_key(xkb_keysym_t sym)
 	case XKB_KEY_Tab: return VT_KEY_TAB;
 	case XKB_KEY_ISO_Left_Tab: return VT_KEY_BACKTAB;
 	case XKB_KEY_Escape: return VT_KEY_ESCAPE;
+	case XKB_KEY_KP_Begin: return VT_KEY_BEGIN;
+	case XKB_KEY_Menu: return VT_KEY_MENU;
 	}
 	if (sym >= XKB_KEY_F1 && sym <= XKB_KEY_F12)
 		return (enum vt_key)(VT_KEY_F1 + (sym - XKB_KEY_F1));
@@ -51,17 +54,31 @@ enum vt_key input_vt_key(xkb_keysym_t sym)
 
 /* Without Ctrl+C a Russian or Greek layout would interrupt nothing. Keys without
  * a Latin place keep what they are, like the German umlauts. */
+/* [ and ] are taken for a script that is not Latin: Russian puts letters on
+ * those keys, German its umlauts, which stay what they are. */
+static bool latin_place(xkb_keysym_t s, bool script)
+{
+	return (s >= XKB_KEY_a && s <= XKB_KEY_z) ||
+	       (script && (s == XKB_KEY_bracketleft || s == XKB_KEY_bracketright));
+}
+
 xkb_keysym_t input_ctrl_latin(struct xkb_keymap *km, xkb_keycode_t code, xkb_keysym_t sym)
 {
-	if (xkb_keysym_to_utf32(sym) < 0x80) /* ASCII, or no text at all */
+	uint32_t cp = xkb_keysym_to_utf32(sym);
+	if (cp < 0x80) /* ASCII, or no text at all */
 		return sym;
+	bool script = cp >= 0x370; /* Greek, Cyrillic and on */
 	xkb_layout_index_t layouts = xkb_keymap_num_layouts_for_key(km, code);
 	for (xkb_layout_index_t l = 0; l < layouts; l++) {
 		const xkb_keysym_t *syms;
 		if (xkb_keymap_key_get_syms_by_level(km, code, l, 0, &syms) == 1 &&
-		    syms[0] >= XKB_KEY_a && syms[0] <= XKB_KEY_z)
+		    latin_place(syms[0], script))
 			return syms[0];
 	}
+	if (script && code == KEY_LEFTBRACE + 8)
+		return XKB_KEY_bracketleft;
+	if (script && code == KEY_RIGHTBRACE + 8)
+		return XKB_KEY_bracketright;
 	static const struct { int first; const char *row; } rows[] = {
 		{ KEY_Q, "qwertyuiop" }, { KEY_A, "asdfghjkl" }, { KEY_Z, "zxcvbnm" },
 	};
@@ -166,6 +183,10 @@ static bool key_bytes(struct xkb_state *st, struct xkb_compose_state *compose,
 	}
 
 	enum vt_key key = input_vt_key(sym);
+	if (sym >= XKB_KEY_F13 && sym <= XKB_KEY_F24) { /* Shift+F1 to F12, as xterm */
+		key = (enum vt_key)(VT_KEY_F1 + (sym - XKB_KEY_F13));
+		kmods |= VT_MOD_SHIFT;
+	}
 	if (key != VT_KEY_COUNT) {
 		out->n = vt_key(vt, key, kmods, out->buf, sizeof out->buf);
 		out->act = DO_SEND;
@@ -174,9 +195,13 @@ static bool key_bytes(struct xkb_state *st, struct xkb_compose_state *compose,
 
 	if (ctrl) {
 		xkb_keysym_t latin = input_ctrl_latin(xkb_state_get_keymap(st), code, sym);
-		if (latin != sym && latin >= XKB_KEY_a && latin <= XKB_KEY_z) {
+		if (latin != sym && latin_place(latin, true)) {
 			char c = (char)(latin & 0x1f);
 			send(out, alt, &c, 1);
+			return false;
+		}
+		if (sym == XKB_KEY_question) { /* DEL, as xterm */
+			send(out, alt, "\x7f", 1);
 			return false;
 		}
 	}
@@ -248,6 +273,19 @@ size_t input_mouse(unsigned vt_mode, int code, unsigned mods, bool press, int co
 	return n > 0 && (size_t)n < cap ? (size_t)n : 0;
 }
 
+int input_button_bit(uint32_t evdev, int *code)
+{
+	static const uint32_t order[] = {
+		BTN_LEFT, BTN_MIDDLE, BTN_RIGHT, BTN_SIDE, BTN_EXTRA, BTN_FORWARD, BTN_BACK,
+	};
+	for (int i = 0; i < (int)LEN(order); i++)
+		if (order[i] == evdev) {
+			*code = i < 3 ? i : 128 + i - 3;
+			return i;
+		}
+	return -1;
+}
+
 bool input_button(struct buttons *bs, int b, bool press, bool mouse)
 {
 	unsigned bit = 1u << b;
@@ -259,8 +297,6 @@ bool input_button(struct buttons *bs, int b, bool press, bool mouse)
 		bs->held &= ~bit;
 		bs->program &= ~bit;
 	}
-	if (press && !mouse)
-		bs->sent &= ~bit; /* input_button_report clears it at the release */
 	return to_program;
 }
 

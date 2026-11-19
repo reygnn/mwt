@@ -147,7 +147,8 @@ void vt_mark_all(struct vt *vt);
  * modes, so they are worked out here and tested without a display. */
 enum vt_key {
 	VT_KEY_UP, VT_KEY_DOWN, VT_KEY_RIGHT, VT_KEY_LEFT, VT_KEY_HOME, VT_KEY_END,
-	VT_KEY_INSERT, VT_KEY_DELETE, VT_KEY_PAGE_UP, VT_KEY_PAGE_DOWN,
+	VT_KEY_BEGIN, /* the keypad's 5 without NumLock */
+	VT_KEY_INSERT, VT_KEY_DELETE, VT_KEY_PAGE_UP, VT_KEY_PAGE_DOWN, VT_KEY_MENU,
 	VT_KEY_F1, VT_KEY_F2, VT_KEY_F3, VT_KEY_F4, VT_KEY_F5, VT_KEY_F6,
 	VT_KEY_F7, VT_KEY_F8, VT_KEY_F9, VT_KEY_F10, VT_KEY_F11, VT_KEY_F12,
 	VT_KEY_BACKSPACE, VT_KEY_ENTER, VT_KEY_TAB,

@@ -658,6 +658,8 @@ static void test_keys(void)
 		{ VT_KEY_UP, C, "\033[1;5A" }, { VT_KEY_LEFT, A, "\033[1;3D" },
 		{ VT_KEY_RIGHT, S | A, "\033[1;4C" }, { VT_KEY_DOWN, C | A, "\033[1;7B" },
 		{ VT_KEY_END, S | A | C, "\033[1;8F" },
+		{ VT_KEY_BEGIN, 0, "\033[E" }, { VT_KEY_BEGIN, C, "\033[1;5E" },
+		{ VT_KEY_MENU, 0, "\033[29~" }, { VT_KEY_MENU, S, "\033[29;2~" },
 		{ VT_KEY_INSERT, 0, "\033[2~" }, { VT_KEY_DELETE, C, "\033[3;5~" },
 		{ VT_KEY_PAGE_UP, C, "\033[5;5~" }, { VT_KEY_PAGE_DOWN, 0, "\033[6~" },
 		{ VT_KEY_F1, 0, "\033OP" }, { VT_KEY_F1, C, "\033[1;5P" },
@@ -677,6 +679,8 @@ static void test_keys(void)
 	w(vt, "\033[?1h");
 	CHECK_STR(key(vt, VT_KEY_UP, 0), "\033OA");
 	CHECK_STR(key(vt, VT_KEY_HOME, 0), "\033OH");
+	CHECK_STR(key(vt, VT_KEY_BEGIN, 0), "\033OE");
+	CHECK_STR(key(vt, VT_KEY_MENU, 0), "\033[29~");
 	CHECK_STR(key(vt, VT_KEY_UP, S), "\033[1;2A");
 	CHECK_STR(key(vt, VT_KEY_INSERT, 0), "\033[2~");
 	/* the keypad mode changes nothing, see CAVEATS.md */

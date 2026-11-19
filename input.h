@@ -5,6 +5,7 @@
 
 #include <stdbool.h>
 #include <stddef.h>
+#include <stdint.h>
 #include <xkbcommon/xkbcommon.h>
 #include <xkbcommon/xkbcommon-compose.h>
 
@@ -36,7 +37,8 @@ unsigned input_mods(struct xkb_state *st);
 enum vt_key input_vt_key(xkb_keysym_t sym);
 
 /* With Ctrl, the Latin letter a key of a non-Latin layout means: from another
- * layout of the keymap, else from its place on QWERTY; sym when there is none. */
+ * layout of the keymap, else from its place on QWERTY; sym when there is none.
+ * For a script that is not Latin also [ and ], for Ctrl+[ and Ctrl+]. */
 xkb_keysym_t input_ctrl_latin(struct xkb_keymap *km, xkb_keycode_t code, xkb_keysym_t sym);
 
 /* A press of code in st, through compose when it is not NULL. The modes of vt
@@ -55,6 +57,11 @@ bool input_mouse_mode(unsigned vt_mode, unsigned mods);
  * release past it is sent at 223. */
 size_t input_mouse(unsigned vt_mode, int code, unsigned mods, bool press, int col,
 		   int row, char *buf, size_t cap);
+
+/* The bit of an evdev button in struct buttons, its code in reports in *code:
+ * left, middle and right 0 to 2, the side buttons 8 to 11 3 to 6 with codes 128
+ * to 131, as xterm; -1 for one that is not reported. */
+int input_button_bit(uint32_t evdev, int *code);
 
 /* Who a button's events go to, decided at its press: the release goes there
  * too, whatever Shift does in between. Bit b for button b. */

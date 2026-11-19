@@ -140,8 +140,8 @@ static struct {
 	double px, py;
 	int mcol, mrow;
 	struct buttons buttons;
-	double axis_acc;
-	bool axis_discrete; /* this frame's wheel notches are already counted */
+	double axis_acc[2]; /* vertical, horizontal */
+	bool axis_discrete[2]; /* this frame's wheel notches are already counted */
 	struct clicks clicks;
 
 	struct sel sel;
@@ -1691,7 +1691,7 @@ static void ptr_button(void *d, struct wl_pointer *p, uint32_t serial, uint32_t 
 		       uint32_t button, uint32_t state)
 {
 	(void)d; (void)p;
-	int b = button == BTN_LEFT ? 0 : button == BTN_MIDDLE ? 1 : button == BTN_RIGHT ? 2 : -1;
+	int code, b = input_button_bit(button, &code);
 	if (b < 0)
 		return;
 	t.serial = serial;
@@ -1711,7 +1711,7 @@ static void ptr_button(void *d, struct wl_pointer *p, uint32_t serial, uint32_t 
 	}
 	if (to_program) {
 		char buf[40];
-		pty_write(buf, input_button_report(&t.buttons, b, t.vt->mode, b,
+		pty_write(buf, input_button_report(&t.buttons, b, t.vt->mode, code,
 						   input_mods(t.xkb_state), press, t.mcol,
 						   t.mrow, buf, sizeof buf));
 		return;
@@ -1767,32 +1767,50 @@ static void wheel(bool down)
 	}
 }
 
+/* Sideways only for a program that has the mouse: 66 left, 67 right, as xterm. */
+static void hwheel(bool right)
+{
+	if (mouse_mode())
+		mouse_report(right ? 67 : 66, true);
+}
+
+/* one step of the wheel on axis a, vertical or horizontal */
+static void wheel_step(uint32_t a, bool positive)
+{
+	if (a == WL_POINTER_AXIS_VERTICAL_SCROLL)
+		wheel(positive);
+	else
+		hwheel(positive);
+}
+
 static void ptr_axis(void *d, struct wl_pointer *p, uint32_t time, uint32_t axis, wl_fixed_t v)
 {
 	(void)d; (void)p; (void)time;
-	if (axis != WL_POINTER_AXIS_VERTICAL_SCROLL || t.menu.popup || t.axis_discrete)
+	if (axis > WL_POINTER_AXIS_HORIZONTAL_SCROLL || t.menu.popup || t.axis_discrete[axis])
 		return;
-	t.axis_acc += wl_fixed_to_double(v);
-	while (t.axis_acc >= touchpad_step) {
-		t.axis_acc -= touchpad_step;
-		wheel(true);
+	double *acc = &t.axis_acc[axis];
+	*acc += wl_fixed_to_double(v);
+	while (*acc >= touchpad_step) {
+		*acc -= touchpad_step;
+		wheel_step(axis, true);
 	}
-	while (t.axis_acc <= -touchpad_step) {
-		t.axis_acc += touchpad_step;
-		wheel(false);
+	while (*acc <= -touchpad_step) {
+		*acc += touchpad_step;
+		wheel_step(axis, false);
 	}
 }
 
 static void ptr_frame(void *d, struct wl_pointer *p)
 {
 	(void)d; (void)p;
-	t.axis_discrete = false;
+	t.axis_discrete[0] = t.axis_discrete[1] = false;
 }
 static void ptr_axis_source(void *d, struct wl_pointer *p, uint32_t s) { (void)d; (void)p; (void)s; }
 static void ptr_axis_stop(void *d, struct wl_pointer *p, uint32_t tm, uint32_t a)
 {
-	(void)d; (void)p; (void)tm; (void)a;
-	t.axis_acc = 0;
+	(void)d; (void)p; (void)tm;
+	if (a <= WL_POINTER_AXIS_HORIZONTAL_SCROLL)
+		t.axis_acc[a] = 0;
 }
 /* A wheel counts its notches here, before the axis event with the same move in
  * pixels: 15 a notch, which touchpad_step's 10 would turn into 1.5 steps. So only
@@ -1800,13 +1818,13 @@ static void ptr_axis_stop(void *d, struct wl_pointer *p, uint32_t tm, uint32_t a
 static void ptr_axis_discrete(void *d, struct wl_pointer *p, uint32_t a, int32_t n)
 {
 	(void)d; (void)p;
-	if (a != WL_POINTER_AXIS_VERTICAL_SCROLL)
+	if (a > WL_POINTER_AXIS_HORIZONTAL_SCROLL)
 		return;
-	t.axis_discrete = true;
+	t.axis_discrete[a] = true;
 	if (t.menu.popup)
 		return;
 	for (int i = n < 0 ? -n : n; i > 0; i--)
-		wheel(n > 0);
+		wheel_step(a, n > 0);
 }
 
 /* bound at version 5, so the newer events are never sent */
@@ -1840,10 +1858,12 @@ static void seat_caps(void *d, struct wl_seat *s, uint32_t caps)
 	} else if (!(caps & WL_SEAT_CAPABILITY_POINTER) && t.pointer) {
 		/* nor a release for buttons it held: a program in mouse mode would
 		 * wait for one, and a drag would go on with the next pointer */
-		for (uint32_t b = 0; b < 3; b++)
+		static const uint32_t evdev[] = {
+			BTN_LEFT, BTN_MIDDLE, BTN_RIGHT, BTN_SIDE, BTN_EXTRA, BTN_FORWARD, BTN_BACK,
+		};
+		for (size_t b = 0; b < LEN(evdev); b++)
 			if (t.buttons.held & 1u << b)
-				ptr_button(NULL, t.pointer, t.serial, 0,
-					   b == 0 ? BTN_LEFT : b == 1 ? BTN_MIDDLE : BTN_RIGHT,
+				ptr_button(NULL, t.pointer, t.serial, 0, evdev[b],
 					   WL_POINTER_BUTTON_STATE_RELEASED);
 		if (wl_pointer_get_version(t.pointer) >= WL_POINTER_RELEASE_SINCE_VERSION)
 			wl_pointer_release(t.pointer);
