@@ -522,6 +522,16 @@ static void test_rep(void)
 		{ "a\xc2\x85\033[3b", "a" }, { "a\xc2\x9c\033[3b", "a" },
 		{ "a\xe2\x80\x8b\033[2b", "a" }, { "a\xe2\x80\x8d\033[2b", "a" },
 		{ "a\033[\xc3\xa9\033[2b", "a" }, { "e\xcc\x81\033[2b", "eee" },
+		/* only the format characters xterm counts as controls end it: of
+		 * each range one; other ones of width 0 are marks to xterm */
+		{ "a\xe2\x80\xaa\033[2b", "a" }, { "a\xe2\x81\xa0\033[2b", "a" },
+		{ "a\xef\xbb\xbf\033[2b", "a" },
+		{ "a\xd8\x9c\033[2b", "aaa" }, { "a\xe1\xa0\x8e\033[2b", "aaa" },
+		{ "a\xf3\xa0\x80\x81\033[2b", "aaa" },
+		/* what has no width to wcwidth() is printed once, not repeated */
+		{ "\xe2\x80\xa8\033[2bZ", "\xe2\x80\xa8Z" },
+		/* DEL within ESC is ignored, as xterm */
+		{ "a\033\x7f[2b", "aaa" },
 		/* wide, and at the edge without autowrap */
 		{ "\xe7\x95\x8c\033[2b", "\xe7\x95\x8c\xe7\x95\x8c\xe7\x95\x8c" },
 		{ "\033[?7l\033[1;11Hab\033[5b", "          ab" },
@@ -545,6 +555,16 @@ static void test_rep(void)
 	w(vt, "abcdefghijkl\033[2b");
 	CHECK_STR(row(vt, 0), "abcdefghijkl");
 	CHECK_STR(row(vt, 1), "ll");
+	vt_free(vt);
+	/* a wide one on a grid now too narrow for it: not printed, nor repeated */
+	vt = mk(2, 3, 0);
+	w(vt, "\xe7\x95\x8c");
+	CHECK(vt_resize(vt, 1, 3));
+	w(vt, "\033[5b");
+	CHECK(vt->c.y == 0 && vt->c.x == 0);
+	w(vt, "\033[2;1Ha\xe7\x95\x8c\033[2b");
+	CHECK_STR(row(vt, 1), "a");
+	CHECK_STR(row(vt, 2), "");
 	vt_free(vt);
 	/* the last copy takes the left half of a wide one: its right half goes */
 	vt = mk(4, 1, 0);
@@ -652,9 +672,12 @@ static void test_xterm_resets(void)
 
 	/* DECALN keeps the colours of SGR, not the rest */
 	vt = mk(10, 4, 0);
-	w(vt, "\033[1;3;4;7;41;32m\033#8\033[1;3HQ");
+	w(vt, "\033[1;2;3;4;5;7;8;9;41;32m\033#8\033[1;3HQ");
 	CHECK(vt->pri[0][2].cp == 'Q' && vt->pri[0][2].attr == 0 &&
 	      vt->pri[0][2].bg == 1 && vt->pri[0][2].fg == 2);
+	/* and fills with the default colours */
+	CHECK(vt->pri[0][3].cp == 'E' && vt->pri[0][3].attr == 0 &&
+	      vt->pri[0][3].bg == COL_DEFAULT_BG && vt->pri[0][3].fg == COL_DEFAULT_FG);
 	vt_free(vt);
 	/* DECSTR keeps a pending wrap, and resets only this screen's saved cursor */
 	vt = mk(10, 4, 0);
@@ -662,6 +685,11 @@ static void test_xterm_resets(void)
 	CHECK(vt->pri[0][9].cp == 'Z' && vt->pri[1][0].cp == 'Y');
 	w(vt, "\033[2;5H\0337\033[?1049h\033[!p\033[?1049l\033[4;1H\0338X");
 	CHECK(vt->c.y == 1 && vt->c.x == 5 && vt->pri[1][4].cp == 'X');
+	vt_free(vt);
+	/* the saved cursor it resets keeps a pending wrap, as xterm */
+	vt = mk(10, 4, 0);
+	w(vt, "\033[1;10HZ\033[!p\0338Y");
+	CHECK(vt->pri[0][0].cp == ' ' && vt->pri[1][0].cp == 'Y');
 	vt_free(vt);
 }
 

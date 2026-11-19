@@ -122,6 +122,14 @@ DECSCL, and the DECDSR reports for printer, keyboard and locator.
 Combining characters are discarded, see Character widths. Setting colors through OSC is
 ignored; queries are answered.
 
+REP past a screenful and a row leaves the screen as all the copies would, but puts fewer
+lines in the history. DECSTR resets all of SGR, as DEC has it; xterm keeps faint, crossed
+out and double underline.
+
+A character that is not ASCII ends a sequence. xterm puts a combining mark on the
+character before, ignores a C1, and reads U+00A0 to U+00FF as their ASCII counterparts.
+SUB is dropped where xterm prints ␦.
+
 
 ## Input
 

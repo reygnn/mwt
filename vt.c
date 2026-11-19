@@ -418,8 +418,7 @@ static void soft_reset(struct vt *vt)
 	/* only the saved cursor of the screen it is on, as xterm */
 	struct vt_cursor *saved = vt->mode & MODE_ALTSCREEN ? &vt->saved_alt : &vt->saved_pri;
 	*saved = vt->c;
-	saved->x = saved->y = 0;
-	saved->wrapnext = false;
+	saved->x = saved->y = 0; /* and keeps a pending wrap, as xterm */
 }
 
 void vt_reset(struct vt *vt)
@@ -571,14 +570,14 @@ bool vt_resize(struct vt *vt, int cols, int rows)
 
 /* ---- printing --------------------------------------------------------- */
 
-/* Format characters (Unicode Cf): of width 0, but not marks on the one before.
- * Out of put()'s way: inlined, it made UTF-8 text 8 % slower. */
+/* Format characters of width 0 that are not marks on the one before: those
+ * xterm 407 counts as controls (charclass.c), but FFF9 to FFFB, of width 1 to
+ * glibc; other ones of width 0 are marks to it. Out of put()'s way: inlined,
+ * it made UTF-8 text 8 % slower. */
 __attribute__((noinline, cold)) static bool format_char(uint32_t cp)
 {
 	return (cp >= 0x200b && cp <= 0x200f) || (cp >= 0x202a && cp <= 0x202e) ||
-	       (cp >= 0x2060 && cp <= 0x206f) || cp == 0xfeff || (cp >= 0xfff9 && cp <= 0xfffb) ||
-	       (cp >= 0x600 && cp <= 0x605) || cp == 0x61c || cp == 0x6dd || cp == 0x70f ||
-	       cp == 0x180e || cp == 0xe0001 || (cp >= 0xe0020 && cp <= 0xe007f);
+	       (cp >= 0x2060 && cp <= 0x206f) || cp == 0xfeff;
 }
 
 /* true when REP may still repeat what it had: a character was printed, or a
@@ -675,7 +674,6 @@ static void rep_row(struct vt *vt, uint32_t cp, int w, int n)
 			l[x + i] = cell[i % w == 0 ? 0 : 1];
 		touch(vt, l, (vt->mode & MODE_INSERT) ? MIN((int)USED(vt, l) + k * w, vt->cols) :
 						      x + k * w);
-		mark_row(vt, c->y);
 		n -= k;
 		c->x += k * w;
 		if (c->x >= vt->cols) {
@@ -758,8 +756,7 @@ static void esc_dispatch(struct vt *vt, uint32_t f)
 			vt->top = 0;
 			vt->bot = vt->rows - 1;
 			vt->c.origin = false; /* as xterm, which keeps only the colours */
-			vt->c.tmpl.attr &= ~(ATTR_BOLD | ATTR_DIM | ATTR_ITALIC | ATTR_UNDERLINE |
-					     ATTR_BLINK | ATTR_REVERSE | ATTR_INVISIBLE | ATTR_STRIKE);
+			vt->c.tmpl.attr = 0;
 			moveto(vt, 0, 0);
 			vt_mark_all(vt);
 		}
@@ -1198,8 +1195,9 @@ static void csi_dispatch(struct vt *vt, uint32_t f)
 		/* Past a screenful and a row more, more only adds the same lines to
 		 * the history: the count is cut to that, keeping what it leaves in
 		 * the last row, so 8 bytes cannot ask for 65535 rows of work. */
-		int w = rep_cp ? charwidth(c->charset[c->gl] && rep_cp >= 0x5f && rep_cp <= 0x7e ?
-					   dec_graphics[rep_cp - 0x5f] : rep_cp) : 0;
+		/* what has no width to wcwidth() is printed once but not repeated, as
+		 * xterm; DEC graphics are all one cell, as what they stand for */
+		int w = !rep_cp ? 0 : rep_cp < 0x300 ? 1 : wcwidth((wchar_t)rep_cp);
 		if (w < 1 || w > vt->cols)
 			break;
 		int per_row = vt->cols / w, limit = vt->cols * vt->rows + per_row;
@@ -1448,7 +1446,7 @@ static void feed(struct vt *vt, uint32_t cp)
 		} else if (cp < 0x7f) {
 			esc_dispatch(vt, cp);
 			vt->state = ST_GROUND;
-		} else {
+		} else if (cp != 0x7f) { /* DEL is ignored, as xterm */
 			vt->state = ST_GROUND;
 		}
 		break;

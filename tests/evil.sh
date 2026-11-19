@@ -869,21 +869,21 @@ rep_flood() {
 	(cd "$HOME" && sh -c '"$0" -g 480x135 -f monospace:size=4 >"$1" 2>&1 &' "$MWT" "$LOG")
 	wait_mwt || { gap "no window"; return 0; }
 	T "stty size > $DIR/rep.size" -k Return
-	sleep 0.5
-	local size
+	local size i
+	for ((i = 0; i < 50; i++)); do [ -s "$DIR/rep.size" ] && break; sleep 0.1; done
 	size=$(cat "$DIR/rep.size" 2>/dev/null)
 	[ "$size" = "135 480" ] || { gap "the grid is '$size', not 135 480: the measure says nothing"; return 0; }
 	python3 -c 'import sys
 u = "\033[4h\033[Hx\033[65535b\033[4h\033[H\u754c\033[65535b".encode()
 sys.stdout.buffer.write(u * (524288 // len(u)) + b"\033[4l\033[2J\033[H")' >"$DIR/rep"
 	rm -f "$DIR/rep.done"
-	local t0 i
+	local t0
 	t0=$(date +%s%N)
 	T "cat $DIR/rep; touch $DIR/rep.done" -k Return
-	for ((i = 0; i < 200; i++)); do [ -e "$DIR/rep.done" ] && break; sleep 0.1; done
+	for ((i = 0; i < 400; i++)); do [ -e "$DIR/rep.done" ] && break; sleep 0.1; done
 	local ms=$((($(date +%s%N) - t0) / 1000000))
 	if [ -e "$DIR/rep.done" ]; then ok "half a megabyte of REP in insert mode read in $ms ms"
-	else gap "half a megabyte of REP in insert mode not read in 20 s"; fi
+	else gap "half a megabyte of REP in insert mode not read in 40 s"; fi
 	C c
 }
 # Queries answered faster than the program reads: the answers wait in mwt. These

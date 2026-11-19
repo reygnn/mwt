@@ -16,22 +16,6 @@ TODO
   andere Schrift aus derselben .ttc wird also genommen. Ein Test fehlt: er
   braucht eine .ttc im Image von make fonts, aus der zwei Schriften nötig sind.
 
-* Noch eine Review des REP-Fixes (Commit 791d672 auf fix/vt, „Review des
-  Branches: REP wie xterm 407 im Parser, breite Zeichen“), gezielt mit
-  sechs Gutachtern statt zwölf: der Fix-Commit ist so groß wie das Original
-  und neuer Code ist, wo neue Fehler stecken. Je einer für
-  - die REP-Regel in feed() gegen xterm 407 (xterm-probe, charproc.c),
-  - die Kürzung der REP-Anzahl auf einen Bildschirm und eine Zeile, die
-    ein periodisches Bild annimmt: gezielt Gegenbeispiele suchen, etwa
-    Scrollregion mit Insert-Modus, Origin-Modus, ein breites Zeichen bei
-    ungerader Spaltenzahl,
-  - rep_row für breite Zeichen und den Halt am Rand ohne Autowrap,
-  - DECSTR (gespeicherter Cursor je Bildschirm, ausstehender Umbruch) und
-    DECALN (nur die Farben von SGR bleiben) gegen xterm 407,
-  - ganz gegen geteilt geschrieben und Fuzzing, wegen der neuen Regel in
-    feed() (test_vt VT_FUZZ_SEEDS, make fuzz),
-  - die Tests (das Orakel in test_rep, rep_flood) und die Doku.
-
 Performance, aus der Review vom 2026-11-17 (docs/history/Review-2026-11-17.md):
 
 * Scrollen um eine Zeile zeichnet alle Zeilen neu, bei 200x55 und 1080p etwa
