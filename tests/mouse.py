@@ -310,8 +310,10 @@ def test_release_with_menu_open():
     time.sleep(0.4)
     mouse.send("up", "left")
     expect(log, "the program's release with the menu open", sgr(0, 6, 6, False))
-    mouse.send("click", "left")  # closes the menu
-    time.sleep(0.3)
+    # the menu takes the keys: a key the program does not get shows it was open
+    mwtlib.keys("-k", "x")
+    expect(log, "and the menu was open", b"")
+    mwtlib.keys("-k", "Escape")
     log.close()
 
 

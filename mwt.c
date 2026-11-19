@@ -11,6 +11,7 @@
 #include <limits.h>
 #include <linux/input-event-codes.h>
 #include <locale.h>
+#include <math.h>
 #include <poll.h>
 #include <signal.h>
 #include <stdbool.h>
@@ -1663,7 +1664,7 @@ static void ptr_motion(void *d, struct wl_pointer *p, uint32_t time, wl_fixed_t 
 	t.py = wl_fixed_to_double(y);
 	int col, row;
 	pointer_cell(&col, &row);
-	bool moved = col != t.mcol || row != t.mrow;
+	bool moved = input_moved(t.vt->mode, col, row, t.mcol, t.mrow);
 	t.mcol = col;
 	t.mrow = row;
 	if (t.menu.popup)
@@ -1750,6 +1751,8 @@ static void wheel_step(uint32_t a, bool positive)
 	switch (input_wheel(t.vt->mode, mods, sideways)) {
 	case WHEEL_REPORT:
 		mouse_report(input_wheel_code(sideways, positive), true);
+		if (sideways) /* buttons 6 and 7 come up again, as in xterm; 4 and 5 not */
+			mouse_report(input_wheel_code(sideways, positive), false);
 		break;
 	case WHEEL_KEYS:
 		for (int i = 0; i < wheel_lines; i++) {
@@ -1776,7 +1779,8 @@ static void ptr_axis(void *d, struct wl_pointer *p, uint32_t time, uint32_t axis
 	if (axis > WL_POINTER_AXIS_HORIZONTAL_SCROLL || t.menu.popup || t.axis_discrete[axis])
 		return;
 	double *acc = &t.axis_acc[axis];
-	*acc += wl_fixed_to_double(v);
+	/* a few steps at most, whatever a compositor sends */
+	*acc = fmax(-10 * touchpad_step, fmin(10 * touchpad_step, *acc + wl_fixed_to_double(v)));
 	while (*acc >= touchpad_step) {
 		*acc -= touchpad_step;
 		wheel_step(axis, true);

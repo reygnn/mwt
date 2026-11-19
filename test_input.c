@@ -63,9 +63,9 @@ struct kb {
 	struct xkb_state *st;
 };
 
-static struct kb kb_opt(const char *layout, const char *variant, const char *options)
+static struct kb kb_new(const char *layout, const char *variant)
 {
-	struct xkb_rule_names names = { .layout = layout, .variant = variant, .options = options };
+	struct xkb_rule_names names = { .layout = layout, .variant = variant };
 	struct kb k = { xkb_keymap_new_from_names(ctx, &names, XKB_KEYMAP_COMPILE_NO_FLAGS),
 			NULL };
 	if (!k.km) {
@@ -76,9 +76,30 @@ static struct kb kb_opt(const char *layout, const char *variant, const char *opt
 	return k;
 }
 
-static struct kb kb_new(const char *layout, const char *variant)
+/* us with F13 to F24 on their keys, which xkb's rules give XF86 keysyms and
+ * whose fkeys option older xkeyboard-config (Ubuntu 24.04) lacks */
+static struct kb kb_fkeys(void)
 {
-	return kb_opt(layout, variant, NULL);
+	static const char text[] =
+		"xkb_keymap {\n"
+		"  xkb_keycodes { include \"evdev+aliases(qwerty)\" };\n"
+		"  xkb_types { include \"complete\" };\n"
+		"  xkb_compat { include \"complete\" };\n"
+		"  xkb_symbols { include \"pc+us\"\n"
+		"    key <FK13> { [ F13 ] }; key <FK14> { [ F14 ] }; key <FK15> { [ F15 ] };\n"
+		"    key <FK16> { [ F16 ] }; key <FK17> { [ F17 ] }; key <FK18> { [ F18 ] };\n"
+		"    key <FK19> { [ F19 ] }; key <FK20> { [ F20 ] }; key <FK21> { [ F21 ] };\n"
+		"    key <FK22> { [ F22 ] }; key <FK23> { [ F23 ] }; key <FK24> { [ F24 ] };\n"
+		"  };\n"
+		"};\n";
+	struct kb k = { xkb_keymap_new_from_string(ctx, text, XKB_KEYMAP_FORMAT_TEXT_V1,
+						   XKB_KEYMAP_COMPILE_NO_FLAGS), NULL };
+	if (!k.km) {
+		fprintf(stderr, "test_input: the keymap with F13 to F24 does not compile\n");
+		exit(1);
+	}
+	k.st = xkb_state_new(k.km);
+	return k;
 }
 
 static void kb_free(struct kb *k)
@@ -221,13 +242,14 @@ static void test_special_keys(void)
 	kb_free(&k);
 	/* where they are F13 to F24: Shift+F1 to F12, kf13 to kf24 of mwt.info and of
 	 * xterm's terminfo (xterm itself sends CSI 25 ~ and on) */
-	k = kb_opt("us", NULL, "fkeys:basic_13-24");
+	k = kb_fkeys();
 	CHECK_SEND(key(&k, KEY_F13, 0), "\033[1;2P");
 	CHECK_SEND(key(&k, KEY_F16, 0), "\033[1;2S");
 	CHECK_SEND(key(&k, KEY_F17, 0), "\033[15;2~");
 	CHECK_SEND(key(&k, KEY_F24, 0), "\033[24;2~");
 	CHECK_SEND(key(&k, KEY_F13, C), "\033[1;6P");
 	CHECK_SEND(key(&k, KEY_F1, 0), "\033OP");
+	CHECK_SEND(key(&k, KEY_A, S), "A");
 	kb_free(&k);
 	k = kb_new("us", NULL);
 	mode("\033[?1h");
@@ -547,6 +569,12 @@ static void test_buttons(void)
 	/* a release without its press: not the program's */
 	CHECK(!input_button(&bs, 2, false, true));
 	CHECK(bs.held == 0 && bs.program == 0);
+	/* a side button without a mouse mode does nothing, and holds nothing */
+	CHECK(!input_button(&bs, 3, true, false));
+	CHECK(bs.held == 0 && input_move(&bs, true));
+	CHECK(!input_button(&bs, 3, false, true));
+	CHECK(input_button(&bs, 4, true, true) && bs.held == 1u << 4);
+	CHECK(input_button(&bs, 4, false, false) && bs.held == 0);
 	/* a press again: decided anew */
 	CHECK(input_button(&bs, 2, true, true));
 	CHECK(!input_button(&bs, 2, true, false) && bs.program == 0);
@@ -583,6 +611,21 @@ static void test_button_bits(void)
 	CHECK(input_motion(MODE_MOUSE_DRAG, 1u << 6, true) == 163);
 	CHECK(input_motion(MODE_MOUSE_DRAG, 1u << 6 | 1u << 4, true) == 161);
 	CHECK(input_motion(MODE_MOUSE_DRAG, 1u << 5 | 4, true) == 34);
+}
+
+static void test_moved(void)
+{
+	enum { ANY = MODE_MOUSE_ANY, SGR = MODE_MOUSE_SGR };
+	CHECK(!input_moved(ANY, 5, 5, 5, 5));
+	CHECK(input_moved(ANY, 6, 5, 5, 5) && input_moved(ANY, 5, 4, 5, 5));
+	/* X10 has one byte for every cell from 223 on: no new report among them */
+	CHECK(input_moved(ANY, 223, 5, 222, 5));
+	CHECK(!input_moved(ANY, 224, 5, 223, 5));
+	CHECK(!input_moved(ANY, 400, 300, 230, 250));
+	CHECK(input_moved(ANY, 400, 5, 400, 6));
+	CHECK(input_moved(ANY, 222, 5, 400, 5));
+	/* SGR has them all */
+	CHECK(input_moved(ANY | SGR, 224, 5, 223, 5));
 }
 
 static void test_button_report(void)
@@ -671,6 +714,7 @@ int main(void)
 	test_buttons();
 	test_button_bits();
 	test_button_report();
+	test_moved();
 	test_wheel();
 	test_cell();
 	vt_free(vt);

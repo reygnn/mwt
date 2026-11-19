@@ -274,6 +274,8 @@ int input_button_bit(uint32_t evdev, int *code)
 bool input_button(struct buttons *bs, int b, bool press, bool mouse)
 {
 	unsigned bit = 1u << b;
+	if (b > 2 && press && !mouse)
+		return false;
 	bool to_program = press ? mouse : (bs->program & bit) != 0;
 	if (press) {
 		bs->held |= bit;
@@ -283,6 +285,17 @@ bool input_button(struct buttons *bs, int b, bool press, bool mouse)
 		bs->program &= ~bit;
 	}
 	return to_program;
+}
+
+bool input_moved(unsigned vt_mode, int col, int row, int ocol, int orow)
+{
+	if (!(vt_mode & MODE_MOUSE_SGR)) {
+		col = MIN(col, 223);
+		row = MIN(row, 223);
+		ocol = MIN(ocol, 223);
+		orow = MIN(orow, 223);
+	}
+	return col != ocol || row != orow;
 }
 
 size_t input_button_report(unsigned vt_mode, int code, unsigned mods, bool press,

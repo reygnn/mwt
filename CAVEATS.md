@@ -105,7 +105,8 @@ and DECRQM answers "unknown".
 
 Shift+PgUp and Shift+PgDn reach the program only in the alternate screen, Shift+Home
 and Shift+End also when it has the mouse; otherwise they scroll the history. `kPRV`,
-`kNXT`, `kHOM` and `kEND` in `mwt.info` hold only then.
+`kNXT`, `kHOM` and `kEND` in `mwt.info` hold only then. The keys of the keypad with
+NumLock and Shift always reach the program, as in xterm.
 
 Of the VT420 and xterm features esctest checks, these are left out, so most of what
 `make esctest` reports fails by design: left and right margins (DECLRMM, DECSLRM),
@@ -134,8 +135,9 @@ place, so Ctrl+C interrupts on a Russian layout. The keys of [ and ] are not: wi
 such a layout in the keymap, Ctrl on them sends the letter there. With a Latin layout
 beside it (`us,ru`), xkbcommon gives ESC and GS as for Ctrl+[ and Ctrl+].
 
-Ctrl+Shift with `+` or `=` zooms in, also where `?` is Shift on the `+` key (Swedish,
-Finnish, Norwegian, Danish): there Ctrl+? zooms in rather than sending DEL.
+Ctrl+? sends DEL, unless `?` is Shift on the key of `+`, `=`, `-` or `0`: Ctrl+Shift on
+that key is the zoom, so Ctrl+? zooms in on the Nordic, Estonian and Faroese layouts and
+`pl(qwertz)`, out on `fr(ergol)`, and back on Mongolian.
 
 
 ## Installation

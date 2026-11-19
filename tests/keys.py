@@ -36,6 +36,7 @@ CAP_KEYS = {
     "kDC": ("Delete", "shift"), "kEND": ("End", "shift"), "kHOM": ("Home", "shift"),
     "kLFT": ("Left", "shift"), "kRIT": ("Right", "shift"), "kind": ("Down", "shift"),
     "kri": ("Up", "shift"), "kNXT": ("Next", "shift"), "kPRV": ("Prior", "shift"),
+    "kb2": ("KP_Begin",),
 }
 for n in range(1, 13):
     CAP_KEYS[f"kf{n}"] = (f"F{n}",)
@@ -61,7 +62,7 @@ PLAIN = [
     (("a",), b"a"), (("a", "ctrl"), b"\x01"), (("z", "ctrl"), b"\x1a"), (("x", "alt"), b"\033x"),
     (("c", "ctrl", "alt"), b"\033\x03"), (("space", "ctrl"), b"\x00"), (("adiaeresis",), "ä".encode()),
     (("KP_Up",), b"\033[A"), (("KP_Home",), b"\033[H"), (("KP_Delete",), b"\033[3~"),
-    (("KP_Prior",), b"\033[5~"),
+    (("KP_Prior",), b"\033[5~"), (("KP_Begin",), b"\033[E"), (("Menu",), b"\033[29~"),
 ]
 
 

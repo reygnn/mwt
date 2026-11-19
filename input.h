@@ -53,8 +53,8 @@ bool input_mouse_mode(unsigned vt_mode, unsigned mods);
 /* The report of button code (0 to 2, 128 to 131 for the side buttons, 3 for
  * none, +32 for a move, 64 to 67 for the wheel) with VT_MOD_* mods at the cell
  * col, row counted from 0: its length, or 0 when buf has no room. The X10 form
- * has no byte past cell 223 and sends 0 there; its release is button 3. Both as
- * xterm. */
+ * has a byte for the first 223 cells and sends 0 from cell 223 on, counted from
+ * 0; its release is button 3. Both as xterm. */
 size_t input_mouse(unsigned vt_mode, int code, unsigned mods, bool press, int col,
 		   int row, char *buf, size_t cap);
 
@@ -71,12 +71,17 @@ struct buttons {
 };
 
 /* A press or release of button b, with the mouse the program's now (mouse) or
- * not: true when it goes to the program. */
+ * not: true when it goes to the program. A side button that does not is not
+ * held: it does nothing but for the program. */
 bool input_button(struct buttons *bs, int b, bool press, bool mouse);
 
 /* Whether a move goes to the program: while it holds a button, or while none
  * is held and the mouse is its. */
 bool input_move(const struct buttons *bs, bool mouse);
+
+/* Whether a move from cell ocol, orow to col, row changes the report: the X10
+ * form says the same for every cell from 223 on, counted from 0. */
+bool input_moved(unsigned vt_mode, int col, int row, int ocol, int orow);
 
 /* The report of a press or release that goes to the program, as input_mouse:
  * none for a release once the program has turned the mouse off, as xterm. */
