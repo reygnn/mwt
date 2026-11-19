@@ -55,6 +55,21 @@ bool input_mouse_mode(unsigned vt_mode, unsigned mods);
 size_t input_mouse(unsigned vt_mode, int code, unsigned mods, bool press, int col,
 		   int row, char *buf, size_t cap);
 
+/* Who a button's events go to, decided at its press: the release goes there
+ * too, whatever Shift does in between. Bit b for button b. */
+struct buttons {
+	unsigned held;
+	unsigned program; /* of those, the ones whose press went to the program */
+};
+
+/* A press or release of button b, with the mouse the program's now (mouse) or
+ * not: true when it goes to the program. */
+bool input_button(struct buttons *bs, int b, bool press, bool mouse);
+
+/* Whether a move goes to the program: while it holds a button, or while none
+ * is held and the mouse is its. */
+bool input_move(const struct buttons *bs, bool mouse);
+
 /* The code to report for a move to another cell with buttons (bit 0 left, 1
  * middle, 2 right) held, or -1 when the mode does not report it. */
 int input_motion(unsigned vt_mode, unsigned buttons, bool moved);

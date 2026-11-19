@@ -125,6 +125,9 @@ ignored; queries are answered.
 mwt binds the first seat the compositor announces. Should that seat go away, another one
 it announced already is not taken up; only a seat announced later is.
 
+A mouse that goes off the seat with its button down on an item of the context menu runs
+the item: sway sends the release itself, and mwt cannot tell it from one let go.
+
 
 ## Installation
 

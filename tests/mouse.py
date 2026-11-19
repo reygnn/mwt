@@ -3,6 +3,7 @@
 the wheel and modifiers, in SGR and in the old X10 form. A program in raw mode
 logs what it gets, as in tests/keys.py. Run with `make mouse`, which goes through
 tests/headless.sh. Selection and the menu under Shift are in tests/run.sh."""
+import subprocess
 import sys
 import time
 
@@ -16,8 +17,10 @@ mouse = None
 def at(col, row, cols=80, rows=24):
     x, y, w, h = rect()
     cw, ch = (w - 2 * mwtlib.PAD) // cols, (h - 2 * mwtlib.PAD) // rows
-    mouse.send("move", x + mwtlib.PAD + col * cw + cw // 2, y + mwtlib.PAD + row * ch + ch // 2)
+    px, py = x + mwtlib.PAD + col * cw + cw // 2, y + mwtlib.PAD + row * ch + ch // 2
+    mouse.send("move", px, py)
     time.sleep(0.05)
+    return px, py, ch
 
 
 def sgr(code, col, row, press=True):
@@ -249,6 +252,34 @@ def test_device_gone():
     log.close()
 
 
+def test_shift_let_go_first():
+    """Shift and a drag select also in mouse mode. Shift let go before the
+    button: the release went to the program, which never saw the press, and
+    nothing was copied."""
+    log = session(b"\033[?1000;1006hauswahl-hier\r\n")
+    subprocess.run(["wl-copy", "-p", "vorher"], check=True)
+    at(0, 0)
+    mouse.send("hold", "shift")
+    mouse.send("down", "left")
+    at(6, 0)
+    mouse.send("release", "shift")
+    time.sleep(0.1)
+    mouse.send("up", "left")
+    expect(log, "Shift let go first: the program gets neither press nor release", b"")
+    time.sleep(0.3)
+    got = subprocess.run(["wl-paste", "-p", "-n"], capture_output=True, text=True, timeout=5).stdout
+    check(got == "auswahl", "and the selection is copied", f"primary is {got!r}")
+    # the other way: the program's press, Shift held at the release
+    at(3, 3)
+    mouse.send("down", "left")
+    log.take(sgr(0, 3, 3))
+    mouse.send("hold", "shift")
+    mouse.send("up", "left")
+    mouse.send("release", "shift")
+    expect(log, "Shift held at the release of the program's press: the release is its", sgr(4, 3, 3, False))
+    log.close()
+
+
 def main():
     global mouse
     # Its virtual keyboard also keeps one on the seat, without one no window has focus.
@@ -263,6 +294,7 @@ def main():
     test_modifiers()
     test_off()
     test_x10_limit()
+    test_shift_let_go_first()
     test_device_gone()  # last: it takes the mouse away
     mouse.close()
     return finish()

@@ -468,6 +468,38 @@ static void test_motion(void)
 	CHECK(input_motion(DRAG, 7, true) == 32);
 }
 
+static void test_buttons(void)
+{
+	struct buttons bs = { 0, 0 };
+	/* the program's from the press to the release, also if Shift came between */
+	CHECK(input_button(&bs, 0, true, true));
+	CHECK(bs.held == 1 && bs.program == 1);
+	CHECK(input_move(&bs, false));
+	CHECK(input_button(&bs, 0, false, false));
+	CHECK(bs.held == 0 && bs.program == 0);
+	/* and the other way: a Shift drag stays a selection when Shift goes first */
+	CHECK(!input_button(&bs, 0, true, false));
+	CHECK(!input_move(&bs, true));
+	CHECK(!input_button(&bs, 0, false, true));
+	/* each button its own */
+	CHECK(input_button(&bs, 1, true, true));
+	CHECK(!input_button(&bs, 0, true, false));
+	CHECK(bs.held == 3 && bs.program == 2);
+	CHECK(input_move(&bs, false)); /* the program holds one */
+	CHECK(input_button(&bs, 1, false, false));
+	CHECK(!input_move(&bs, true)); /* only the selection's is held */
+	CHECK(!input_button(&bs, 0, false, true));
+	/* none held: as the mode is now */
+	CHECK(input_move(&bs, true) && !input_move(&bs, false));
+	/* a release without its press: not the program's */
+	CHECK(!input_button(&bs, 2, false, true));
+	CHECK(bs.held == 0 && bs.program == 0);
+	/* a press again: decided anew */
+	CHECK(input_button(&bs, 2, true, true));
+	CHECK(!input_button(&bs, 2, true, false) && bs.program == 0);
+	CHECK(!input_button(&bs, 2, false, true));
+}
+
 static void test_cell(void)
 {
 	int c, r;
@@ -510,6 +542,7 @@ int main(void)
 	test_mods();
 	test_mouse();
 	test_motion();
+	test_buttons();
 	test_cell();
 	vt_free(vt);
 	xkb_context_unref(ctx);

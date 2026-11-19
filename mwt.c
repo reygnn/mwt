@@ -139,7 +139,7 @@ static struct {
 	uint32_t enter_serial;
 	double px, py;
 	int mcol, mrow;
-	unsigned buttons;
+	struct buttons buttons;
 	double axis_acc;
 	bool axis_discrete; /* this frame's wheel notches are already counted */
 	struct clicks clicks;
@@ -1669,8 +1669,8 @@ static void ptr_motion(void *d, struct wl_pointer *p, uint32_t time, wl_fixed_t 
 	if (t.menu.popup)
 		return;
 
-	if (mouse_mode()) {
-		int code = input_motion(t.vt->mode, t.buttons, moved);
+	if (input_move(&t.buttons, mouse_mode())) {
+		int code = input_motion(t.vt->mode, t.buttons.held & t.buttons.program, moved);
 		if (code >= 0)
 			mouse_report(code, true);
 		return;
@@ -1696,10 +1696,9 @@ static void ptr_button(void *d, struct wl_pointer *p, uint32_t serial, uint32_t 
 		return;
 	t.serial = serial;
 	bool press = state == WL_POINTER_BUTTON_STATE_PRESSED;
-	if (press)
-		t.buttons |= 1u << b;
-	else
-		t.buttons &= ~(1u << b);
+	/* a press on the menu goes to neither, nor does its release */
+	bool to_program = input_button(&t.buttons, b, press,
+				       mouse_mode() && !in_menu() && !t.menu.popup);
 
 	if (in_menu()) {
 		menu_button(press);
@@ -1710,7 +1709,7 @@ static void ptr_button(void *d, struct wl_pointer *p, uint32_t serial, uint32_t 
 			menu_close();
 		return;
 	}
-	if (mouse_mode()) {
+	if (to_program) {
 		mouse_report(b, press);
 		return;
 	}
@@ -1831,7 +1830,7 @@ static void seat_caps(void *d, struct wl_seat *s, uint32_t caps)
 		/* nor a release for buttons it held: a program in mouse mode would
 		 * wait for one, and a drag would go on with the next pointer */
 		for (uint32_t b = 0; b < 3; b++)
-			if (t.buttons & 1u << b)
+			if (t.buttons.held & 1u << b)
 				ptr_button(NULL, t.pointer, t.serial, 0,
 					   b == 0 ? BTN_LEFT : b == 1 ? BTN_MIDDLE : BTN_RIGHT,
 					   WL_POINTER_BUTTON_STATE_RELEASED);

@@ -246,6 +246,25 @@ size_t input_mouse(unsigned vt_mode, int code, unsigned mods, bool press, int co
 	return n > 0 && (size_t)n < cap ? (size_t)n : 0;
 }
 
+bool input_button(struct buttons *bs, int b, bool press, bool mouse)
+{
+	unsigned bit = 1u << b;
+	bool to_program = press ? mouse : (bs->program & bit) != 0;
+	if (press) {
+		bs->held |= bit;
+		bs->program = mouse ? bs->program | bit : bs->program & ~bit;
+	} else {
+		bs->held &= ~bit;
+		bs->program &= ~bit;
+	}
+	return to_program;
+}
+
+bool input_move(const struct buttons *bs, bool mouse)
+{
+	return bs->held ? (bs->held & bs->program) != 0 : mouse;
+}
+
 int input_motion(unsigned vt_mode, unsigned buttons, bool moved)
 {
 	if (!moved || !((vt_mode & MODE_MOUSE_ANY) || ((vt_mode & MODE_MOUSE_DRAG) && buttons)))
