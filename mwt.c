@@ -1709,13 +1709,17 @@ static void ptr_button(void *d, struct wl_pointer *p, uint32_t serial, uint32_t 
 	if (b > 2) /* the side buttons are only for a program that has the mouse */
 		return;
 
-	if (in_menu()) {
-		menu_button(press);
+	unsigned bit = 1u << b;
+	if (in_menu() || t.menu.popup) {
+		t.buttons.menu = press ? t.buttons.menu | bit : t.buttons.menu & ~bit;
+		if (in_menu())
+			menu_button(press);
+		else if (press) /* on the window, where a grab may let it through */
+			menu_close();
 		return;
 	}
-	if (t.menu.popup) { /* on the window, where a grab may let it through */
-		if (press)
-			menu_close();
+	if (!press && (t.buttons.menu & bit)) { /* the menu's press: not a selection's */
+		t.buttons.menu &= ~bit;
 		return;
 	}
 	int64_t abs = (int64_t)t.vt->scrolled - t.vt->view + t.mrow;

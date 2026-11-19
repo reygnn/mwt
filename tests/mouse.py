@@ -248,6 +248,16 @@ def test_x10_limit():
     mouse.send("up", "left")
     expect(log, "X10: a drag out past it is released there", b"\033[M#\0#")
     log.close()
+    log = session(b"\033[?1003h", geometry=f"{cols}x{rows}", font="monospace:size=5")
+    at(220, 2, cols, rows)
+    log.take()
+    at(230, 2, cols, rows)
+    log.take(b"\033[MC\0#")
+    at(236, 2, cols, rows)
+    expect(log, "X10: a move among the cells past it, all 0, reports nothing new", b"")
+    at(236, 3, cols, rows)
+    expect(log, "but a move to another row does", b"\033[MC\0$")
+    log.close()
     log = session(b"\033[?1000;1006h", geometry=f"{cols}x{rows}", font="monospace:size=5")
     at(239, 4, cols, rows)
     mouse.send("click", "left")
@@ -263,7 +273,11 @@ os.write(1, b"\033[?1000h")
 press = b""
 while len(press) < 6:
     press += os.read(0, 6 - len(press))
-os.write(1, b"\033[?1000l")
+os.write(1, b"\033[?1000l\033[c")
+# the answer to DA comes after mwt has read the reset before it
+reply = b""
+while not reply.endswith(b"c"):
+    reply += os.read(0, 1)
 with open(log, "w") as f:
     f.write("press " + press.hex() + "\n")
     f.flush()
@@ -314,6 +328,57 @@ def test_release_with_menu_open():
     mwtlib.keys("-k", "x")
     expect(log, "and the menu was open", b"")
     mwtlib.keys("-k", "Escape")
+    log.close()
+
+
+def test_menu_click_keeps_primary():
+    """The click that closes the menu is the menu's: its release does not copy
+    an old selection over what another client put in the primary selection."""
+    log = session(b"\033[?1000;1006hauswahl-hier\r\n")
+    at(0, 0)
+    mouse.send("hold", "shift")
+    mouse.send("down", "left")
+    at(6, 0)
+    mouse.send("up", "left")
+    mouse.send("release", "shift")
+    time.sleep(0.3)
+    subprocess.run(["wl-copy", "-p", "anderswo"], check=True)
+    time.sleep(0.3)
+    at(10, 5)
+    mouse.send("hold", "shift")
+    mouse.send("click", "right")
+    mouse.send("release", "shift")
+    time.sleep(0.4)
+    at(40, 15)
+    mouse.send("click", "left")
+    time.sleep(0.4)
+    expect(log, "the click that closes the menu reaches no program", b"")
+    got = subprocess.run(["wl-paste", "-p", "-n"], capture_output=True, text=True, timeout=5).stdout
+    check(got == "anderswo", "and copies no old selection on its release", f"primary is {got!r}")
+    log.close()
+
+
+def test_shift_during_drag():
+    """1002: Shift during the program's drag leaves the drag the program's, and
+    a Shift drag stays a selection when Shift goes first."""
+    log = session(b"\033[?1002;1006h")
+    at(2, 2)
+    mouse.send("down", "left")
+    log.take(sgr(0, 2, 2))
+    at(4, 2)
+    log.take(sgr(32, 4, 2))
+    mouse.send("hold", "shift")
+    at(6, 2)
+    expect(log, "Shift during the program's drag: the move is its", sgr(36, 6, 2))
+    mouse.send("release", "shift")
+    mouse.send("up", "left")
+    expect(log, "and so is the release", sgr(0, 6, 2, False))
+    mouse.send("hold", "shift")
+    mouse.send("down", "left")
+    mouse.send("release", "shift")
+    at(8, 2)
+    mouse.send("up", "left")
+    expect(log, "a selection's drag sends the program nothing when Shift goes first", b"")
     log.close()
 
 
@@ -376,6 +441,8 @@ def main():
     test_shift_let_go_first()
     test_release_after_mouse_off()
     test_release_with_menu_open()
+    test_menu_click_keeps_primary()
+    test_shift_during_drag()
     test_device_gone()  # last: it takes the mouse away
     mouse.close()
     return finish()

@@ -68,6 +68,8 @@ int input_button_bit(uint32_t evdev, int *code);
 struct buttons {
 	unsigned held;
 	unsigned program; /* of those, the ones whose press went to the program */
+	unsigned menu;    /* presses the context menu took, kept by mwt.c: their
+			   * release goes nowhere else */
 };
 
 /* A press or release of button b, with the mouse the program's now (mouse) or

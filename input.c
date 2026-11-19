@@ -138,10 +138,12 @@ static enum key_do shift_key(xkb_keysym_t sym, unsigned vt_mode)
  * key. That Shift does not paste or scroll, as xterm, whose Shift+Insert and
  * Shift+PgUp are the keys of their own; the key still goes out with Shift. xkb
  * counts Shift as used without NumLock too, where it changes nothing. */
-static bool keypad_shift(struct xkb_state *st, xkb_keycode_t code)
+static bool keypad_shift(struct xkb_state *st, xkb_keycode_t code, xkb_keysym_t sym)
 {
 	struct xkb_keymap *km = xkb_state_get_keymap(st);
-	return xkb_state_mod_name_is_active(st, XKB_MOD_NAME_NUM, XKB_STATE_MODS_EFFECTIVE) > 0 &&
+	/* only the keypad: Neo's layer 4 is a NumLock too, on letter keys */
+	return sym >= XKB_KEY_KP_Space && sym <= XKB_KEY_KP_Equal &&
+	       xkb_state_mod_name_is_active(st, XKB_MOD_NAME_NUM, XKB_STATE_MODS_EFFECTIVE) > 0 &&
 	       xkb_state_mod_index_is_consumed(st, code,
 					       xkb_keymap_mod_get_index(km, XKB_MOD_NAME_SHIFT)) > 0;
 }
@@ -161,7 +163,7 @@ static bool key_bytes(struct xkb_state *st, struct xkb_compose_state *compose,
 		if (out->act != DO_NONE)
 			return false;
 	}
-	if (shift && !ctrl && !alt && !keypad_shift(st, code)) {
+	if (shift && !ctrl && !alt && !keypad_shift(st, code, sym)) {
 		out->act = shift_key(sym, vt->mode);
 		if (out->act != DO_NONE)
 			return false;
@@ -185,10 +187,6 @@ static bool key_bytes(struct xkb_state *st, struct xkb_compose_state *compose,
 		if (latin != sym && latin >= XKB_KEY_a && latin <= XKB_KEY_z) {
 			char c = (char)(latin & 0x1f);
 			send(out, alt, &c, 1);
-			return false;
-		}
-		if (sym == XKB_KEY_question) { /* DEL, as xterm */
-			send(out, alt, "\x7f", 1);
 			return false;
 		}
 	}
@@ -220,6 +218,10 @@ static bool key_bytes(struct xkb_state *st, struct xkb_compose_state *compose,
 			send(out, alt, "", 1); /* NUL */
 		return fed;
 	}
+	/* Ctrl+? is DEL, as xterm; by what xkb made of the key, so also where its
+	 * Ctrl fallback takes ? from a Latin layout beside the active one */
+	if (ctrl && n == 1 && buf[0] == '?')
+		buf[0] = 0x7f;
 	send(out, alt, buf, MIN((size_t)n, sizeof buf - 1));
 	return fed;
 }

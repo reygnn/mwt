@@ -77,8 +77,10 @@ DECRQM but does not change the keys. With NumLock the digits send digits and Ent
 sends `\r`; without it xkb gives KP_Home, KP_Up and so on, which send the normal cursor
 and tilde sequences. This is xterm's behaviour with its default mode 1035. If the mode
 took effect, the keypad would send ESC O q instead of 1 as soon as a curses program
-starts (`smkx` in `mwt.info` turns it on), and without `ka1`, `kb2`, `kent` and the
-like in the terminfo no program would understand it.
+starts (`smkx` in `mwt.info` turns it on), and without `ka1`, `kent` and the like in the
+terminfo no program would understand it. `kb2` in `mwt.info` is the keypad's 5 without
+NumLock, ESC O E under `smkx` as cursor keys go; xterm's entries have the keypad mode's
+ESC O u.
 
 
 ## Character widths
@@ -131,13 +133,15 @@ the item. sway sends the release itself, which mwt cannot tell from one let go; 
 compositor does not, mwt makes one up for each button held, and it runs the item too.
 
 With Ctrl, a letter of a layout that is not Latin is taken as the Latin letter in its
-place, so Ctrl+C interrupts on a Russian layout. The keys of [ and ] are not: with only
-such a layout in the keymap, Ctrl on them sends the letter there. With a Latin layout
-beside it (`us,ru`), xkbcommon gives ESC and GS as for Ctrl+[ and Ctrl+].
+place, so Ctrl+C interrupts on a Russian layout. The keys of [, ] and ` are not: with
+only such a layout in the keymap, Ctrl on them sends the letter there. With a Latin
+layout beside it, xkbcommon gives what that layout has on the key: ESC and GS beside
+`us`, the letter and `+` beside `de`.
 
-Ctrl+? sends DEL, unless `?` is Shift on the key of `+`, `=`, `-` or `0`: Ctrl+Shift on
-that key is the zoom, so Ctrl+? zooms in on the Nordic, Estonian and Faroese layouts and
-`pl(qwertz)`, out on `fr(ergol)`, and back on Mongolian.
+Ctrl+? sends DEL, unless Ctrl+Shift on the key of `?` is a shortcut of mwt: on the key of
+`+`, `=`, `-` or `0` it zooms, in on the Nordic, Estonian and Faroese layouts and
+`pl(qwertz)`, out on `fr(ergol)`, back on Mongolian; on the key of A, C or V, where a
+layout that is not Latin may have `?` (`ca(ike)`), it selects, copies or pastes.
 
 
 ## Installation

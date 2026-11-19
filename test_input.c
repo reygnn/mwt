@@ -108,7 +108,7 @@ static void kb_free(struct kb *k)
 	xkb_keymap_unref(k->km);
 }
 
-enum { NUM = 8 }; /* NumLock, next to the VT_MOD_* bits */
+enum { NUM = 8, CAPS = 16 }; /* NumLock and Caps Lock, next to the VT_MOD_* bits */
 
 /* VT_MOD_* and NUM held, layout group locked, as wl_keyboard.modifiers sets them */
 static void hold(struct kb *k, unsigned mods, unsigned group)
@@ -122,6 +122,8 @@ static void hold(struct kb *k, unsigned mods, unsigned group)
 		dep |= 1u << xkb_keymap_mod_get_index(k->km, XKB_MOD_NAME_CTRL);
 	if (mods & NUM)
 		lock |= 1u << xkb_keymap_mod_get_index(k->km, XKB_MOD_NAME_NUM);
+	if (mods & CAPS)
+		lock |= 1u << xkb_keymap_mod_get_index(k->km, XKB_MOD_NAME_CAPS);
 	xkb_state_update_mask(k->st, dep, 0, lock, 0, 0, group);
 }
 
@@ -238,7 +240,6 @@ static void test_special_keys(void)
 	CHECK_SEND(key(&k, KEY_COMPOSE, A), "\033[29;3~");
 	/* F13 and up are XF86 keys in xkb's default keymaps */
 	CHECK(key(&k, KEY_F13, 0).act == DO_NONE);
-	/* the modes of the terminal: DECCKM, LNM */
 	kb_free(&k);
 	/* where they are F13 to F24: Shift+F1 to F12, kf13 to kf24 of mwt.info and of
 	 * xterm's terminfo (xterm itself sends CSI 25 ~ and on) */
@@ -251,6 +252,7 @@ static void test_special_keys(void)
 	CHECK_SEND(key(&k, KEY_F1, 0), "\033OP");
 	CHECK_SEND(key(&k, KEY_A, S), "A");
 	kb_free(&k);
+	/* the modes of the terminal: DECCKM, LNM */
 	k = kb_new("us", NULL);
 	mode("\033[?1h");
 	CHECK_SEND(key(&k, KEY_UP, 0), "\033OA");
@@ -300,6 +302,16 @@ static void test_shortcuts(void)
 	CHECK(key(&k, KEY_PAGEUP, S | NUM).act == DO_VIEW_PAGE_UP);
 	CHECK_SEND(key(&k, KEY_UP, S | NUM), "\033[1;2A");
 	CHECK(key(&k, KEY_C, C | S | NUM).act == DO_COPY);
+	kb_free(&k);
+	/* Neo's layer 4 is a NumLock on letter keys: Shift there is no keypad's,
+	 * Shift+PgUp from it pages back, Caps Lock or not */
+	k = kb_new("de", "neo");
+	hold(&k, S | NUM | CAPS, 0);
+	CHECK(xkb_state_key_get_one_sym(k.st, KEY_Q + 8) == XKB_KEY_Prior);
+	CHECK(key(&k, KEY_Q, S | NUM | CAPS).act == DO_VIEW_PAGE_UP);
+	CHECK(key(&k, KEY_Q, S | NUM).act == DO_VIEW_PAGE_UP);
+	kb_free(&k);
+	k = kb_new("us", NULL);
 	/* with Ctrl or Alt they go to the program */
 	CHECK_SEND(key(&k, KEY_PAGEUP, S | C), "\033[5;6~");
 	CHECK_SEND(key(&k, KEY_PAGEUP, S | A), "\033[5;4~");
@@ -387,6 +399,14 @@ static void test_non_latin(void)
 	/* on de the swapped z and y follow the layout, not QWERTY */
 	k = kb_new("ru,de", NULL);
 	CHECK(input_ctrl_latin(k.km, KEY_Y + 8, XKB_KEY_Cyrillic_en) == XKB_KEY_z);
+	kb_free(&k);
+
+	/* Ctrl+? where ? comes from the Latin layout of the keymap: DEL too */
+	k = kb_new("ara,us", NULL);
+	CHECK_SEND(key(&k, KEY_SLASH, C | S), "\x7f");
+	kb_free(&k);
+	k = kb_new("th,us", NULL);
+	CHECK_SEND(key(&k, KEY_SLASH, C | S), "\x7f");
 	kb_free(&k);
 
 	/* letters without a Latin place stay what they are, also with Ctrl;
