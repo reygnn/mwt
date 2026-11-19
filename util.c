@@ -1,6 +1,9 @@
 /* util.c - see util.h */
+#define _POSIX_C_SOURCE 200809L
 #include <errno.h>
+#include <fcntl.h>
 #include <stdlib.h>
+#include <unistd.h>
 
 #include "util.h"
 
@@ -33,4 +36,20 @@ int menu_next(int hover, int n, int dir, unsigned enabled)
 			return i;
 	}
 	return hover;
+}
+
+bool stdio_fill(void)
+{
+	for (int fd = 0; fd < 3; fd++) {
+		if (fcntl(fd, F_GETFD) >= 0 || errno != EBADF)
+			continue;
+		int n = open("/dev/null", O_RDWR); /* fd itself: those below are open */
+		if (n < 0)
+			return false;
+		if (n != fd) {
+			dup2(n, fd);
+			close(n);
+		}
+	}
+	return true;
 }

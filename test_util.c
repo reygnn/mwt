@@ -1,6 +1,13 @@
-/* test_util.c - the -g argument and the context menu's keys: make check */
+/* test_util.c - the -g argument, the context menu's keys and the standard
+ * fds: make check */
+#define _POSIX_C_SOURCE 200809L
+#include <fcntl.h>
 #include <limits.h>
 #include <stdio.h>
+#include <string.h>
+#include <sys/stat.h>
+#include <sys/wait.h>
+#include <unistd.h>
 
 #include "util.h"
 
@@ -94,10 +101,57 @@ static void test_menu(void)
 	CHECK(bad == 0);
 }
 
+/* whether fd is open on /dev/null */
+static bool devnull(int fd)
+{
+	struct stat a, b;
+	return fstat(fd, &a) == 0 && stat("/dev/null", &b) == 0 && a.st_rdev == b.st_rdev &&
+	       S_ISCHR(a.st_mode);
+}
+
+/* in a child, with some of 0 to 2 closed: those come back on /dev/null, the
+ * rest stays, and what is opened next is 3 */
+static void test_stdio(void)
+{
+	static const int closed[] = { 1, 2, 4, 5, 7 }; /* bit i: fd i is closed */
+	for (size_t k = 0; k < sizeof closed / sizeof closed[0]; k++) {
+		fflush(stdout);
+		fflush(stderr);
+		pid_t pid = fork();
+		if (pid == 0) {
+			int keep = dup(2), p[2]; /* stderr kept, for what fails */
+			struct stat was[3];
+			for (int fd = 0; fd < 3; fd++)
+				fstat(fd, &was[fd]);
+			for (int fd = 0; fd < 3; fd++)
+				if (closed[k] >> fd & 1)
+					close(fd);
+			int bad = !stdio_fill();
+			for (int fd = 0; fd < 3; fd++) {
+				struct stat now;
+				char c;
+				if (closed[k] >> fd & 1)
+					bad += !devnull(fd) || write(fd, "x", 1) != 1 || read(fd, &c, 1) != 0;
+				else
+					bad += fstat(fd, &now) != 0 || now.st_ino != was[fd].st_ino ||
+					       now.st_dev != was[fd].st_dev;
+			}
+			bad += pipe(p) != 0 || p[0] < 3 || p[1] < 3;
+			if (bad)
+				dprintf(keep, "test_util: stdio with mask %d: %d wrong\n", closed[k], bad);
+			_exit(bad != 0);
+		}
+		int st = 0;
+		CHECK(waitpid(pid, &st, 0) == pid && WIFEXITED(st) && WEXITSTATUS(st) == 0);
+	}
+	CHECK(stdio_fill()); /* nothing closed: nothing to do */
+}
+
 int main(void)
 {
 	test_geometry();
 	test_menu();
+	test_stdio();
 	printf("test_util: %d/%d checks passed\n", checks - failures, checks);
 	return failures != 0;
 }

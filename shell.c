@@ -126,8 +126,9 @@ void out_drop(struct out *o, int fd)
 }
 
 /* Every fd from 3 up closed: close_range, else what /proc/self/fd lists, else
- * each up to the limit. close_range is not there before Linux 5.9, nor in
- * glibc before 2.34, and a seccomp filter may refuse it. */
+ * each up to the hard limit, as one opened before the soft limit was lowered
+ * may lie above it; at most 2^20, fs.nr_open's default. close_range is not there before Linux 5.9, nor in glibc
+ * before 2.34, and a seccomp filter may refuse it. */
 static void close_from_3(void)
 {
 #ifdef SYS_close_range
@@ -146,8 +147,7 @@ static void close_from_3(void)
 		return;
 	}
 	struct rlimit rl;
-	long max = getrlimit(RLIMIT_NOFILE, &rl) == 0 && rl.rlim_cur != RLIM_INFINITY ?
-			   (long)rl.rlim_cur : 65536;
+	long max = getrlimit(RLIMIT_NOFILE, &rl) < 0 ? 65536 : (long)MIN(rl.rlim_max, 1 << 20);
 	for (long fd = 3; fd < max; fd++)
 		close((int)fd);
 }
@@ -159,6 +159,7 @@ bool child_spawn(struct child *c, int *pty, char **argv, const char *term, int c
 	int slave;
 	c->pid = -1;
 	c->fd = -1;
+	*pty = -1;
 	if (openpty(pty, &slave, NULL, NULL, &ws) < 0)
 		return false;
 	/* mwt speaks only UTF-8: the line discipline erases characters, not
@@ -171,9 +172,11 @@ bool child_spawn(struct child *c, int *pty, char **argv, const char *term, int c
 	}
 	c->pid = fork();
 	if (c->pid < 0) {
+		int e = errno; /* for the caller's message */
 		close(slave);
 		close(*pty);
 		*pty = -1;
+		errno = e;
 		return false;
 	}
 	if (c->pid == 0) {

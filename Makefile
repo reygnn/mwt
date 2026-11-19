@@ -70,11 +70,11 @@ test_sel: test_sel.c sel.c sel.h paste.c paste.h vt.c vt.h version.h
 	$(CC) -std=c11 -Wall -Wextra -g -fsanitize=address,undefined -fno-sanitize-recover=all \
 		-Wl,--wrap=malloc,--wrap=calloc,--wrap=realloc -o $@ test_sel.c sel.c paste.c vt.c
 
-# The shell and its pty with real ptys, pipes and processes; kill, realloc,
-# syscall (close_range) and opendir through --wrap, as small working fakes.
+# The shell and its pty with real ptys, pipes and processes, close_range refused
+# by seccomp; kill, realloc and opendir through --wrap, as small working fakes.
 test_shell: test_shell.c shell.c shell.h paste.c paste.h
 	$(CC) -std=c11 -Wall -Wextra -g -fsanitize=address,undefined -fno-sanitize-recover=all \
-		-Wl,--wrap=kill,--wrap=realloc,--wrap=syscall,--wrap=opendir \
+		-Wl,--wrap=kill,--wrap=realloc,--wrap=opendir \
 		-o $@ test_shell.c shell.c paste.c -lutil
 
 test_util: test_util.c util.c util.h

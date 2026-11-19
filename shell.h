@@ -56,7 +56,7 @@ struct child {
  * its master nonblocking and close-on-exec in *pty. The child gets TERM=term,
  * COLORTERM=truecolor, no LINES or COLUMNS, default signals, none blocked, and
  * no file descriptor but 0 to 2; the pty has IUTF8. False when there is no pty
- * or no fork. */
+ * or no fork, with errno set and nothing left open. */
 bool child_spawn(struct child *c, int *pty, char **argv, const char *term, int cols,
 		 int rows);
 

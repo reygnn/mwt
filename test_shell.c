@@ -7,12 +7,15 @@
 #include <poll.h>
 #include <pty.h>
 #include <signal.h>
-#include <stdarg.h>
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <linux/filter.h>
+#include <linux/seccomp.h>
+#include <stddef.h>
+#include <sys/prctl.h>
 #include <sys/resource.h>
 #include <sys/syscall.h>
 #include <sys/wait.h>
@@ -52,27 +55,10 @@ int __wrap_kill(pid_t pid, int sig)
 	return __real_kill(pid, sig);
 }
 
-/* syscall as it is, but close_range fails as before Linux 5.9 or under seccomp,
- * and opendir as without /proc, when asked: what this machine cannot be made
- * to do for real. The child inherits the flags. */
-long __real_syscall(long n, ...);
-static bool no_close_range, no_proc;
-long __wrap_syscall(long n, ...)
-{
-	va_list ap;
-	va_start(ap, n);
-	long a[6];
-	for (int i = 0; i < 6; i++)
-		a[i] = va_arg(ap, long);
-	va_end(ap);
-#ifdef SYS_close_range
-	if (n == SYS_close_range && no_close_range) {
-		errno = ENOSYS;
-		return -1;
-	}
-#endif
-	return __real_syscall(n, a[0], a[1], a[2], a[3], a[4], a[5]);
-}
+/* opendir as without /proc, when asked: hiding /proc for real needs a mount
+ * namespace, which an unprivileged test may not get. The child inherits the
+ * flag. */
+static bool no_proc;
 DIR *__real_opendir(const char *path);
 DIR *__wrap_opendir(const char *path)
 {
@@ -134,6 +120,18 @@ static void out_free(struct out *o)
 	out_empty(o);
 	free(o->buf);
 	*o = (struct out){ 0 };
+}
+
+/* the fds this process has open */
+static int count_fds(void)
+{
+	DIR *d = opendir("/proc/self/fd");
+	int n = 0;
+	for (struct dirent *e; d && (e = readdir(d));)
+		n += e->d_name[0] != '.';
+	if (d)
+		closedir(d);
+	return n - 1; /* not the directory's own */
 }
 
 static int syscall_pidfd(pid_t pid)
@@ -590,6 +588,48 @@ static int run(char **argv, const char *input, char *buf, size_t cap)
 	return WIFEXITED(status) ? WEXITSTATUS(status) : 128 + WTERMSIG(status);
 }
 
+/* The fds check in a child that seccomp refuses close_range, as a kernel
+ * before 5.9 or a container's filter does. Without /proc each fd up to the hard
+ * limit, also past a soft limit below 50; then through /proc/self/fd, which a
+ * hard limit below 50 does not stop either. */
+static void no_close_range(char **fds, char *out, size_t cap)
+{
+	fflush(stderr);
+	pid_t pid = fork();
+	if (pid == 0) {
+		failures = 0;
+#ifdef __NR_close_range
+		struct sock_filter f[] = {
+			BPF_STMT(BPF_LD | BPF_W | BPF_ABS, offsetof(struct seccomp_data, nr)),
+			BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K, __NR_close_range, 0, 1),
+			BPF_STMT(BPF_RET | BPF_K, SECCOMP_RET_ERRNO | ENOSYS),
+			BPF_STMT(BPF_RET | BPF_K, SECCOMP_RET_ALLOW),
+		};
+		struct sock_fprog prog = { sizeof f / sizeof f[0], f };
+		CHECK(prctl(PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) == 0);
+		CHECK(prctl(PR_SET_SECCOMP, SECCOMP_MODE_FILTER, &prog) == 0);
+		CHECK(syscall(__NR_close_range, 1000U, 1000U, 0U) < 0 && errno == ENOSYS);
+#endif
+		struct rlimit rl;
+		CHECK(getrlimit(RLIMIT_NOFILE, &rl) == 0);
+		struct rlimit low = { 20, rl.rlim_max };
+		CHECK(setrlimit(RLIMIT_NOFILE, &low) == 0);
+		no_proc = true;
+		CHECK(run(fds, NULL, out, cap) == 0);
+		CHECK(!strcmp(out, "0, 1, 2\r\n"));
+		no_proc = false;
+		low.rlim_max = 20; /* for good, in this child only */
+		CHECK(setrlimit(RLIMIT_NOFILE, &low) == 0);
+		CHECK(run(fds, NULL, out, cap) == 0);
+		CHECK(!strcmp(out, "0, 1, 2\r\n"));
+		_exit(failures != 0);
+	}
+	int st = 0;
+	CHECK(pid > 0 && waitpid(pid, &st, 0) == pid && WIFEXITED(st) && WEXITSTATUS(st) == 0);
+}
+
+static char *cat_argv[] = { "cat", NULL };
+
 static void test_spawn(void)
 {
 	static char out[8192];
@@ -624,35 +664,67 @@ static void test_spawn(void)
 	signal(SIGINT, SIG_DFL);
 	signal(SIGQUIT, SIG_DFL);
 
-	/* nor what it was given open, 3 and 50 here */
-	int fd = open("/dev/null", O_RDONLY); /* the lowest free: 3 */
-	CHECK(fd == 3);
-	CHECK(dup2(fd, 50) == 50);
-	char *fds[] = { "sh", "-c", "ls /proc/$$/fd | tr '\\n' ' '", NULL };
+	/* nor what it was given open, 3 and 50 here; ls run by the shell, not
+	 * exec'd in its place nor in a pipe, so $$ is the shell's and holds no
+	 * pipe while ls looks */
+	int fd = open("/dev/null", O_RDONLY);
+	CHECK(dup2(fd, 3) == 3 && dup2(fd, 50) == 50);
+	if (fd != 3)
+		close(fd);
+	char *fds[] = { "sh", "-c", "ls -m /proc/$$/fd; exit", NULL };
 	CHECK(run(fds, NULL, out, sizeof out) == 0);
-	CHECK(!strcmp(out, "0 1 2 "));
-	/* also without close_range: through /proc/self/fd, which a limit below
-	 * 50 does not stop; without /proc too, each up to the limit */
-	no_close_range = true;
-	struct rlimit rl;
-	CHECK(getrlimit(RLIMIT_NOFILE, &rl) == 0);
-	struct rlimit low = { 20, rl.rlim_max };
-	CHECK(setrlimit(RLIMIT_NOFILE, &low) == 0);
-	CHECK(run(fds, NULL, out, sizeof out) == 0);
-	CHECK(!strcmp(out, "0 1 2 "));
-	CHECK(setrlimit(RLIMIT_NOFILE, &rl) == 0);
-	no_proc = true;
-	CHECK(run(fds, NULL, out, sizeof out) == 0);
-	CHECK(!strcmp(out, "0 1 2 "));
-	no_close_range = no_proc = false;
+	CHECK(!strcmp(out, "0, 1, 2\r\n"));
+	no_close_range(fds, out, sizeof out);
 	close(50);
-	close(fd);
+	close(3);
+
+	/* the pty is the shell's controlling terminal, in a session of its own */
+	char *ctty[] = { "sh", "-c",
+		"set -- $(cat /proc/$$/stat); [ \"$6\" = $$ ] && : </dev/tty && echo ctty-ok", NULL };
+	CHECK(run(ctty, NULL, out, sizeof out) == 0);
+	CHECK(strstr(out, "ctty-ok"));
 
 	/* IUTF8: in canonical mode an erase takes the whole of a character, not
 	 * its last byte; set before the first input arrives */
 	char *line[] = { "sh", "-c", "read l; printf '<%s>' \"$l\" | od -An -tx1", NULL };
 	CHECK(run(line, "a\xc3\xa4\x7f\xe2\x82\xac\x7f\r", out, sizeof out) == 0);
 	CHECK(strstr(out, "3c 61 3e"));
+
+	/* no pty, or no fork: false, errno for the message, nothing left open;
+	 * for real, by the limits. As root RLIMIT_NPROC does not hold. */
+	struct child f;
+	int fpty = 7, n0 = count_fds(), lowest = 0;
+	while (fcntl(lowest, F_GETFD) >= 0)
+		lowest++;
+	struct rlimit rl;
+	CHECK(getrlimit(RLIMIT_NOFILE, &rl) == 0);
+	struct rlimit tight = { (rlim_t)lowest, rl.rlim_max }; /* none free below it */
+	CHECK(setrlimit(RLIMIT_NOFILE, &tight) == 0);
+	errno = 0;
+	bool made = child_spawn(&f, &fpty, cat_argv, "mwt-test", 80, 24);
+	int e = errno;
+	CHECK(setrlimit(RLIMIT_NOFILE, &rl) == 0);
+	/* EMFILE; glibc 2.31 then tries BSD ptys and leaves ENOENT */
+	CHECK(!made && fpty == -1 && f.pid == -1 && f.fd == -1 && e != 0);
+	CHECK(count_fds() == n0);
+	fflush(stderr);
+	pid_t helper = fork();
+	if (helper == 0) {
+		failures = 0;
+		if (getuid() != 0) {
+			struct rlimit none = { 0, 0 };
+			CHECK(setrlimit(RLIMIT_NPROC, &none) == 0);
+			int m0 = count_fds();
+			fpty = 7;
+			errno = 0;
+			made = child_spawn(&f, &fpty, cat_argv, "mwt-test", 80, 24);
+			CHECK(!made && fpty == -1 && f.pid == -1 && errno == EAGAIN);
+			CHECK(count_fds() == m0);
+		}
+		_exit(failures != 0);
+	}
+	int hs = 0;
+	CHECK(waitpid(helper, &hs, 0) == helper && WIFEXITED(hs) && WEXITSTATUS(hs) == 0);
 
 	/* a program that is not there */
 	char *none[] = { "/nicht/da", NULL };
@@ -672,7 +744,9 @@ static void test_spawn(void)
 	struct child c;
 	int pty;
 	char *cat[] = { "cat", NULL };
+	int before = count_fds();
 	CHECK(child_spawn(&c, &pty, cat, "mwt-test", 80, 24));
+	CHECK(count_fds() == before + 2); /* the master and the pidfd, not the slave */
 	CHECK(fcntl(pty, F_GETFL) & O_NONBLOCK);
 	CHECK(fcntl(pty, F_GETFD) & FD_CLOEXEC);
 	CHECK(c.fd >= 0 && (fcntl(c.fd, F_GETFD) & FD_CLOEXEC));
@@ -682,27 +756,53 @@ static void test_spawn(void)
 	close(c.fd);
 }
 
+/* Whether the pty showed what, within 10 s: the child is past where it
+ * prints it, rather than a pause that a loaded machine outlasts. */
+static bool shown(int pty, const char *what)
+{
+	char buf[256];
+	size_t len = 0;
+	for (int64_t end = now_ms() + 10000; now_ms() < end;) {
+		struct pollfd p = { pty, POLLIN, 0 };
+		poll(&p, 1, 100);
+		ssize_t n = read(pty, buf + len, sizeof buf - 1 - len);
+		if (n > 0) {
+			len += (size_t)n;
+			buf[len] = 0;
+			if (strstr(buf, what))
+				return true;
+			if (len == sizeof buf - 1)
+				len = 0;
+		} else if (n < 0 && errno != EAGAIN) {
+			return false;
+		}
+	}
+	return false;
+}
+
 static void test_hangup(void)
 {
 	/* the shell gets SIGHUP and ends: no wait */
 	struct child c;
 	int pty;
-	char *sh[] = { "sh", "-c", "sleep 30", NULL };
+	char *sh[] = { "sh", "-c", "echo ready; sleep 30", NULL };
 	CHECK(child_spawn(&c, &pty, sh, "mwt-test", 80, 24));
 	pid_t pid = c.pid;
-	usleep(100000);
+	CHECK(shown(pty, "ready"));
 	nkills = 0;
 	int64_t t0 = now_ms();
 	child_hangup(&c, &pty, 5000);
 	CHECK(c.pid == 0 && pty == -1 && now_ms() - t0 < 2000);
-	CHECK(nkills == 1 && kills[0].pid == pid && kills[0].sig == SIGHUP);
+	/* the kernel's SIGHUP for the closed pty may have ended it first: then
+	 * none from mwt. That mwt sends one shows the case after this. */
+	CHECK(nkills <= 1 && (nkills == 0 || (kills[0].pid == pid && kills[0].sig == SIGHUP)));
 	close(c.fd);
 
 	/* one that ignores SIGHUP is waited for, then left: no SIGKILL */
-	char *nohup[] = { "sh", "-c", "trap '' HUP; exec sleep 30", NULL };
+	char *nohup[] = { "sh", "-c", "trap '' HUP; echo ready; exec sleep 30", NULL };
 	CHECK(child_spawn(&c, &pty, nohup, "mwt-test", 80, 24));
 	pid = c.pid;
-	usleep(200000);
+	CHECK(shown(pty, "ready"));
 	nkills = 0;
 	t0 = now_ms();
 	child_hangup(&c, &pty, 300);

@@ -1,7 +1,9 @@
 /* util.h - small pieces of mwt.c without Wayland: the -g argument, the
- * context menu's keys. test_util checks them. */
+ * context menu's keys, the standard fds. test_util checks them. */
 #ifndef UTIL_H
 #define UTIL_H
+
+#include <stdbool.h>
 
 enum { GEOM_OK, GEOM_SYNTAX, GEOM_RANGE };
 
@@ -14,5 +16,10 @@ int parse_geometry(const char *s, int max_cols, int max_rows, int *cols, int *ro
  * that can, round the end. Down from none is the first, Up the last. hover when
  * none can be chosen. */
 int menu_next(int hover, int n, int dir, unsigned enabled);
+
+/* Each of fds 0 to 2 that is closed opened on /dev/null, so that nothing mwt
+ * opens later takes its place: a message for stderr would go into the pty or
+ * the Wayland socket. False when /dev/null cannot be opened. */
+bool stdio_fill(void);
 
 #endif

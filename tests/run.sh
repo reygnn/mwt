@@ -155,6 +155,13 @@ if shown | grep -q geheim; then fail "the password shows while typed"; else echo
 T -k Return
 expect "the password reaches the program" 'got:geheim'
 
+# the pty has IUTF8: Backspace in a canonical read takes all of ä, not a byte
+T 'read l; echo "[$l]"' -k Return
+T 'aä' -k BackSpace -k Return
+expect "Backspace after ä in a canonical read takes the whole character" '\[a\]'
+T 'stty -a | grep -o -- "-\?iutf8"' -k Return
+expect "the pty has IUTF8" 'iutf8'
+
 T 'python3 -c "$RAW3"' -k Return
 sleep 0.8
 T 'xyz'

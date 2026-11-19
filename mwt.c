@@ -178,6 +178,13 @@ static void die(const char *msg)
 	exit(1);
 }
 
+/* die, with what errno says */
+static void die_errno(const char *msg)
+{
+	fprintf(stderr, "mwt: %s: %s\n", msg, strerror(errno));
+	exit(1);
+}
+
 /* ---- pty output ------------------------------------------------------- */
 
 #define REPLY_BACKLOG_MAX (1024 * 1024) /* replies waiting for the pty */
@@ -2091,7 +2098,7 @@ static void spawn(char **argv)
 		fprintf(stderr, "mwt: no terminfo for '%s', using %s "
 			"(run 'tic -x mwt.info')\n", term_name, term);
 	if (!child_spawn(&t.child, &t.pty, argv, term, t.vt->cols, t.vt->rows))
-		die("openpty or fork failed");
+		die_errno("cannot start the shell");
 }
 
 static int64_t now_ms(void)
@@ -2143,6 +2150,7 @@ static void usage(void)
 
 int main(int argc, char **argv)
 {
+	stdio_fill(); /* before anything is opened or printed */
 	const char *app_id = default_app_id, *title = default_title;
 	t.font_spec = font_spec;
 	t.init_cols = default_cols;
@@ -2223,7 +2231,7 @@ done:;
 
 	t.display = wl_display_connect(NULL);
 	if (!t.display)
-		die("cannot connect to Wayland display");
+		die_errno("cannot connect to Wayland display");
 	t.registry = wl_display_get_registry(t.display);
 	wl_registry_add_listener(t.registry, &reg_listener, NULL);
 	wl_display_roundtrip(t.display);
