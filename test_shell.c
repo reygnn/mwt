@@ -1,15 +1,19 @@
 /* test_shell.c - what waits for the pty, and the shell, with real pipes, ptys
  * and processes: make check */
 #define _GNU_SOURCE
+#include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <poll.h>
 #include <pty.h>
 #include <signal.h>
+#include <stdarg.h>
+#include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/resource.h>
 #include <sys/syscall.h>
 #include <sys/wait.h>
 #include <termios.h>
@@ -46,6 +50,37 @@ int __wrap_kill(pid_t pid, int sig)
 	if (sig && nkills < 16)
 		kills[nkills++] = (struct sent){ pid, sig };
 	return __real_kill(pid, sig);
+}
+
+/* syscall as it is, but close_range fails as before Linux 5.9 or under seccomp,
+ * and opendir as without /proc, when asked: what this machine cannot be made
+ * to do for real. The child inherits the flags. */
+long __real_syscall(long n, ...);
+static bool no_close_range, no_proc;
+long __wrap_syscall(long n, ...)
+{
+	va_list ap;
+	va_start(ap, n);
+	long a[6];
+	for (int i = 0; i < 6; i++)
+		a[i] = va_arg(ap, long);
+	va_end(ap);
+#ifdef SYS_close_range
+	if (n == SYS_close_range && no_close_range) {
+		errno = ENOSYS;
+		return -1;
+	}
+#endif
+	return __real_syscall(n, a[0], a[1], a[2], a[3], a[4], a[5]);
+}
+DIR *__real_opendir(const char *path);
+DIR *__wrap_opendir(const char *path)
+{
+	if (no_proc && !strcmp(path, "/proc/self/fd")) {
+		errno = ENOENT;
+		return NULL;
+	}
+	return __real_opendir(path);
 }
 
 static uint64_t rng = 0x853c49e6748fea9bu;
@@ -589,14 +624,35 @@ static void test_spawn(void)
 	signal(SIGINT, SIG_DFL);
 	signal(SIGQUIT, SIG_DFL);
 
-	/* nor what it was given open */
-	int fd = open("/dev/null", O_RDONLY);
+	/* nor what it was given open, 3 and 50 here */
+	int fd = open("/dev/null", O_RDONLY); /* the lowest free: 3 */
+	CHECK(fd == 3);
 	CHECK(dup2(fd, 50) == 50);
-	close(fd);
 	char *fds[] = { "sh", "-c", "ls /proc/$$/fd | tr '\\n' ' '", NULL };
 	CHECK(run(fds, NULL, out, sizeof out) == 0);
-	CHECK(strstr(out, "0 1 2 ") && !strstr(out, "50"));
+	CHECK(!strcmp(out, "0 1 2 "));
+	/* also without close_range: through /proc/self/fd, which a limit below
+	 * 50 does not stop; without /proc too, each up to the limit */
+	no_close_range = true;
+	struct rlimit rl;
+	CHECK(getrlimit(RLIMIT_NOFILE, &rl) == 0);
+	struct rlimit low = { 20, rl.rlim_max };
+	CHECK(setrlimit(RLIMIT_NOFILE, &low) == 0);
+	CHECK(run(fds, NULL, out, sizeof out) == 0);
+	CHECK(!strcmp(out, "0 1 2 "));
+	CHECK(setrlimit(RLIMIT_NOFILE, &rl) == 0);
+	no_proc = true;
+	CHECK(run(fds, NULL, out, sizeof out) == 0);
+	CHECK(!strcmp(out, "0 1 2 "));
+	no_close_range = no_proc = false;
 	close(50);
+	close(fd);
+
+	/* IUTF8: in canonical mode an erase takes the whole of a character, not
+	 * its last byte; set before the first input arrives */
+	char *line[] = { "sh", "-c", "read l; printf '<%s>' \"$l\" | od -An -tx1", NULL };
+	CHECK(run(line, "a\xc3\xa4\x7f\xe2\x82\xac\x7f\r", out, sizeof out) == 0);
+	CHECK(strstr(out, "3c 61 3e"));
 
 	/* a program that is not there */
 	char *none[] = { "/nicht/da", NULL };

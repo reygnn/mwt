@@ -2091,7 +2091,7 @@ static void spawn(char **argv)
 		fprintf(stderr, "mwt: no terminfo for '%s', using %s "
 			"(run 'tic -x mwt.info')\n", term_name, term);
 	if (!child_spawn(&t.child, &t.pty, argv, term, t.vt->cols, t.vt->rows))
-		die("forkpty failed");
+		die("openpty or fork failed");
 }
 
 static int64_t now_ms(void)

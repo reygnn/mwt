@@ -2,6 +2,7 @@
 #define _GNU_SOURCE
 #include <errno.h>
 #include <fcntl.h>
+#include <dirent.h>
 #include <poll.h>
 #include <pty.h>
 #include <pwd.h>
@@ -11,11 +12,13 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/ioctl.h>
+#include <sys/resource.h>
 #include <sys/syscall.h>
 #include <sys/wait.h>
 #include <termios.h>
 #include <time.h>
 #include <unistd.h>
+#include <utmp.h>
 
 #include "shell.h"
 
@@ -122,15 +125,61 @@ void out_drop(struct out *o, int fd)
 		out_write(o, fd, "\033[201~", 6);
 }
 
+/* Every fd from 3 up closed: close_range, else what /proc/self/fd lists, else
+ * each up to the limit. close_range is not there before Linux 5.9, nor in
+ * glibc before 2.34, and a seccomp filter may refuse it. */
+static void close_from_3(void)
+{
+#ifdef SYS_close_range
+	if (syscall(SYS_close_range, 3U, ~0U, 0U) == 0)
+		return;
+#endif
+	DIR *d = opendir("/proc/self/fd");
+	if (d) {
+		int dfd = dirfd(d);
+		for (struct dirent *e; (e = readdir(d));) {
+			int fd = atoi(e->d_name);
+			if (fd > 2 && fd != dfd)
+				close(fd);
+		}
+		closedir(d);
+		return;
+	}
+	struct rlimit rl;
+	long max = getrlimit(RLIMIT_NOFILE, &rl) == 0 && rl.rlim_cur != RLIM_INFINITY ?
+			   (long)rl.rlim_cur : 65536;
+	for (long fd = 3; fd < max; fd++)
+		close((int)fd);
+}
+
 bool child_spawn(struct child *c, int *pty, char **argv, const char *term, int cols,
 		 int rows)
 {
 	struct winsize ws = { (unsigned short)rows, (unsigned short)cols, 0, 0 };
-	c->pid = forkpty(pty, NULL, NULL, &ws);
+	int slave;
+	c->pid = -1;
 	c->fd = -1;
-	if (c->pid < 0)
+	if (openpty(pty, &slave, NULL, NULL, &ws) < 0)
 		return false;
+	/* mwt speaks only UTF-8: the line discipline erases characters, not
+	 * bytes. Set before the fork, so the first input already finds it and
+	 * nothing undoes what the shell sets later. */
+	struct termios tm;
+	if (tcgetattr(slave, &tm) == 0) {
+		tm.c_iflag |= IUTF8;
+		tcsetattr(slave, TCSANOW, &tm);
+	}
+	c->pid = fork();
+	if (c->pid < 0) {
+		close(slave);
+		close(*pty);
+		*pty = -1;
+		return false;
+	}
 	if (c->pid == 0) {
+		close(*pty);
+		if (login_tty(slave) < 0)
+			_exit(127);
 		setenv("TERM", term, 1);
 		setenv("COLORTERM", "truecolor", 1);
 		unsetenv("LINES");
@@ -145,7 +194,7 @@ bool child_spawn(struct child *c, int *pty, char **argv, const char *term, int c
 		sigprocmask(SIG_SETMASK, &none, NULL);
 		/* nor what mwt was given open: what mwt opens is CLOEXEC, an fd
 		 * its parent left open would reach the shell and all it starts */
-		close_range(3, ~0U, 0);
+		close_from_3();
 		if (argv && argv[0]) {
 			execvp(argv[0], argv);
 			perror(argv[0]);
@@ -159,6 +208,7 @@ bool child_spawn(struct child *c, int *pty, char **argv, const char *term, int c
 		}
 		_exit(127);
 	}
+	close(slave);
 	fcntl(*pty, F_SETFL, fcntl(*pty, F_GETFL) | O_NONBLOCK);
 	fcntl(*pty, F_SETFD, FD_CLOEXEC);
 	c->fd = (int)syscall(SYS_pidfd_open, c->pid, 0);

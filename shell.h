@@ -55,7 +55,8 @@ struct child {
 /* argv, or $SHELL, the passwd entry's or /bin/sh, on a new pty of cols x rows,
  * its master nonblocking and close-on-exec in *pty. The child gets TERM=term,
  * COLORTERM=truecolor, no LINES or COLUMNS, default signals, none blocked, and
- * no file descriptor but 0 to 2. False when forkpty fails. */
+ * no file descriptor but 0 to 2; the pty has IUTF8. False when there is no pty
+ * or no fork. */
 bool child_spawn(struct child *c, int *pty, char **argv, const char *term, int cols,
 		 int rows);
 
