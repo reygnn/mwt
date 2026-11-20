@@ -79,7 +79,7 @@ struct font {
 	int cw, ch, ascent;
 	struct entry *cache;
 	size_t cache_cap, cache_used;
-	uint32_t hash_mul; /* random and odd: output cannot pick keys that collide */
+	uint32_t hash_seed; /* random: output cannot pick keys that collide */
 	size_t cache_bytes; /* of the bitmaps in it */
 };
 
@@ -235,10 +235,9 @@ struct font *font_open(const char *spec, double size_pt, int scale)
 		goto fail;
 	}
 
-	if (getrandom(&f->hash_mul, sizeof f->hash_mul, GRND_NONBLOCK) != sizeof f->hash_mul)
-		f->hash_mul = (uint32_t)time(NULL) * 2654435761u ^ (uint32_t)getpid() ^
-			      (uint32_t)(uintptr_t)f;
-	f->hash_mul |= 1;
+	if (getrandom(&f->hash_seed, sizeof f->hash_seed, GRND_NONBLOCK) != sizeof f->hash_seed)
+		f->hash_seed = (uint32_t)time(NULL) * 2654435761u ^ (uint32_t)getpid() ^
+			       (uint32_t)(uintptr_t)f;
 	f->cache = calloc(1024, sizeof *f->cache);
 	if (!f->cache)
 		goto fail;
@@ -490,13 +489,23 @@ static bool render(struct font *f, uint32_t cp, int style, struct glyph *g)
 	return true;
 }
 
-/* Multiply-shift: the top bits of the product, which depend on all of the key,
- * with a multiplier output cannot know. The low bits of a fixed one let about
- * 200 KB of chosen code points pile 64k glyphs into one run, and each lookup of
- * a frame walked it. cap is a power of two. */
-static struct entry *slot(struct entry *tab, size_t cap, uint32_t key, uint32_t mul)
+/* murmur3's finalizer: every bit of the key moves every bit of the result. */
+static uint32_t mix(uint32_t h)
 {
-	size_t i = cap > 1 ? (uint32_t)(key * mul) >> (32 - __builtin_ctzll(cap)) : 0;
+	h ^= h >> 16;
+	h *= 0x85ebca6bu;
+	h ^= h >> 13;
+	h *= 0xc2b2ae35u;
+	return h ^ (h >> 16);
+}
+
+/* The key mixed with a seed output cannot know, its top bits. A fixed multiplier
+ * let about 200 KB of chosen code points pile 64k glyphs into one run (631 ms a
+ * frame), by its low bits or by its top ones; a random multiplier alone still
+ * ran code points in a row into long runs for some. cap is a power of two. */
+static struct entry *slot(struct entry *tab, size_t cap, uint32_t key, uint32_t seed)
+{
+	size_t i = mix(key ^ seed) >> (32 - __builtin_ctzll(cap));
 	while (tab[i].used && tab[i].key != key) {
 		SLOT_PROBE();
 		i = (i + 1) & (cap - 1);
@@ -516,12 +525,12 @@ static void cache_empty(struct font *f)
 const struct glyph *font_glyph(struct font *f, uint32_t cp, int style)
 {
 	uint32_t key = cp << 2 | (style & 3);
-	struct entry *e = slot(f->cache, f->cache_cap, key, f->hash_mul);
+	struct entry *e = slot(f->cache, f->cache_cap, key, f->hash_seed);
 	if (e->used)
 		return &e->g;
 	if (f->cache_used >= GLYPH_CACHE_MAX || f->cache_bytes >= GLYPH_CACHE_BYTES) {
 		cache_empty(f);
-		e = slot(f->cache, f->cache_cap, key, f->hash_mul);
+		e = slot(f->cache, f->cache_cap, key, f->hash_seed);
 	}
 	if ((f->cache_used + 1) * 10 > f->cache_cap * 7) {
 		size_t ncap = f->cache_cap * 2;
@@ -529,11 +538,11 @@ const struct glyph *font_glyph(struct font *f, uint32_t cp, int style)
 		if (n) {
 			for (size_t i = 0; i < f->cache_cap; i++)
 				if (f->cache[i].used)
-					*slot(n, ncap, f->cache[i].key, f->hash_mul) = f->cache[i];
+					*slot(n, ncap, f->cache[i].key, f->hash_seed) = f->cache[i];
 			free(f->cache);
 			f->cache = n;
 			f->cache_cap = ncap;
-			e = slot(f->cache, f->cache_cap, key, f->hash_mul);
+			e = slot(f->cache, f->cache_cap, key, f->hash_seed);
 		} else if (f->cache_used + 1 >= f->cache_cap) {
 			/* no memory to grow, and a full table would leave slot()
 			 * without a free place: draw nothing for this one */

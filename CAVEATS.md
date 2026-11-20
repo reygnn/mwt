@@ -191,6 +191,11 @@ no font on the system has it.
 A face that maps a character to an empty glyph counts as having it. DejaVu Sans Mono
 Oblique does so for U+1D3D, which is blank in italic and bold italic.
 
+Out of memory a glyph may be blank. Left so by its bitmap or by the list of the system's
+fonts, tried again at most once a second, it shows once its row is drawn again; where
+loading the fallback face failed, only once the glyph cache empties or the font is
+zoomed.
+
 
 ## Installation
 

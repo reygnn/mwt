@@ -49,7 +49,7 @@ static uint32_t fixed_slot(uint32_t key, bool top)
 /* 60000 keys (code point and style, below 2^23) that the fixed multiplier
  * starts in the first 60000 slots of a table of 2^17, the size 64k glyphs grow
  * it to, and 1000 more it starts there too. Each of those walked the run to its
- * end, 30000 steps on average. With the font's multiplier: a step or two. */
+ * end, 30000 steps on average. With the font's seed: a step or two. */
 static int hash_flood(struct font *f, bool top)
 {
 	enum { N = 60000, ASK = 1000 };
@@ -64,13 +64,13 @@ static int hash_flood(struct font *f, bool top)
 		if (fixed_slot(key, top) >= N)
 			continue;
 		if (n < N) {
-			struct entry *e = slot(tab, cap, key, f->hash_mul);
+			struct entry *e = slot(tab, cap, key, f->hash_seed);
 			e->used = true;
 			e->key = key;
 			n++;
 			before = probes;
 		} else {
-			slot(tab, cap, key, f->hash_mul);
+			slot(tab, cap, key, f->hash_seed);
 			ask++;
 		}
 	}
@@ -79,6 +79,32 @@ static int hash_flood(struct font *f, bool top)
 	if (steps > 8 * ASK) {
 		printf("FAIL: %d lookups of keys chosen against the %s bits took %lu steps\n", ask,
 		       top ? "top" : "low", steps);
+		return 1;
+	}
+	return 0;
+}
+
+/* Code points in a row: 16384 from U+4E00 in all four styles fill a table of
+ * 2^17 with keys in a row. A random multiplier ran them into long runs for one
+ * in 15 or so, up to 83 steps a lookup on average. */
+static int hash_dense(struct font *f)
+{
+	enum { N = 65536 };
+	size_t cap = (size_t)1 << BITS;
+	struct entry *tab = calloc(cap, sizeof *tab);
+	if (!tab)
+		return 0;
+	for (uint32_t k = 0; k < N; k++) {
+		struct entry *e = slot(tab, cap, 0x4e00u << 2 | k, f->hash_seed);
+		e->used = true;
+		e->key = 0x4e00u << 2 | k;
+	}
+	probes = 0;
+	for (uint32_t k = 0; k < N; k++)
+		slot(tab, cap, 0x4e00u << 2 | k, f->hash_seed);
+	free(tab);
+	if (probes > 2 * N) {
+		printf("FAIL: %d lookups of code points in a row took %lu steps\n", N, probes);
 		return 1;
 	}
 	return 0;
@@ -137,6 +163,7 @@ int main(int argc, char **argv)
 	}
 	fails += hash_flood(f, false);
 	fails += hash_flood(f, true);
+	fails += hash_dense(f);
 	font_close(f);
 	if (fails)
 		return 1;
