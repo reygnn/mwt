@@ -16,8 +16,6 @@ make -j"$(nproc)" mwc build/vinput >/dev/null 2>&1 || { echo "mwc did not build"
 export MWC=$HOME/w/mwc/mwc VINPUT=$HOME/w/mwc/build/vinput VIN_LAYOUTS=1
 cd ~/w/mwt || exit 1
 SAN="-O1 -g -fsanitize=address,undefined"
-# From the environment: on the make command line CFLAGS would replace the
-# include paths the Makefile appends.
 build() {
 	make clean >/dev/null
 	CFLAGS="$1" LDFLAGS="$2" make -j"$(nproc)" 2>&1 | grep -E 'warning|error'

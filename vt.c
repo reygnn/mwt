@@ -332,10 +332,27 @@ static void moveto(struct vt *vt, int x, int y)
 	vt->c.wrapnext = false;
 }
 
+/* the row origin mode counts from */
+static int origin_row(const struct vt *vt)
+{
+	return vt->c.origin ? vt->top : 0;
+}
+
 /* absolute position, honoring origin mode */
 static void moveto_abs(struct vt *vt, int x, int y)
 {
-	moveto(vt, x, y + (vt->c.origin ? vt->top : 0));
+	moveto(vt, x, y + origin_row(vt));
+}
+
+/* the cursor to column x of its row after writing: past the last one it stays
+ * there, with a wrap pending if autowrap is on */
+static void advance(struct vt *vt, int x, bool wrap)
+{
+	vt->c.x = x;
+	if (x >= vt->cols) {
+		vt->c.x = vt->cols - 1;
+		vt->c.wrapnext = wrap;
+	}
 }
 
 static void save_cursor(struct vt *vt)
@@ -632,12 +649,7 @@ static bool put(struct vt *vt, uint32_t cp)
 	touch(vt, l, c->x + w);
 	mark_row(vt, c->y);
 	vt->lastcp = orig;
-
-	c->x += w;
-	if (c->x >= vt->cols) {
-		c->x = vt->cols - 1;
-		c->wrapnext = wrap;
-	}
+	advance(vt, c->x + w, wrap);
 	return true;
 }
 
@@ -675,11 +687,7 @@ static void rep_row(struct vt *vt, uint32_t cp, int w, int n)
 		touch(vt, l, (vt->mode & MODE_INSERT) ? MIN((int)USED(vt, l) + k * w, vt->cols) :
 						      x + k * w);
 		n -= k;
-		c->x += k * w;
-		if (c->x >= vt->cols) {
-			c->x = vt->cols - 1;
-			c->wrapnext = vt->mode & MODE_AUTOWRAP;
-		}
+		advance(vt, c->x + k * w, vt->mode & MODE_AUTOWRAP);
 	}
 }
 
@@ -1065,7 +1073,7 @@ static void csi_dispatch(struct vt *vt, uint32_t f)
 			for (int i = 0; i < vt->nparams; i++)
 				set_private_mode(vt, vt->params[i], f == 'h');
 		else if (f == 'n' && arg(vt, 0, 0) == 6)
-			reply(vt, "\033[?%d;%dR", c->y + 1 - (c->origin ? vt->top : 0), c->x + 1);
+			reply(vt, "\033[?%d;%dR", c->y + 1 - origin_row(vt), c->x + 1);
 		return;
 	}
 	if (vt->priv == '>') {
@@ -1233,8 +1241,7 @@ static void csi_dispatch(struct vt *vt, uint32_t f)
 		if (arg(vt, 0, 0) == 5)
 			reply(vt, "\033[0n");
 		else if (arg(vt, 0, 0) == 6)
-			reply(vt, "\033[%d;%dR",
-			      c->y + 1 - (c->origin ? vt->top : 0), c->x + 1);
+			reply(vt, "\033[%d;%dR", c->y + 1 - origin_row(vt), c->x + 1);
 		break;
 	case 'r': { /* DECSTBM */
 		int t = arg(vt, 0, 1) - 1, b = arg(vt, 1, vt->rows) - 1;
@@ -1547,11 +1554,7 @@ static size_t put_ascii(struct vt *vt, const unsigned char *s, size_t n)
 	touch(vt, l, x1 + 1);
 	mark_row(vt, c->y);
 	vt->lastcp = s[k - 1];
-	c->x = x1 + 1;
-	if (c->x >= vt->cols) {
-		c->x = vt->cols - 1;
-		c->wrapnext = vt->mode & MODE_AUTOWRAP;
-	}
+	advance(vt, x1 + 1, vt->mode & MODE_AUTOWRAP);
 	return k;
 }
 

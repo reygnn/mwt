@@ -227,10 +227,11 @@ T -k Return
 # last column, so ESC[1K must clear the whole row.
 size="$W $H"
 swaymsg -q '[app_id="mwt"] resize set 1000 460'
-sleep 0.5
+for ((i = 0; i < 50; i++)); do [ "$(window_rect)" != "$size" ] && break; sleep 0.1; done
 C l
 T 'printf "%0100d" 0; sleep 1.5; printf "\033[1K|\n"' -k Return
-sleep 0.3
+# the zeros out, the cursor in the last column: then back to 80 columns
+for ((i = 0; i < 10; i++)); do shown | grep -q '^0\{50\}' && break; sleep 0.1; done
 swaymsg -q "[app_id=\"mwt\"] resize set $size, move position 20 20"
 expect "ESC[1K after the window shrank" ' *|'
 C l
@@ -409,8 +410,8 @@ sleep 0.3
 timeout 3 wl-paste -n >"$DIR/all"
 if grep -qx 'nur-alt' "$DIR/all" && ! grep -q '^zeile-' "$DIR/all"; then echo "ok: on the alternate screen only the screen"; else fail "Ctrl+Shift+A on the alternate screen: $(wc -l <"$DIR/all") lines"; fi
 T "printf '\\033[?1049l'" -k Return
-T "seq -f '%078g' 1 6000" -k Return
-sleep 3
+T "seq -f '%078g' 1 6000; echo seq-fertig" -k Return
+expect "6000 lines written" 'seq-fertig'
 K a
 K c
 sleep 0.5

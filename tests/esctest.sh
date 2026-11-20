@@ -15,6 +15,7 @@
 #   tests/esctest.sh --fetch          only fetch esctest
 set -u
 cd "$(dirname "$0")/.." || exit 1
+. tests/lib.sh
 ESC_DIR=${ESC_DIR:-$PWD/tests/esctest}
 MWT=${MWT:-$PWD/mwt-esctest}
 REPO=https://github.com/ThomasDickey/esctest2
@@ -62,13 +63,7 @@ cleanup() {
 trap cleanup EXIT
 sway -c "$DIR/sway.conf" >"$DIR/sway.log" 2>&1 &
 SWAY=$!
-for ((i = 0; i < 50; i++)); do
-	[ -S "$DIR/wayland-1" ] && break
-	sleep 0.1
-done
-[ -S "$DIR/wayland-1" ] || { echo "esctest: sway did not start"; exit 1; }
-export WAYLAND_DISPLAY=wayland-1
-sleep 0.3
+sway_wait || { echo "esctest: sway did not start"; exit 1; }
 
 # As xterm at VT420: esctest reads the screen back only from VT level 4 on. mwt
 # answers DA and DA2 as a VT220, so those tests fail. A report that does not

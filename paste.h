@@ -16,7 +16,13 @@ int utf8_seq(const unsigned char *s, size_t n);
  * and then buf is as it was. */
 bool put_utf8(char **buf, size_t *len, size_t *cap, uint32_t cp);
 
-enum { PASTE_OK, PASTE_NOMEM, PASTE_TOO_LARGE };
+enum { PASTE_OK, PASTE_NOMEM, PASTE_TOO_LARGE, PASTE_MORE };
+
+/* Reads what a source sends from fd into buf (len used, cap allocated), at most
+ * turn bytes in this call: PASTE_MORE when the fd has no more now or the turn is
+ * used, PASTE_OK at its end (EOF or an error), PASTE_TOO_LARGE once more than max
+ * bytes came, PASTE_NOMEM when buf could not grow. A paste of max bytes fits. */
+int paste_read(int fd, char **buf, size_t *len, size_t *cap, size_t max, size_t turn);
 
 /* What a source sent, as UTF-8 without C1 controls. latin1 for STRING; what is
  * not valid UTF-8 is taken as Latin-1 too, whatever its label says. More than

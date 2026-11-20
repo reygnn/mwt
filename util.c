@@ -79,3 +79,9 @@ void fit_bounds(int *cols, int *rows, int bw, int bh, int scale, int pad, int cw
 		*rows = *rows < n ? *rows : n < 1 ? 1 : (int)n;
 	}
 }
+
+void snap_size(int cols, int rows, int cw, int ch, int pad, int scale, int *w, int *h)
+{
+	*w = (int)(((long long)cols * cw + 2 * pad + scale - 1) / scale);
+	*h = (int)(((long long)rows * ch + 2 * pad + scale - 1) / scale);
+}

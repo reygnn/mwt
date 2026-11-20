@@ -237,6 +237,8 @@ static int64_t now_ms(void)
 	return (int64_t)ts.tv_sec * 1000 + ts.tv_nsec / 1000000;
 }
 
+#define WAIT_POLL_MS 20
+
 void child_wait(struct child *c, int ms)
 {
 	int64_t end = now_ms() + ms;
@@ -246,9 +248,10 @@ void child_wait(struct child *c, int ms)
 		int64_t left = end - now_ms();
 		if (left <= 0)
 			return;
-		/* without a pidfd (kernel < 5.3) this polls every 20 ms */
+		/* Without a pidfd (kernel < 5.3) this polls every WAIT_POLL_MS: a
+		 * close waits for the shell, so more often than the event loop's. */
 		struct pollfd p = { c->fd, POLLIN, 0 };
-		poll(&p, 1, c->fd >= 0 ? (int)left : (int)MIN(left, 20));
+		poll(&p, 1, c->fd >= 0 ? (int)left : (int)MIN(left, WAIT_POLL_MS));
 	}
 }
 

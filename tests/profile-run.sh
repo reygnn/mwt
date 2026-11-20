@@ -10,6 +10,7 @@ OUT=$F/out
 mkdir -p "$SRC" "$OUT"
 cp -r /src/mwt/. "$SRC"
 cd "$SRC" || exit 1
+. tests/lib.sh
 make clean >/dev/null
 CFLAGS="-O2 -g -fno-omit-frame-pointer -fno-optimize-sibling-calls -fno-inline-functions-called-once" \
 	make -j"$(nproc)" 2>&1 | grep -E 'warning|error'
@@ -34,13 +35,7 @@ CONF
 sway -c "$DIR/sway.conf" >"$DIR/sway.log" 2>&1 &
 SWAY=$!
 trap 'kill "$SWAY" 2>/dev/null; rm -rf "$DIR"' EXIT
-for ((i = 0; i < 50; i++)); do
-	[ -S "$DIR/wayland-1" ] && break
-	sleep 0.1
-done
-[ -S "$DIR/wayland-1" ] || { echo "sway did not start"; exit 1; }
-export WAYLAND_DISPLAY=wayland-1
-sleep 0.3
+sway_wait || { echo "sway did not start"; exit 1; }
 
 MWT="$SRC/mwt -g $PROFILE_GRID -e"
 echo "grid $PROFILE_GRID, output $PROFILE_RES, $(grep -m1 'model name' /proc/cpuinfo | cut -d: -f2-)"

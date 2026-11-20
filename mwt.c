@@ -201,10 +201,26 @@ static void die_errno(const char *msg)
 #define DIM_ALPHA 140
 #define MENU_DISABLED_ALPHA 110
 #define MENU_SHORTCUT_ALPHA 150
-#define PASTE_MAX (64 * 1024 * 1024)    /* a larger paste is dropped whole */
+#define PASTE_MAX_MIB 64                 /* a larger paste is dropped whole */
+#define PASTE_MAX ((size_t)PASTE_MAX_MIB << 20)
 #define PASTE_TURN_MAX (1024 * 1024)    /* read in one turn of the event loop */
+/* pty output in one turn: this long or this much, whichever first (read_pty) */
+#define READ_TURN_MS 16
+#define READ_TURN_MAX (1024 * 1024)
+/* Without a pidfd the child is asked for this often; the shell's end is seen
+ * through the pty's too, but jobs can keep that open. */
+#define CHILD_POLL_MS 250
+/* the shell's time to end after SIGHUP when the window closes (CAVEATS.md) */
+#define HANGUP_GRACE_MS 2000
+/* key repeat until the compositor says (wl_keyboard.repeat_info) */
+#define REPEAT_RATE_DEFAULT 25  /* per second */
+#define REPEAT_DELAY_DEFAULT 600 /* ms */
+/* the mouse pointer's size without XCURSOR_SIZE, and the most it may ask for: no
+ * theme has more, and the size times the scale stays an int */
+#define CURSOR_SIZE_DEFAULT 24
+#define CURSOR_SIZE_MAX 256
 
-/* The raw paste is done with: up to 64 MiB, it is not kept for the next. */
+/* The raw paste is done with: up to PASTE_MAX, it is not kept for the next. */
 static void paste_free(void)
 {
 	free(t.paste_buf);
@@ -481,8 +497,11 @@ static void paste_text(const char *s, size_t n)
 	 * program: pasting again into one that does not read would grow without end.
 	 * mwt's own selection comes here without passing read_paste. */
 	if (n > PASTE_MAX || t.out.len + n > PASTE_MAX) {
-		fprintf(stderr, "mwt: paste dropped: %s\n", n > PASTE_MAX ?
-			"larger than 64 MiB" : "64 MiB would wait for the program");
+		if (n > PASTE_MAX)
+			fprintf(stderr, "mwt: paste dropped: larger than %d MiB\n", PASTE_MAX_MIB);
+		else
+			fprintf(stderr, "mwt: paste dropped: %d MiB would wait for the program\n",
+				PASTE_MAX_MIB);
 		return;
 	}
 	char *buf = malloc(n + 12);
@@ -619,54 +638,27 @@ static void paste(bool primary)
 	wl_display_flush(t.display);
 }
 
-static void drop_paste(const char *why)
-{
-	fprintf(stderr, "mwt: paste dropped: %s\n", why);
-	close(t.paste_fd);
-	t.paste_fd = -1;
-	paste_free();
-}
-
 /* A source may never stop writing: the rest waits for the next turn of the event
  * loop, so keys still get through, and past PASTE_MAX the paste goes whole. */
 static void read_paste(void)
 {
-	for (size_t got = 0;;) {
-		if (got >= PASTE_TURN_MAX)
-			return;
-		if (t.paste_len + 4096 > t.paste_cap) {
-			if (t.paste_len + 4096 > PASTE_MAX) {
-				drop_paste("larger than 64 MiB");
-				return;
-			}
-			size_t cap = MAX(t.paste_cap * 2, 8192);
-			char *p = realloc(t.paste_buf, cap);
-			if (!p) {
-				drop_paste("out of memory");
-				return;
-			}
-			t.paste_buf = p;
-			t.paste_cap = cap;
-		}
-		ssize_t n = read(t.paste_fd, t.paste_buf + t.paste_len, 4096);
-		if (n > 0) {
-			t.paste_len += n;
-			got += n;
-			continue;
-		}
-		if (n < 0 && (errno == EAGAIN || errno == EINTR))
-			return;
-		break;
-	}
+	int r = paste_read(t.paste_fd, &t.paste_buf, &t.paste_len, &t.paste_cap, PASTE_MAX,
+			   PASTE_TURN_MAX);
+	if (r == PASTE_MORE)
+		return;
 	close(t.paste_fd);
 	t.paste_fd = -1;
 	char *buf = NULL;
 	size_t len;
-	int r = paste_decode(t.paste_buf, t.paste_len, t.paste_latin1, PASTE_MAX, &buf, &len);
+	if (r == PASTE_OK)
+		r = paste_decode(t.paste_buf, t.paste_len, t.paste_latin1, PASTE_MAX, &buf, &len);
 	paste_free();
-	if (r != PASTE_OK) {
-		fprintf(stderr, "mwt: paste dropped: %s\n",
-			r == PASTE_NOMEM ? "out of memory" : "larger than 64 MiB");
+	if (r == PASTE_NOMEM) {
+		fprintf(stderr, "mwt: paste dropped: out of memory\n");
+		return;
+	}
+	if (r == PASTE_TOO_LARGE) {
+		fprintf(stderr, "mwt: paste dropped: larger than %d MiB\n", PASTE_MAX_MIB);
 		return;
 	}
 	paste_text(buf ? buf : "", len);
@@ -1386,10 +1378,9 @@ static void menu_open(void)
 
 /* ---- sizing ----------------------------------------------------------- */
 
-static void snap_size(int cols, int rows, int *w, int *h)
+static void snap(int cols, int rows, int *w, int *h)
 {
-	*w = (cols * t.cw + 2 * t.pad + t.scale - 1) / t.scale;
-	*h = (rows * t.ch + 2 * t.pad + t.scale - 1) / t.scale;
+	snap_size(cols, rows, t.cw, t.ch, t.pad, t.scale, w, h);
 }
 
 /* One cell at least: a compositor's resize may otherwise make the window smaller
@@ -1397,7 +1388,7 @@ static void snap_size(int cols, int rows, int *w, int *h)
 static void send_min_size(void)
 {
 	int w, h;
-	snap_size(1, 1, &w, &h);
+	snap(1, 1, &w, &h);
 	if (t.toplevel && (w != t.min_w || h != t.min_h)) {
 		xdg_toplevel_set_min_size(t.toplevel, w, h);
 		t.min_w = w;
@@ -1427,7 +1418,7 @@ static void update_grid(void)
 	t.need_redraw = true;
 }
 
-/* XCURSOR_SIZE, at most 256: no theme has more, and size * scale stays an int. */
+/* XCURSOR_SIZE, at most CURSOR_SIZE_MAX */
 static int cursor_size(void)
 {
 	const char *s = getenv("XCURSOR_SIZE");
@@ -1435,8 +1426,8 @@ static int cursor_size(void)
 	errno = 0;
 	long n = s ? strtol(s, &end, 10) : 0;
 	if (!s || end == s || *end || n <= 0)
-		return 24;
-	return errno == ERANGE || n > 256 ? 256 : (int)n;
+		return CURSOR_SIZE_DEFAULT;
+	return errno == ERANGE || n > CURSOR_SIZE_MAX ? CURSOR_SIZE_MAX : (int)n;
 }
 
 /* The new theme is loaded before the old one goes, so the cursor surface never holds
@@ -1508,15 +1499,20 @@ static void reload_font(double pt, int scale)
 	struct font *f = font_open(t.font_spec, pt, scale);
 	if (!f)
 		return;
-	/* A floating window keeps its grid and grows with the font: refuse a zoom
-	 * past what a buffer holds, as -g is refused, rather than stop drawing. */
-	int cw, ch, asc;
+	/* A floating window keeps its grid and grows with the font and the scale:
+	 * refuse a zoom or a scale past what a buffer holds, as -g is refused,
+	 * rather than stop drawing. At the old scale the compositor scales up. */
+	int cw, ch, asc, w, h;
 	font_metrics(f, &cw, &ch, &asc);
-	if (scale == t.scale && t.configured && !t.cfg_fixed &&
-	    !buffer_fits(t.vt->cols * cw + 2 * padding * scale + scale,
-			 t.vt->rows * ch + 2 * padding * scale + scale)) {
-		fprintf(stderr, "mwt: %g pt would need a buffer over 2 GiB, staying at %g pt\n",
-			font_size_pt(f), t.font_pt);
+	snap_size(t.vt->cols, t.vt->rows, cw, ch, padding * scale, scale, &w, &h);
+	if (t.configured && !t.cfg_fixed &&
+	    !buffer_fits((int)MIN((long long)w * scale, INT_MAX), (int)MIN((long long)h * scale, INT_MAX))) {
+		if (scale == t.scale)
+			fprintf(stderr, "mwt: %g pt would need a buffer over 2 GiB, staying at %g pt\n",
+				font_size_pt(f), t.font_pt);
+		else
+			fprintf(stderr, "mwt: scale %d would need a buffer over 2 GiB, staying at %d\n",
+				scale, t.scale);
 		font_close(f);
 		return;
 	}
@@ -1532,7 +1528,7 @@ static void reload_font(double pt, int scale)
 		load_cursor_theme();
 	if (t.configured) {
 		if (!t.cfg_fixed) /* keep columns and rows, the window follows */
-			snap_size(t.vt->cols, t.vt->rows, &t.width, &t.height);
+			snap(t.vt->cols, t.vt->rows, &t.width, &t.height);
 		update_grid();
 	}
 }
@@ -2014,12 +2010,12 @@ static void xs_configure(void *d, struct xdg_surface *xs, uint32_t serial)
 			/* -g, but no larger than the compositor says fits */
 			int cols = t.init_cols, rows = t.init_rows;
 			fit_bounds(&cols, &rows, t.bounds_w, t.bounds_h, t.scale, t.pad, t.cw, t.ch);
-			snap_size(cols, rows, &w, &h);
+			snap(cols, rows, &w, &h);
 		}
 	} else if (!t.cfg_fixed) {
 		int cols = MAX(1, (w * t.scale - 2 * t.pad) / t.cw);
 		int rows = MAX(1, (h * t.scale - 2 * t.pad) / t.ch);
-		snap_size(cols, rows, &w, &h);
+		snap(cols, rows, &w, &h);
 	}
 	t.width = w;
 	t.height = h;
@@ -2198,8 +2194,8 @@ static void read_pty(void)
 {
 	static char buf[65536];
 	size_t total = 0;
-	int64_t end = now_ms() + 16;
-	while (total < (1u << 20) && (!total || now_ms() < end)) {
+	int64_t end = now_ms() + READ_TURN_MS;
+	while (total < READ_TURN_MAX && (!total || now_ms() < end)) {
 		ssize_t n = read(t.pty, buf, sizeof buf);
 		if (n > 0) {
 			vt_write(t.vt, buf, n);
@@ -2290,7 +2286,7 @@ done:;
 	font_metrics(t.font, &t.cw, &t.ch, &t.ascent);
 	t.pad = padding;
 	int init_w, init_h;
-	snap_size(t.init_cols, t.init_rows, &init_w, &init_h);
+	snap(t.init_cols, t.init_rows, &init_w, &init_h);
 	if (!buffer_fits(init_w, init_h)) {
 		fprintf(stderr, "mwt: -g %dx%d with this font needs a buffer over 2 GiB\n",
 			t.init_cols, t.init_rows);
@@ -2316,8 +2312,8 @@ done:;
 		xkb_compose_table_unref(ct);
 	}
 	t.repeat_fd = timerfd_create(CLOCK_MONOTONIC, TFD_CLOEXEC | TFD_NONBLOCK);
-	t.repeat_rate = 25;
-	t.repeat_delay = 600;
+	t.repeat_rate = REPEAT_RATE_DEFAULT;
+	t.repeat_delay = REPEAT_DELAY_DEFAULT;
 
 	t.display = wl_display_connect(NULL);
 	if (!t.display)
@@ -2378,7 +2374,7 @@ done:;
 		/* Without a pidfd (before Linux 5.3, or denied by seccomp) only the
 		 * pty's end shows the shell's, and jobs can keep the pty open: the
 		 * child is asked for four times a second instead. */
-		if (poll(fds, 5 + nx, t.child.fd >= 0 ? -1 : 250) < 0) {
+		if (poll(fds, 5 + nx, t.child.fd >= 0 ? -1 : CHILD_POLL_MS) < 0) {
 			wl_display_cancel_read(t.display);
 			if (errno == EINTR)
 				continue;
@@ -2421,6 +2417,6 @@ done:;
 		xfer_drop(0);
 	wl_registry_destroy(t.registry);
 	wl_display_disconnect(t.display); /* the window goes first */
-	child_hangup(&t.child, &t.pty, 2000);
+	child_hangup(&t.child, &t.pty, HANGUP_GRACE_MS);
 	return 0;
 }

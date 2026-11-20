@@ -4,9 +4,16 @@ PKGS = wayland-client wayland-cursor xkbcommon fontconfig freetype2
 WP != pkg-config --variable=pkgdatadir wayland-protocols
 SCANNER != pkg-config --variable=wayland_scanner wayland-scanner
 
+# override: make CFLAGS=... sets the optimization and the like, and keeps these
 CFLAGS ?= -O2 -g
-CFLAGS += -std=c11 -Wall -Wextra $(shell pkg-config --cflags $(PKGS)) -I.
-LDLIBS += $(shell pkg-config --libs $(PKGS)) -lutil -lm
+override CFLAGS += -std=c11 -Wall -Wextra $(shell pkg-config --cflags $(PKGS)) -I.
+override LDLIBS += $(shell pkg-config --libs $(PKGS)) -lutil -lm
+
+# The tests, under sanitizers that stop at the first report.
+SAN = -fsanitize=address,undefined -fno-sanitize-recover=all
+TEST_CFLAGS = -std=c11 -Wall -Wextra -g $(SAN)
+FONT_CFLAGS = $(TEST_CFLAGS) -O1 -I. $(shell pkg-config --cflags fontconfig freetype2)
+FONT_LIBS = $(shell pkg-config --libs fontconfig freetype2) -lm
 
 PROTOS = xdg-shell xdg-decoration-unstable-v1 primary-selection-unstable-v1 viewporter \
 	xdg-activation-v1
@@ -39,49 +46,44 @@ sel.o: sel.c sel.h vt.h paste.h
 shell.o: shell.c shell.h paste.h
 util.o: util.c util.h
 
-%-client-protocol.h:
-	$(SCANNER) client-header $($*_XML) $@
+# each from its XML, made again when that changes
+.SECONDEXPANSION:
+%-client-protocol.h: $$($$*_XML)
+	$(SCANNER) client-header $< $@
 
-%-protocol.c:
-	$(SCANNER) private-code $($*_XML) $@
+%-protocol.c: $$($$*_XML)
+	$(SCANNER) private-code $< $@
 
 test_vt: test_vt.c vt.c vt.h version.h
-	$(CC) -std=c11 -Wall -Wextra -g -fsanitize=address,undefined -fno-sanitize-recover=all \
-		-Wl,--wrap=malloc,--wrap=calloc,--wrap=realloc -o $@ test_vt.c vt.c
+	$(CC) $(TEST_CFLAGS) -Wl,--wrap=malloc,--wrap=calloc,--wrap=realloc -o $@ test_vt.c vt.c
 
 test_rc: test_rc.c rc.c rc.h
-	$(CC) -std=c11 -Wall -Wextra -g -fsanitize=address,undefined -fno-sanitize-recover=all \
-		-o $@ test_rc.c rc.c -lm
+	$(CC) $(TEST_CFLAGS) -o $@ test_rc.c rc.c -lm
 
 # Keys and the mouse with keymaps compiled here: xkbcommon and its layouts, no
 # compositor.
 test_input: test_input.c input.c input.h vt.c vt.h version.h
-	$(CC) -std=c11 -Wall -Wextra -g -fsanitize=address,undefined -fno-sanitize-recover=all \
-		$(shell pkg-config --cflags xkbcommon) -o $@ test_input.c input.c vt.c \
+	$(CC) $(TEST_CFLAGS) $(shell pkg-config --cflags xkbcommon) -o $@ test_input.c input.c vt.c \
 		$(shell pkg-config --libs xkbcommon) -lm
 
 # What a paste becomes, and the clipboard's Latin-1; each allocation fails once
 # through --wrap.
 test_paste: test_paste.c paste.c paste.h
-	$(CC) -std=c11 -Wall -Wextra -g -fsanitize=address,undefined -fno-sanitize-recover=all \
-		-Wl,--wrap=malloc,--wrap=realloc -o $@ test_paste.c paste.c
+	$(CC) $(TEST_CFLAGS) -Wl,--wrap=malloc,--wrap=realloc -o $@ test_paste.c paste.c
 
 # The selection over lines the VT core holds; each allocation fails once through
 # --wrap.
 test_sel: test_sel.c sel.c sel.h paste.c paste.h vt.c vt.h version.h
-	$(CC) -std=c11 -Wall -Wextra -g -fsanitize=address,undefined -fno-sanitize-recover=all \
-		-Wl,--wrap=malloc,--wrap=calloc,--wrap=realloc -o $@ test_sel.c sel.c paste.c vt.c
+	$(CC) $(TEST_CFLAGS) -Wl,--wrap=malloc,--wrap=calloc,--wrap=realloc -o $@ test_sel.c sel.c paste.c vt.c
 
 # The shell and its pty with real ptys, pipes and processes, close_range refused
 # by seccomp; kill, realloc and opendir through --wrap, as small working fakes.
 test_shell: test_shell.c shell.c shell.h paste.c paste.h
-	$(CC) -std=c11 -Wall -Wextra -g -fsanitize=address,undefined -fno-sanitize-recover=all \
-		-Wl,--wrap=kill,--wrap=realloc,--wrap=opendir \
+	$(CC) $(TEST_CFLAGS) -Wl,--wrap=kill,--wrap=realloc,--wrap=opendir \
 		-o $@ test_shell.c shell.c paste.c -lutil
 
 test_util: test_util.c util.c util.h
-	$(CC) -std=c11 -Wall -Wextra -g -fsanitize=address,undefined -fno-sanitize-recover=all \
-		-o $@ test_util.c util.c
+	$(CC) $(TEST_CFLAGS) -o $@ test_util.c util.c
 
 # The unit tests (test_vt, test_rc, test_input, test_paste, test_sel,
 # test_shell, test_util), mwt's command line without a compositor (tests/args.sh), then
@@ -103,48 +105,36 @@ check: test_vt test_rc test_input test_paste test_sel test_shell test_util fuzz_
 # sanitizers; needs fallback fonts to mean anything, so make fonts runs it
 # (tests/fonts-run.sh).
 font_oom: tests/font_oom.c font.c font.h
-	$(CC) -std=c11 -Wall -Wextra -g -O1 -I. -fsanitize=address,undefined \
-		-fno-sanitize-recover=all $(shell pkg-config --cflags fontconfig freetype2) \
-		-Wl,--wrap=strdup -Wl,--wrap=FcPatternDuplicate -o $@ tests/font_oom.c font.c \
-		$(shell pkg-config --libs fontconfig freetype2) -lm
+	$(CC) $(FONT_CFLAGS) -Wl,--wrap=strdup -Wl,--wrap=FcPatternDuplicate -o $@ tests/font_oom.c font.c \
+		$(FONT_LIBS)
 
 # The glyph cache emptied at small limits, font.c built into the test; under
 # sanitizers, with a font that has Latin glyphs. make fonts runs it.
 font_cache: tests/font_cache.c font.c font.h
-	$(CC) -std=c11 -Wall -Wextra -g -O1 -I. -fsanitize=address,undefined \
-		-fno-sanitize-recover=all $(shell pkg-config --cflags fontconfig freetype2) \
-		-o $@ tests/font_cache.c $(shell pkg-config --libs fontconfig freetype2) -lm
+	$(CC) $(FONT_CFLAGS) -o $@ tests/font_cache.c $(FONT_LIBS)
 
 # Glyphs no open face has: one FcFontSort for all, counted through --wrap; under
 # sanitizers, with the fonts of make fonts.
 font_lookup: tests/font_lookup.c font.c font.h
-	$(CC) -std=c11 -Wall -Wextra -g -O1 -I. -fsanitize=address,undefined \
-		-fno-sanitize-recover=all $(shell pkg-config --cflags fontconfig freetype2) \
-		-Wl,--wrap=FcFontMatch -Wl,--wrap=FcFontSort -Wl,--wrap=malloc -o $@ tests/font_lookup.c \
-		$(shell pkg-config --libs fontconfig freetype2) -lm
+	$(CC) $(FONT_CFLAGS) -Wl,--wrap=FcFontMatch -Wl,--wrap=FcFontSort -Wl,--wrap=malloc -o $@ tests/font_lookup.c \
+		$(FONT_LIBS)
 
 # Each style draws what regular has, where its own face lacks it; under
 # sanitizers, with DejaVu Sans Mono. make fonts runs it.
 font_style: tests/font_style.c font.c font.h
-	$(CC) -std=c11 -Wall -Wextra -g -O1 -I. -fsanitize=address,undefined \
-		-fno-sanitize-recover=all $(shell pkg-config --cflags fontconfig freetype2) \
-		-o $@ tests/font_style.c $(shell pkg-config --libs fontconfig freetype2) -lm
+	$(CC) $(FONT_CFLAGS) -o $@ tests/font_style.c $(FONT_LIBS)
 
 # Two faces of one .ttc, by index; one fails to load through --wrap. Under
 # sanitizers, with mwt-test.ttc of make fonts.
 font_ttc: tests/font_ttc.c font.c font.h
-	$(CC) -std=c11 -Wall -Wextra -g -O1 -I. -fsanitize=address,undefined \
-		-fno-sanitize-recover=all $(shell pkg-config --cflags fontconfig freetype2) \
-		-Wl,--wrap=FT_New_Face -o $@ tests/font_ttc.c \
-		$(shell pkg-config --libs fontconfig freetype2) -lm
+	$(CC) $(FONT_CFLAGS) -Wl,--wrap=FT_New_Face -o $@ tests/font_ttc.c \
+		$(FONT_LIBS)
 
 fuzz_regress: tests/fuzz_vt.c vt.c vt.h version.h
-	$(CC) -std=c11 -Wall -Wextra -g -O1 -I. -DFUZZ_STANDALONE -fsanitize=address,undefined \
-		-fno-sanitize-recover=all -o $@ tests/fuzz_vt.c vt.c
+	$(CC) $(TEST_CFLAGS) -O1 -I. -DFUZZ_STANDALONE -o $@ tests/fuzz_vt.c vt.c
 
 test_replay: tests/replay.c vt.c vt.h version.h
-	$(CC) -std=c11 -Wall -Wextra -g -O1 -I. -fsanitize=address,undefined \
-		-fno-sanitize-recover=all -o $@ tests/replay.c vt.c
+	$(CC) $(TEST_CFLAGS) -O1 -I. -o $@ tests/replay.c vt.c
 
 # About 290 recorded VT100 animations and ANSI files through the VT core, whole,
 # byte by byte, in random chunks and while resizing; fetched on the first run.
@@ -167,8 +157,7 @@ fuzz:
 
 # Each capability of mwt.info against the VT core. Needs python3 and ncurses.
 vtdump: tests/vtdump.c vt.c vt.h version.h
-	$(CC) -std=c11 -Wall -Wextra -g -fsanitize=address,undefined -fno-sanitize-recover=all \
-		-I. -o $@ tests/vtdump.c vt.c
+	$(CC) $(TEST_CFLAGS) -I. -o $@ tests/vtdump.c vt.c
 
 terminfo: vtdump
 	tests/terminfo.py

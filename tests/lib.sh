@@ -3,13 +3,12 @@
 # size from sway's tree. Sourced, with DIR and VINPUT set and DIR/sway.conf
 # written; sway_start sets SWAY, VIN_PID, WAYLAND_DISPLAY and SWAYSOCK.
 
-# Both sockets, the Wayland one and sway's IPC, polled for: swaymsg right after
-# the first could find no IPC socket yet.
-sway_start() {
+# Both sockets, the Wayland one and sway's IPC, polled for, up to 5 s: swaymsg
+# right after the first could find no IPC socket yet. Exports WAYLAND_DISPLAY and
+# SWAYSOCK; false if they did not come. headless.sh, esctest.sh and
+# profile-run.sh start sway themselves and wait with this.
+sway_wait() {
 	local i
-	rm -f "$DIR/wayland-1" "$DIR"/sway-ipc.*
-	sway -c "$DIR/sway.conf" >"$DIR/sway.log" 2>&1 &
-	SWAY=$!
 	SWAYSOCK=
 	for ((i = 0; i < 100; i++)); do
 		SWAYSOCK=$(ls "$DIR"/sway-ipc.*.sock 2>/dev/null | head -1)
@@ -18,6 +17,13 @@ sway_start() {
 	done
 	[ -S "$DIR/wayland-1" ] && [ -n "$SWAYSOCK" ] || return 1
 	export WAYLAND_DISPLAY=wayland-1 SWAYSOCK
+}
+
+sway_start() {
+	rm -f "$DIR/wayland-1" "$DIR"/sway-ipc.*
+	sway -c "$DIR/sway.conf" >"$DIR/sway.log" 2>&1 &
+	SWAY=$!
+	sway_wait || return 1
 	coproc VIN { "$VINPUT" 1000 700; }
 	VIN_PID=$VIN_PID
 	# Bash closes a coproc's descriptors in subshells, and `shown | grep` is one.

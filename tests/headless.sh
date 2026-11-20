@@ -4,6 +4,7 @@
 # Needs sway, wtype, grim, tic, python3 and vinput from mwc.
 set -u
 cd "$(dirname "$0")/.." || exit 1
+. tests/lib.sh
 export MWT=${MWT:-$PWD/mwt}
 export VINPUT=${VINPUT:-${MWC_DIR:-../../mwc}/build/vinput}
 export PYTHONDONTWRITEBYTECODE=1
@@ -40,13 +41,5 @@ cleanup() {
 trap cleanup EXIT
 sway -c "$DIR/sway.conf" >"$DIR/sway.log" 2>&1 &
 SWAY=$!
-for ((i = 0; i < 50; i++)); do
-	[ -S "$DIR/wayland-1" ] && break
-	sleep 0.1
-done
-[ -S "$DIR/wayland-1" ] || { echo "FAIL: sway did not start"; exit 1; }
-export WAYLAND_DISPLAY=wayland-1
-sleep 0.3
-SWAYSOCK=$(ls "$DIR"/sway-ipc.*.sock 2>/dev/null | head -1)
-export SWAYSOCK
+sway_wait || { echo "FAIL: sway did not start"; exit 1; }
 PYTHONPATH=$PWD/tests python3 "$@"

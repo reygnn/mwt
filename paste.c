@@ -1,6 +1,8 @@
 /* paste.c - see paste.h */
+#include <errno.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
 
 #include "paste.h"
 
@@ -145,4 +147,34 @@ char *to_latin1(const char *s)
 	}
 	out[o] = 0;
 	return out;
+}
+
+int paste_read(int fd, char **buf, size_t *len, size_t *cap, size_t max, size_t turn)
+{
+	for (size_t got = 0; got < turn;) {
+		if (*len > max)
+			return PASTE_TOO_LARGE;
+		/* one byte past max at most: enough to know it is too large */
+		size_t want = max + 1 - *len < 4096 ? max + 1 - *len : 4096;
+		if (*len + want > *cap) {
+			size_t ncap = *cap * 2 > 8192 ? *cap * 2 : 8192;
+			if (ncap > max + 1)
+				ncap = max + 1;
+			char *p = realloc(*buf, ncap);
+			if (!p)
+				return PASTE_NOMEM;
+			*buf = p;
+			*cap = ncap;
+		}
+		ssize_t n = read(fd, *buf + *len, want);
+		if (n > 0) {
+			*len += (size_t)n;
+			got += (size_t)n;
+			continue;
+		}
+		if (n < 0 && (errno == EAGAIN || errno == EINTR))
+			return PASTE_MORE;
+		return *len > max ? PASTE_TOO_LARGE : PASTE_OK;
+	}
+	return *len > max ? PASTE_TOO_LARGE : PASTE_MORE;
 }

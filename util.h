@@ -19,6 +19,11 @@ int menu_next(int hover, int n, int dir, unsigned enabled);
 
 #include <stddef.h>
 
+/* The window's logical size for a grid of cols x rows, cells of cw x ch and pad
+ * on each side in buffer pixels of the scale: rounded up, so that the buffer,
+ * w * scale by h * scale, holds the grid. */
+void snap_size(int cols, int rows, int cw, int ch, int pad, int scale, int *w, int *h);
+
 /* cols and rows made to fit configure_bounds of bw x bh logical pixels (0: no
  * bound), with cells of cw x ch and pad on each side in buffer pixels of the
  * scale; one cell at least. KWin and mutter send bounds, sway does not. */

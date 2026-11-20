@@ -133,6 +133,23 @@ static void test_clip(void)
 	CHECK(utf8_clip(big, 1023) == 1023);
 }
 
+static void test_snap(void)
+{
+	int w, h;
+	/* 80x24 cells of 9x18, padding 2: 724x436 */
+	snap_size(80, 24, 9, 18, 2, 1, &w, &h);
+	CHECK(w == 724 && h == 436);
+	/* scale 2, cells of 18x35, padding 4: 1448x848 buffer pixels, half of them
+	 * logical, rounded up so the buffer holds the grid */
+	snap_size(80, 24, 18, 35, 4, 2, &w, &h);
+	CHECK(w == 724 && h == 424);
+	snap_size(1, 1, 17, 35, 4, 2, &w, &h);
+	CHECK(w == 13 && h == 22 && w * 2 >= 17 + 8 && h * 2 >= 35 + 8);
+	/* the largest grid at a large cell: no overflow on the way */
+	snap_size(4096, 2048, 100000, 100000, 4, 4, &w, &h);
+	CHECK(w == (int)((4096LL * 100000 + 8 + 3) / 4));
+}
+
 static void test_bounds(void)
 {
 	int c = 400, r = 200;
@@ -208,6 +225,7 @@ int main(void)
 	test_menu();
 	test_clip();
 	test_bounds();
+	test_snap();
 	test_stdio();
 	printf("test_util: %d/%d checks passed\n", checks - failures, checks);
 	return failures != 0;

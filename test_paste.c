@@ -5,6 +5,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <fcntl.h>
+#include <unistd.h>
 
 #include "paste.h"
 
@@ -529,6 +531,54 @@ static void test_mime(void)
 	CHECK(mime_rank("") == MIME_COUNT);
 }
 
+/* n bytes of x through a pipe, read with max and turn; the result and the bytes
+ * read. The pipe is non-blocking, as the clipboard's in mwt. */
+static int read_n(size_t n, size_t max, size_t turn, size_t *got, bool close_it, long fail)
+{
+	int fd[2];
+	if (pipe(fd) < 0)
+		return -1;
+	fcntl(fd[0], F_SETFL, O_NONBLOCK);
+	fcntl(fd[1], F_SETPIPE_SZ, 1 << 20);
+	char *w = malloc(n ? n : 1);
+	memset(w, 'x', n);
+	if (write(fd[1], w, n) != (ssize_t)n)
+		n = 0;
+	free(w);
+	if (close_it)
+		close(fd[1]);
+	char *buf = NULL;
+	size_t len = 0, cap = 0;
+	countdown = fail;
+	int r = paste_read(fd[0], &buf, &len, &cap, max, turn);
+	countdown = -1;
+	*got = len;
+	free(buf);
+	close(fd[0]);
+	if (!close_it)
+		close(fd[1]);
+	return r;
+}
+
+static void test_read(void)
+{
+	size_t got;
+	countdown = -1;
+	/* exactly max fits; one byte more is too large: mwt took 64 MiB less 4 KiB */
+	CHECK(read_n(10000, 10000, 1 << 20, &got, true, -1) == PASTE_OK && got == 10000);
+	CHECK(read_n(10001, 10000, 1 << 20, &got, true, -1) == PASTE_TOO_LARGE);
+	CHECK(read_n(9999, 10000, 1 << 20, &got, true, -1) == PASTE_OK && got == 9999);
+	CHECK(read_n(0, 10000, 1 << 20, &got, true, -1) == PASTE_OK && got == 0);
+	/* a source that has not ended: more to come */
+	CHECK(read_n(5000, 10000, 1 << 20, &got, false, -1) == PASTE_MORE && got == 5000);
+	/* a turn's worth, then the rest the next time */
+	CHECK(read_n(20000, 100000, 8192, &got, true, -1) == PASTE_MORE && got >= 8192 && got < 20000);
+	/* far more than max: stops one byte past it */
+	CHECK(read_n(100000, 10000, 1 << 20, &got, true, -1) == PASTE_TOO_LARGE && got == 10001);
+	/* out of memory growing the buffer */
+	CHECK(read_n(100, 10000, 1 << 20, &got, true, 0) == PASTE_NOMEM);
+}
+
 int main(void)
 {
 	test_utf8_seq();
@@ -538,6 +588,7 @@ int main(void)
 	test_brackets();
 	test_latin1();
 	test_mime();
+	test_read();
 	printf("test_paste: %d/%d checks passed\n", checks - failures, checks);
 	return failures != 0;
 }

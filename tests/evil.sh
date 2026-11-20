@@ -106,9 +106,13 @@ start_mwt() {
 	(cd "$HOME" && env "$@" sh -c '"$0" >"$1" 2>&1 &' "$MWT" "$LOG")
 	wait_mwt
 }
+# SIGTERM, waited for: a mwt that hangs on it is a gap, not killed unseen. It
+# waits 2 s for a shell that ignores SIGHUP, so 3 s.
 stop_mwt() {
+	local i
 	pkill -x "$NAME" 2>/dev/null
-	sleep 0.3
+	for ((i = 0; i < 30; i++)); do alive || break; sleep 0.1; done
+	alive && gap "mwt did not end on SIGTERM within 3 s"
 	pkill -9 -x "$NAME" 2>/dev/null
 	pkill -x sleep 2>/dev/null
 	pkill -x yes 2>/dev/null
@@ -1120,7 +1124,8 @@ cwd_tricks() {
 exit_with_jobs() {
 	start_mwt
 	T '(while :; do echo x; sleep 0.01; done) & sleep 1000 & exit' -k Return
-	sleep 3
+	local i
+	for ((i = 0; i < 25; i++)); do alive || break; sleep 0.2; done
 	if alive; then gap "mwt stays after the shell exits with jobs on the pty"; else ok "mwt ends with the shell, jobs on the pty or not"; fi
 	pgrep -x sleep >/dev/null && info "a background 'sleep 1000' outlives the window (HUP not delivered to it)"
 	pkill -f 'while :' 2>/dev/null
@@ -1546,6 +1551,33 @@ zoom_limit() {
 	if [ "$same" = 0 ]; then ok "and it still draws"; else gap "after the refused zoom nothing new is drawn"; fi
 	stop_mwt
 }
+# The same window moved to a scale of 2 would need four times the buffer: the
+# scale is refused, mwt stays at 1 and goes on drawing, the compositor scales it.
+# The check before was for a zoom only.
+scale_limit() {
+	LOG=$DIR/log.$CASE
+	(cd "$HOME" && "$MWT" -g 2048x1500 -e sh -c 'read x; echo drawn; exec sleep 300' >"$LOG" 2>&1 &)
+	local i
+	for ((i = 0; i < 50; i++)); do swaymsg -t get_tree | grep -q '"app_id": "mwt"' && break; sleep 0.2; done
+	sleep 1
+	swaymsg -q output HEADLESS-1 scale 2
+	for ((i = 0; i < 300; i++)); do grep -q 'buffer over 2 GiB' "$LOG" && break; sleep 0.2; done
+	if grep -q 'scale 2 would need a buffer over 2 GiB, staying at 1' "$LOG" && ! grep -q 'not drawing' "$LOG"; then
+		ok "a scale past a 2 GiB buffer is refused, mwt stays at 1"
+	else gap "a scale past a 2 GiB buffer: $(grep -m1 '2 GiB' "$LOG" | cut -c1-90)"; fi
+	alive || gap "mwt died"
+	grim -t ppm "$DIR/scale-before.ppm" 2>/dev/null
+	T -k Return
+	local same=1
+	for ((i = 0; i < 50; i++)); do
+		sleep 0.2
+		grim -t ppm "$DIR/scale-after.ppm" 2>/dev/null
+		cmp -s "$DIR/scale-before.ppm" "$DIR/scale-after.ppm" || { same=0; break; }
+	done
+	if [ "$same" = 0 ]; then ok "and it still draws"; else gap "after the refused scale nothing new is drawn"; fi
+	swaymsg -q output HEADLESS-1 scale 1
+	stop_mwt
+}
 compositor_dies() {
 	start_mwt
 	T 'sleep 777' -k Return
@@ -1564,7 +1596,7 @@ for c in dcs_swallow osc_swallow_cat fuzz noncharacters \
 	snippet_typed snippet_paste snippet_paste_no_newline \
 	stty_raw_read_in_shell inlcr tcoff cyrillic_ctrl_c cyrillic_raw copy_on_ru raw_paste_ctrl_c paste_bracket_on_signal python_repl flood_ctrl_c flood_rss rep_flood soak reply_flood reply_flood_raw title_flood title_flood_stalled \
 	args shells closed_stdio blocked_signals terminfo_dirs cwd_tricks exit_with_jobs no_pidfd no_pidfd_sigchld close_ignores_hup \
-	tiny resize_storm fd_leak fd_to_child stalled_readers stalled_pipes silent_source plain_source flood_source fd_limit low_memory menu_abuse buffer_fail first_buffer_fail zoom_limit compositor_dies; do
+	tiny resize_storm fd_leak fd_to_child stalled_readers stalled_pipes silent_source plain_source flood_source fd_limit low_memory menu_abuse buffer_fail first_buffer_fail zoom_limit scale_limit compositor_dies; do
 	run "$c"
 done
 echo "=== $GAPS gaps, $CRASHES crashes ==="
