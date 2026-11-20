@@ -56,10 +56,11 @@ struct face {
 	int index;
 	double weight; /* fontconfig's, to tell a bold face from one to embolden */
 	unsigned long used; /* fallback faces: font.tick when last found */
+	bool mono; /* fallback faces: fontconfig says monospaced or dual */
 };
 
 struct entry {
-	uint32_t key; /* cp << 2 | style, 0 = empty slot */
+	uint32_t key; /* cp << 3 | wide << 2 | style */
 	bool used;
 	struct glyph g;
 };
@@ -355,8 +356,10 @@ static bool sorted_fonts(struct font *f)
 	FcConfigSubstitute(NULL, f->sort_pat, FcMatchPattern);
 	FcDefaultSubstitute(f->sort_pat);
 	FcResult res;
-	/* trimmed: a font that adds nothing to those before it is left out */
-	f->sorted = FcFontSort(NULL, f->sort_pat, FcTrue, &f->cover, &res);
+	/* Not trimmed: a trimmed list leaves out a font that adds nothing to those
+	 * before it, and so D2Coding behind NanumGothic, the monospaced face behind
+	 * the proportional one find_fallback should pass over. */
+	f->sorted = FcFontSort(NULL, f->sort_pat, FcFalse, &f->cover, &res);
 	return f->sorted && f->cover;
 }
 
@@ -367,22 +370,43 @@ static int style_near(int i, int style)
 	return 4 * __builtin_popcount((unsigned)(i & style)) - __builtin_popcount((unsigned)(i & ~style));
 }
 
-/* find or load a face that has cp; NULL if none on the system. The style faces
+static bool is_mono(FcPattern *p)
+{
+	int spacing = FC_PROPORTIONAL;
+	FcPatternGetInteger(p, FC_SPACING, 0, &spacing);
+	return spacing >= FC_DUAL;
+}
+
+static struct face *found(struct font *f, struct face *fc)
+{
+	fc->used = ++f->tick;
+	return fc;
+}
+
+/* find or load a face that has cp; NULL if none on the system. Monospaced faces
+ * first, open or not, by fontconfig's FC_SPACING: their glyphs are drawn for a
+ * grid and need less fitting (6.6 of the review of 2026-11-18). The style faces
  * that fit were tried before; one that does not comes last, from the font's
  * own file: U+27BF, only in DejaVu's bold file, would be bold in regular. */
 static struct face *find_fallback(struct font *f, uint32_t cp, int style)
 {
-	struct face *other = NULL;
+	struct face *other = NULL, *prop = NULL;
 	for (int i = 0; i < f->nfallback; i++)
 		if (FT_Get_Char_Index(f->fallback[i].ft, cp)) {
-			f->fallback[i].used = ++f->tick;
-			return &f->fallback[i];
+			if (f->fallback[i].mono)
+				return found(f, &f->fallback[i]);
+			if (!prop)
+				prop = &f->fallback[i];
 		}
 	if (!sorted_fonts(f) || !FcCharSetHasChar(f->cover, cp))
-		return NULL;
+		return prop ? found(f, prop) : NULL;
+	/* an open proportional face before loading another */
+	for (int pass = 0; pass < (prop ? 1 : 2); pass++)
 	for (int k = 0; k < f->sorted->nfont; k++) {
+		bool mono = is_mono(f->sorted->fonts[k]);
 		FcCharSet *cs;
-		if (FcPatternGetCharSet(f->sorted->fonts[k], FC_CHARSET, 0, &cs) != FcResultMatch ||
+		if (mono != (pass == 0) ||
+		    FcPatternGetCharSet(f->sorted->fonts[k], FC_CHARSET, 0, &cs) != FcResultMatch ||
 		    !FcCharSetHasChar(cs, cp))
 			continue;
 		FcPattern *m = FcFontRenderPrepare(NULL, f->sort_pat, f->sorted->fonts[k]);
@@ -430,11 +454,11 @@ static struct face *find_fallback(struct font *f, uint32_t cp, int style)
 		} else {
 			f->nfallback++;
 		}
-		nf.used = ++f->tick;
+		nf.mono = mono;
 		f->fallback[slot] = nf;
-		return &f->fallback[slot];
+		return found(f, &f->fallback[slot]);
 	}
-	return other;
+	return prop ? found(f, prop) : other;
 }
 
 /* The face cp is drawn from in style, NULL if none has it; *embolden says
@@ -466,9 +490,68 @@ static struct face *face_for(struct font *f, uint32_t cp, int style, bool *embol
 	return fc;
 }
 
+static FT_GlyphSlot load(struct face *fc, FT_UInt gi, bool embolden)
+{
+	if (FT_Load_Glyph(fc->ft, gi, LOAD_FLAGS))
+		return NULL;
+	FT_GlyphSlot s = fc->ft->glyph;
+	if (embolden)
+		FT_GlyphSlot_Embolden(s);
+	if (FT_Render_Glyph(s, FT_RENDER_MODE_NORMAL))
+		return NULL;
+	return s;
+}
+
+static void set_size(struct face *fc, double px)
+{
+	FT_Set_Char_Size(fc->ft, 0, (FT_F26Dot6)fmax(1, lround(px * 64)), 72, 72);
+}
+
+/* A glyph of a fallback face in its cells, w wide (6.2 of the review of
+ * 2026-11-18): a proportional font draws ① or a hanja wider than the grid, and
+ * taller than its row. One too large is drawn smaller and centred; one that
+ * fits is centred by its advance, as a monospaced font would place it, and
+ * moved into the cells where it sticks out. NULL for none. */
+static FT_GlyphSlot fit(struct font *f, struct face *fc, FT_UInt gi, bool embolden, int w,
+			FT_GlyphSlot s, int *left, int *top)
+{
+	int bw = (int)s->bitmap.width, bh = (int)s->bitmap.rows;
+	if (bw > w || bh > f->ch) {
+		/* hinting may round the smaller size up a pixel: a few tries */
+		double px = f->size_px;
+		for (int i = 0; i < 4 && s && (bw > w || bh > f->ch); i++) {
+			px *= fmin((double)w / bw, (double)f->ch / bh) * (i ? 0.97 : 1);
+			set_size(fc, px);
+			s = load(fc, gi, embolden);
+			if (s) {
+				bw = (int)s->bitmap.width;
+				bh = (int)s->bitmap.rows;
+			}
+		}
+		/* the bitmap stays in the slot: the face is shared */
+		set_size(fc, f->size_px);
+		/* U+FDFD, twelve cells wide, below a pixel high in one: nothing
+		 * rather than over the next cells */
+		if (!s || bw > w || bh > f->ch)
+			return NULL;
+		*left = (w - bw) / 2;
+		*top = f->ascent - (f->ch - bh) / 2;
+	} else {
+		int adv = (int)lround(s->advance.x / 64.0);
+		*left = s->bitmap_left + (adv > 0 ? (w - adv) / 2 : 0);
+		*top = s->bitmap_top;
+	}
+	*left = *left < 0 ? 0 : *left > w - bw ? w - bw : *left;
+	if (*top > f->ascent)
+		*top = f->ascent;
+	if (*top - bh < f->ascent - f->ch)
+		*top = f->ascent - f->ch + bh;
+	return s;
+}
+
 /* False when g is empty for lack of memory, and may not be the next time: the
  * bitmap, or the list of the system's fonts to find a face in. */
-static bool render(struct font *f, uint32_t cp, int style, struct glyph *g)
+static bool render(struct font *f, uint32_t cp, int style, bool wide, struct glyph *g)
 {
 	memset(g, 0, sizeof *g);
 	bool embolden;
@@ -476,20 +559,20 @@ static bool render(struct font *f, uint32_t cp, int style, struct glyph *g)
 	FT_UInt gi = fc ? FT_Get_Char_Index(fc->ft, cp) : 0;
 	if (!gi)
 		return !f->sorted_tried || (f->sorted && f->cover);
-	if (FT_Load_Glyph(fc->ft, gi, LOAD_FLAGS))
+	FT_GlyphSlot s = load(fc, gi, embolden);
+	if (!s || !s->bitmap.width || !s->bitmap.rows)
 		return true;
-	FT_GlyphSlot s = fc->ft->glyph;
-	if (embolden)
-		FT_GlyphSlot_Embolden(s);
-	if (FT_Render_Glyph(s, FT_RENDER_MODE_NORMAL))
-		return true;
+	int left = s->bitmap_left, top = s->bitmap_top;
+	if (fc >= f->fallback && fc < f->fallback + MAX_FALLBACK) {
+		s = fit(f, fc, gi, embolden, (wide ? 2 : 1) * f->cw, s, &left, &top);
+		if (!s || !s->bitmap.width || !s->bitmap.rows)
+			return true;
+	}
 	FT_Bitmap *b = &s->bitmap;
-	if (!b->width || !b->rows)
-		return true;
 	g->w = b->width;
 	g->h = b->rows;
-	g->left = s->bitmap_left;
-	g->top = s->bitmap_top;
+	g->left = left;
+	g->top = top;
 	g->alpha = malloc((size_t)g->w * g->h);
 	if (!g->alpha) {
 		g->w = g->h = 0;
@@ -542,9 +625,9 @@ static void cache_empty(struct font *f)
 	f->cache_used = f->cache_bytes = 0;
 }
 
-const struct glyph *font_glyph(struct font *f, uint32_t cp, int style)
+const struct glyph *font_glyph(struct font *f, uint32_t cp, int style, bool wide)
 {
-	uint32_t key = cp << 2 | (style & 3);
+	uint32_t key = (cp & 0x1fffff) << 3 | (uint32_t)wide << 2 | (style & 3);
 	struct entry *e = slot(f->cache, f->cache_cap, key, f->hash_seed);
 	if (e->used)
 		return &e->g;
@@ -570,7 +653,7 @@ const struct glyph *font_glyph(struct font *f, uint32_t cp, int style)
 			return &none;
 		}
 	}
-	if (!render(f, cp, style & 3, &e->g)) {
+	if (!render(f, cp, style & 3, wide, &e->g)) {
 		/* not kept: the next time may have the memory. The slot was free
 		 * and is the end of its run, so leaving it free breaks no run. */
 		static const struct glyph none;

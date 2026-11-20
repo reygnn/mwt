@@ -852,12 +852,12 @@ static void draw_row(struct buffer *b, int r, bool sel, int64_t ba, int bc,
 			}
 			if (c.cp > ' ' && !(c.attr & ATTR_INVISIBLE)) {
 				int style = (c.attr & ATTR_BOLD ? 1 : 0) | (c.attr & ATTR_ITALIC ? 2 : 0);
-				const struct glyph *g = font_glyph(t.font, c.cp, style);
+				const struct glyph *g = font_glyph(t.font, c.cp, style, span == 2);
 				/* A cell beyond its own either way, in the grid: an
 				 * italic or a bold leans into the next, and as rows
 				 * are drawn whole, what it covers there is drawn again
-				 * with it. No more: a fallback glyph far too wide, as
-				 * U+FDFD at 12 cells, would cover the text after it. */
+				 * with it. No more: a glyph far too wide would cover
+				 * the text after it; font.c fits the fallback ones. */
 				if (g->w)
 					blit(b, g, x0, y0 + t.ascent, MAX(t.pad, x0 - t.cw),
 					     MIN(t.pad + vt->cols * t.cw, x0 + (span + 1) * t.cw),
@@ -1188,7 +1188,7 @@ static void menu_close(void)
 static void menu_text(struct buffer *b, const char *s, int x, int y, uint32_t fg)
 {
 	for (; *s; s++, x += t.cw) {
-		const struct glyph *g = font_glyph(t.font, (unsigned char)*s, STYLE_REGULAR);
+		const struct glyph *g = font_glyph(t.font, (unsigned char)*s, STYLE_REGULAR, false);
 		if (g->w)
 			blit(b, g, x, y, 0, b->w, 0, b->h, fg);
 	}

@@ -137,7 +137,7 @@ static int from_regular(struct font *f)
 	for (uint32_t cp = 0x21; cp < 0x10000; cp++) {
 		if (!FT_Get_Char_Index(f->style[STYLE_REGULAR].ft, cp))
 			continue;
-		if (!font_glyph(f, cp, STYLE_REGULAR)->w)
+		if (!font_glyph(f, cp, STYLE_REGULAR, false)->w)
 			continue; /* blank in regular too */
 		for (int s = 1; s < 4; s++) {
 			bool emb = false;
@@ -145,7 +145,7 @@ static int from_regular(struct font *f)
 			if (FT_Get_Char_Index(f->style[s].ft, cp))
 				continue;
 			gaps++;
-			if (!font_glyph(f, cp, s)->w)
+			if (!font_glyph(f, cp, s, false)->w)
 				FAIL("U+%04X is drawn in regular but not in %s\n", (unsigned)cp, name[s]);
 		}
 	}

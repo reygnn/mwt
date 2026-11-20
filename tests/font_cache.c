@@ -119,8 +119,8 @@ int main(int argc, char **argv)
 		return 1;
 	}
 	static struct copy a, ab;
-	keep(&a, font_glyph(f, 'A', STYLE_REGULAR));
-	keep(&ab, font_glyph(f, 'A', STYLE_BOLD));
+	keep(&a, font_glyph(f, 'A', STYLE_REGULAR, false));
+	keep(&ab, font_glyph(f, 'A', STYLE_BOLD, false));
 	if (!a.w || (size_t)a.w * a.h > sizeof a.alpha) {
 		fprintf(stderr, "font_cache: no usable glyph for A\n");
 		return 1;
@@ -135,7 +135,7 @@ int main(int argc, char **argv)
 					continue;
 				for (int s = 0; s < (phase ? 1 : 4); s++) {
 					size_t before = f->cache_used;
-					const struct glyph *g = font_glyph(f, cp, s);
+					const struct glyph *g = font_glyph(f, cp, s, false);
 					if (f->cache_used < before)
 						emptied[phase]++;
 					biggest = MAX(biggest, (size_t)g->w * g->h);
@@ -157,7 +157,7 @@ int main(int argc, char **argv)
 		       emptied[0], emptied[1]);
 		fails++;
 	}
-	if (!same(&a, font_glyph(f, 'A', STYLE_REGULAR)) || !same(&ab, font_glyph(f, 'A', STYLE_BOLD))) {
+	if (!same(&a, font_glyph(f, 'A', STYLE_REGULAR, false)) || !same(&ab, font_glyph(f, 'A', STYLE_BOLD, false))) {
 		printf("FAIL: A after the cache was emptied is not the A before\n");
 		fails++;
 	}

@@ -191,9 +191,14 @@ no font on the system has it.
 A face that maps a character to an empty glyph counts as having it. DejaVu Sans Mono
 Oblique does so for U+1D3D, which is blank in italic and bold italic.
 
-A glyph may reach a cell into its neighbours, as an italic does, but no further: a
-fallback glyph much wider than its cell, as U+FDFD from Noto Sans Arabic at about 12
-cells, is cut there. Accents above the font's ascent, as on Ǖ, are cut at the row.
+A glyph of the font may reach a cell into its neighbours, as an italic does. Accents
+above the font's ascent, as on Ǖ, are cut at the row.
+
+A glyph from another font is drawn smaller where it does not fit its one or two cells,
+and not at all where it would be less than a pixel high then: U+FDFD from Noto Sans
+Arabic, about 12 cells wide, at 6 pt. Characters a monospaced font has come from it
+rather than from a proportional one, but only as fontconfig tells them apart: Noto Sans
+Mono sets no spacing and counts as proportional.
 
 Out of memory a glyph may be blank. Left so by its bitmap or by the list of the system's
 fonts, tried again at most once a second, it shows once its row is drawn again; where

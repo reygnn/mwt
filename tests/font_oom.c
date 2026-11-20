@@ -47,7 +47,7 @@ static bool run(const char *spec)
 		return false;
 	for (size_t i = 0; i < sizeof cps / sizeof *cps; i++)
 		for (int s = 0; s < 4; s++)
-			font_glyph(f, cps[i], s);
+			font_glyph(f, cps[i], s, false);
 	font_close(f);
 	return true;
 }

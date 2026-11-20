@@ -76,7 +76,7 @@ int main(int argc, char **argv)
 	for (size_t k = 0; k < sizeof ranges / sizeof ranges[0]; k++)
 		for (uint32_t cp = ranges[k][0]; cp < ranges[k][1]; cp++)
 			for (int s = 0; s < 4; s++) {
-				const struct glyph *g = font_glyph(f, cp, s);
+				const struct glyph *g = font_glyph(f, cp, s, false);
 				if (s || cp >= 0xf0000)
 					continue;
 				FcChar32 c = cp;
@@ -112,8 +112,8 @@ int main(int argc, char **argv)
 		fails++;
 	} else {
 		fail_sort = true;
-		bool blank = !font_glyph(f, other, STYLE_REGULAR)->w;
-		bool drawn = font_glyph(f, other, STYLE_REGULAR)->w > 0;
+		bool blank = !font_glyph(f, other, STYLE_REGULAR, false)->w;
+		bool drawn = font_glyph(f, other, STYLE_REGULAR, false)->w > 0;
 		if (!blank || !drawn) {
 			printf("FAIL: U+%04X with FcFontSort failing once: %s the first time, %s the second\n",
 			       (unsigned)other, blank ? "blank" : "drawn", drawn ? "drawn" : "blank");
@@ -122,8 +122,8 @@ int main(int argc, char **argv)
 	}
 	if (f) {
 		fail_malloc = true;
-		bool blank = !font_glyph(f, 'A', STYLE_BOLD)->w;
-		bool drawn = font_glyph(f, 'A', STYLE_BOLD)->w > 0;
+		bool blank = !font_glyph(f, 'A', STYLE_BOLD, false)->w;
+		bool drawn = font_glyph(f, 'A', STYLE_BOLD, false)->w > 0;
 		if (!blank || !drawn) {
 			printf("FAIL: A with its bitmap failing once: %s the first time, %s the second\n",
 			       blank ? "blank" : "drawn", drawn ? "drawn" : "blank");

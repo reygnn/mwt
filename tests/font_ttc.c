@@ -53,7 +53,7 @@ static void check(const char *family, uint32_t own, int other, int fail)
 			FAIL("'%s'%s: U+%04X in style %d from %s:%d, not index %d of the same file\n",
 			     spec, fail ? " with bold not loaded" : "", (unsigned)own, s,
 			     fc ? fc->path : "nothing", fc ? fc->index : -1, other);
-		else if (!font_glyph(f, own, s)->w)
+		else if (!font_glyph(f, own, s, false)->w)
 			FAIL("'%s': U+%04X in style %d not drawn\n", spec, (unsigned)own, s);
 	}
 	font_close(f);

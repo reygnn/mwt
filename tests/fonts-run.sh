@@ -46,6 +46,23 @@ echo "=== two faces of one .ttc ==="
 make -s font_ttc 2>&1 | grep -E 'warning|error'
 ASAN_OPTIONS=detect_leaks=1 LSAN_OPTIONS=suppressions=$HOME/lsan.supp:print_suppressions=0 \
 	./font_ttc || fail=1
+echo "=== fallback glyphs: fitted, monospaced first ==="
+make -s font_fallback 2>&1 | grep -E 'warning|error'
+# D2Coding Bold cut to the hanja Droid Sans Fallback has: a monospaced font that
+# adds nothing to the proportional one before it
+python3 -I -c '
+import logging, sys
+logging.disable(logging.WARNING)  # FFTM, which it drops
+from fontTools.ttLib import TTFont
+from fontTools import subset
+d = TTFont("/usr/share/fonts/truetype/droid/DroidSansFallbackFull.ttf").getBestCmap()
+f = TTFont("/usr/share/fonts/truetype/nanum/D2CodingBold-Ver1.3.2-20180524-ligature.ttf")
+s = subset.Subsetter()
+s.populate(unicodes=[c for c in f.getBestCmap() if 0x4e00 <= c <= 0x9fff and c in d])
+s.subset(f)
+f.save(sys.argv[1])' "$HOME/hanja-mono.ttf" || fail=1
+ASAN_OPTIONS=detect_leaks=1 LSAN_OPTIONS=suppressions=$HOME/lsan.supp:print_suppressions=0 \
+	./font_fallback "$HOME/hanja-mono.ttf" || fail=1
 build "-O2 -g" ""
 echo "=== monospaced fonts without FC_SPACING: no warning ==="
 for f in "Noto Sans Mono" "DejaVu Sans Mono" "Noto Mono"; do

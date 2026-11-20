@@ -2,6 +2,7 @@
 #ifndef FONT_H
 #define FONT_H
 
+#include <stdbool.h>
 #include <stdint.h>
 
 enum { STYLE_REGULAR, STYLE_BOLD, STYLE_ITALIC, STYLE_BOLD_ITALIC };
@@ -18,8 +19,9 @@ struct font;
  * size_pt overrides the size in spec when > 0; scale is the buffer scale */
 struct font *font_open(const char *spec, double size_pt, int scale);
 void font_close(struct font *f);
-/* valid until the next font_glyph: the cache may move or empty it */
-const struct glyph *font_glyph(struct font *f, uint32_t cp, int style);
+/* valid until the next font_glyph: the cache may move or empty it. A glyph from
+ * a fallback face is fitted into one cell, or two if wide. */
+const struct glyph *font_glyph(struct font *f, uint32_t cp, int style, bool wide);
 void font_metrics(const struct font *f, int *cw, int *ch, int *ascent);
 double font_size_pt(const struct font *f);
 

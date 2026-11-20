@@ -13,6 +13,7 @@
 /font_style
 /font_ttc
 /font_lookup
+/font_fallback
 /tests/fuzz/
 *.o
 *-client-protocol.h
