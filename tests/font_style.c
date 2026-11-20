@@ -249,6 +249,24 @@ static void follow_weight(const char *spec, struct font *f)
 	}
 }
 
+/* The cell is as wide as M is in the load mode the glyphs are drawn in. */
+static void cell_width(const char *spec)
+{
+	for (int scale = 1; scale <= 4; scale++)
+		for (double pt = 4; pt <= 20; pt += 0.5) {
+			struct font *f = font_open(spec, pt, scale);
+			if (!f)
+				continue;
+			FT_Face r = f->style[STYLE_REGULAR].ft;
+			FT_UInt gi = FT_Get_Char_Index(r, 'M');
+			if (gi && !FT_Load_Glyph(r, gi, FT_LOAD_TARGET_LIGHT) &&
+			    f->cw != (int)lround(r->glyph->advance.x / 64.0))
+				FAIL("'%s' at %g pt, scale %d: cells %d wide, M %.2f\n", spec, pt, scale,
+				     f->cw, r->glyph->advance.x / 64.0);
+			font_close(f);
+		}
+}
+
 int main(int argc, char **argv)
 {
 	const char *spec = argc > 1 ? argv[1] : "monospace:size=11";
@@ -274,6 +292,7 @@ int main(int argc, char **argv)
 		}
 		font_close(f);
 	}
+	cell_width(spec);
 	if (!gaps)
 		FAIL("no style face of '%s' lacks a character of regular, nothing was tested\n", spec);
 	if (!only)
@@ -285,6 +304,6 @@ int main(int argc, char **argv)
 	}
 	printf("font_style: %d characters missing from a style face, all drawn; %d only a "
 	       "style face has, each from the right face; also with weight=bold and a style "
-	       "in the spec\n", gaps, only);
+	       "in the spec; cells as wide as M\n", gaps, only);
 	return 0;
 }

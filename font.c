@@ -155,6 +155,9 @@ struct font *font_open(const char *spec, double size_pt, int scale)
 	FcPatternDel(f->base, FC_SIZE);
 	FcPatternDel(f->base, FC_PIXEL_SIZE);
 	FcPatternAddDouble(f->base, FC_PIXEL_SIZE, f->size_px);
+	/* the size in points too: with the pixels alone fontconfig takes it from
+	 * them at 75 dpi, and a font with optical sizes gives the wrong one */
+	FcPatternAddDouble(f->base, FC_SIZE, pt);
 
 	/* Bold, italic and bold italic are regular's face with only what they are
 	 * for changed: its weight and width otherwise, so a light or condensed
@@ -191,6 +194,18 @@ struct font *font_open(const char *spec, double size_pt, int scale)
 		FcPatternDestroy(p);
 		bool ok = m && load_face(f, m, &f->style[i]);
 		if (ok && i == 0) {
+			/* fontconfig gives some font for any name: a family it does not
+			 * know comes out proportional, and the grid does not line up */
+			static bool told; /* once: a zoom opens the font again */
+			int spacing = FC_PROPORTIONAL;
+			FcPatternGetInteger(m, FC_SPACING, 0, &spacing);
+			if (spacing < FC_DUAL && !told) {
+				told = true;
+				FcChar8 *fam = NULL;
+				FcPatternGetString(m, FC_FAMILY, 0, &fam);
+				fprintf(stderr, "mwt: '%s' gave %s, which is not monospaced\n", spec,
+					fam ? (const char *)fam : "a font");
+			}
 			rweight = f->style[0].weight;
 			FcPatternGetDouble(m, FC_WIDTH, 0, &rwidth);
 			FcPatternGetInteger(m, FC_SLANT, 0, &rslant);
@@ -226,7 +241,9 @@ struct font *font_open(const char *spec, double size_pt, int scale)
 		f->ch = (int)(r->size->metrics.height / 64);
 	f->cw = (int)ceil(r->size->metrics.max_advance / 64.0);
 	FT_UInt gi = FT_Get_Char_Index(r, 'M');
-	if (gi && !FT_Load_Glyph(r, gi, FT_LOAD_DEFAULT))
+	/* as the glyphs are loaded: FT_LOAD_DEFAULT hints the advance another way,
+	 * 17 pixels for DejaVu's 18 at 11 pt and scale 2 */
+	if (gi && !FT_Load_Glyph(r, gi, FT_LOAD_TARGET_LIGHT))
 		f->cw = (int)lround(r->glyph->advance.x / 64.0);
 	if (f->cw < 1)
 		f->cw = 1;

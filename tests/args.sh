@@ -1,8 +1,8 @@
 #!/bin/sh
-# What mwt's command line does before it needs a compositor: -v, -h, bad
-# options and geometries, a font size out of range, and no display to connect
-# to. For make check, so CI sees it. The checks that need a font are skipped
-# where fontconfig finds none.
+# What mwt's command line does before it needs a compositor: -v, -h, bad options
+# and geometries, a font size out of range, a font that is not monospaced, and
+# no display to connect to. For make check, so CI sees it. The checks that need
+# a font are skipped where fontconfig finds none.
 cd "$(dirname "$0")/.." || exit 1
 MWT=${MWT:-./mwt}
 [ -x "$MWT" ] || { echo "args: $MWT not built"; exit 2; }
@@ -49,6 +49,17 @@ if fc-match -f '%{file}' monospace 2>/dev/null | grep -q .; then
 	run 1 'out of range' -f 'monospace:size=100000'
 	run 1 'cannot connect to Wayland display' -g 80x24
 	run 1 'cannot connect to Wayland display' -g 1x1 -e true
+	# a family fontconfig does not know: a warning where it gives a proportional one
+	case $(fc-match -f '%{spacing}' NoSuchFamilyMwt 2>/dev/null) in
+	90 | 100 | 110) ;;
+	*) run 1 'not monospaced' -f NoSuchFamilyMwt ;;
+	esac
+	n=$((n + 1))
+	"$MWT" -f monospace -g 80x24 >"$DIR/out" 2>"$DIR/err" </dev/null
+	if grep -q 'not monospaced' "$DIR/err"; then
+		echo "args: FAIL mwt -f monospace warns: $(head -1 "$DIR/err")"
+		fails=$((fails + 1))
+	fi
 else
 	echo "args: no font, the checks that need one are skipped"
 fi

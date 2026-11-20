@@ -861,14 +861,19 @@ static void draw_row(struct buffer *b, int r, bool sel, int64_t ba, int bc,
 			if (c.cp > ' ' && !(c.attr & ATTR_INVISIBLE)) {
 				int style = (c.attr & ATTR_BOLD ? 1 : 0) | (c.attr & ATTR_ITALIC ? 2 : 0);
 				const struct glyph *g = font_glyph(t.font, c.cp, style);
+				/* to the row, not the cell: an italic or a bold leans
+				 * into the next, and as rows are drawn whole, what it
+				 * covers there is drawn again with it */
 				if (g->w)
-					blit(b, g, x0, y0 + t.ascent, x0, x0 + span * t.cw,
+					blit(b, g, x0, y0 + t.ascent, t.pad, t.pad + vt->cols * t.cw,
 					     y0, y0 + t.ch, fg);
 			}
 			int thick = MAX(1, t.scale);
 			/* invisible hides the lines too, as xterm: hidden input fields */
+			/* below the baseline, but in the row at the smallest sizes */
 			if ((c.attr & (ATTR_UNDERLINE | ATTR_INVISIBLE)) == ATTR_UNDERLINE)
-				fill_rect(b, x0, y0 + t.ascent + thick, span * t.cw, thick, fg);
+				fill_rect(b, x0, MIN(y0 + t.ascent + thick, y0 + t.ch - thick),
+					  span * t.cw, thick, fg);
 			if ((c.attr & (ATTR_STRIKE | ATTR_INVISIBLE)) == ATTR_STRIKE)
 				fill_rect(b, x0, y0 + t.ascent * 2 / 3, span * t.cw, thick, fg);
 			if (cur && !block) {

@@ -442,7 +442,7 @@ def test_zoom_tiled():
 
 def test_hidpi():
     with Window(geometry="30x8") as win:
-        win.feed(RESET + b"\033[41m\033[Ktext\033[0m\r\n\033[4m    \033[0m plain")
+        win.feed(RESET + b"\033[41m\033[Ktext\033[0m\r\n\033[4m    \033[0m plain\r\n\033[3mW\033[0m ")
         one = settle()
         rows1 = red_rows(one)
         under1 = Grid(one, 30, 8).full_rows(0, 1, FG)
@@ -464,9 +464,27 @@ def test_hidpi():
         odd = sum(two.px(x, y) != two.px(x + 1 - (x - x0) % 2 * 2, y) for y in range(y0, y1)
                   for x in range(x0, x1 - 1))
         check(odd > 0, "scale 2: the glyphs are not stretched")
+        # DejaVu's oblique W reaches 2 pixels into the next cell at scale 2:
+        # glyphs are cut at the row, not at their cell
+        check(g.colors(1, 2) != {BG}, "scale 2: an italic W leans into the next cell")
         swaymsg("output", "HEADLESS-1", "scale", "1")
         time.sleep(0.5)
         check(settle() == one, "back at scale 1 the same picture")
+    # At 4 pt and scale 2 the baseline is two pixels above the row's end: the
+    # underline, two thick, stays in its row rather than in the red one below.
+    swaymsg("output", "HEADLESS-1", "scale", "2")
+    time.sleep(0.5)
+    with Window(geometry="30x8", font="monospace:size=4") as win:
+        win.feed(RESET + b"\033[4m    \033[0m\r\n\033[41m\033[K\033[0m")
+        g = Grid(settle(scale=2), 30, 8)
+        x0, y0, x1, y1 = g.box(0, 1)
+        top = {g.img.px(x, y0) for x in range(x0, x1)}
+        check(top == {COLORS16[1]}, "4 pt, scale 2: the underline stays in its row",
+              str(sorted(hex6(c) for c in top)))
+        under = g.full_rows(0, 0, FG)
+        check(len(under) == 2, "4 pt, scale 2: and is drawn, two pixels", str(under))
+    swaymsg("output", "HEADLESS-1", "scale", "1")
+    time.sleep(0.5)
 
 
 def xcursor(path, sizes):
