@@ -11,7 +11,6 @@ set -u
 cd "$(dirname "$0")/.." || exit 1
 MWT=${MWT:-$PWD/mwt}
 VINPUT=${VINPUT:-${MWC_DIR:-../../mwc}/build/vinput}
-INFO=$PWD/mwt.info
 TIMEOUT=10
 FAILS=0
 
@@ -21,14 +20,9 @@ done
 [ -x "$MWT" ] || { echo "FAIL: $MWT not built"; exit 1; }
 [ -x "$VINPUT" ] || { echo "FAIL: $VINPUT not built (make build/vinput in mwc)"; exit 1; }
 
-DIR=$(mktemp -d /tmp/mwt-test.XXXXXX) || exit 1
+. tests/lib.sh
+harness_dir test
 LOG=$DIR/log
-mkdir -p "$DIR/home"
-export XDG_RUNTIME_DIR=$DIR HOME=$DIR/home SHELL=/bin/bash
-export XDG_CONFIG_HOME=$DIR/config
-export WLR_BACKENDS=headless WLR_LIBINPUT_NO_DEVICES=1 WLR_RENDERER=pixman
-export LANG=C.UTF-8 LC_ALL=C.UTF-8
-unset WAYLAND_DISPLAY DISPLAY TERMINFO TERMINFO_DIRS
 # Programs that take the terminal raw and put it back: bash keeps what they leave.
 cat >"$HOME/.bashrc" <<'RC'
 PS1="\w\$ "
@@ -37,22 +31,12 @@ RAW='import termios,tty,sys; a=termios.tcgetattr(0); tty.setraw(0); c=sys.stdin.
 RAW3=$(printf "$RAW" 3 'sys.stdout.write(repr(c)+chr(10))')
 RAW1=$(printf "$RAW" 1 'sys.stdout.write(c)')
 RC
-tic -x -o "$HOME/.terminfo" "$INFO" || { echo "FAIL: mwt.info does not compile"; exit 1; }
-cat >"$DIR/sway.conf" <<'CONF'
-output HEADLESS-1 resolution 1000x700 position 0 0
-default_border none
-default_floating_border none
-for_window [app_id="mwt"] floating enable, move position 20 20
-CONF
-
+sway_conf
 SWAY=
 VIN_PID=
 cleanup() {
-	[ -n "$VIN_PID" ] && kill "$VIN_PID" 2>/dev/null
 	pkill -f "^$MWT" 2>/dev/null
-	[ -n "$SWAY" ] && kill "$SWAY" 2>/dev/null
-	wait 2>/dev/null
-	rm -rf "$DIR"
+	harness_cleanup
 }
 trap cleanup EXIT
 
@@ -67,21 +51,7 @@ fail() {
 	tail -4 "$DIR/shown" 2>/dev/null | cut -c1-100 | sed 's/^/  shown: /'
 }
 
-. tests/lib.sh
 sway_start || die "sway did not start"
-
-# What mwt shows, without the blank rows at the end. The pause keeps two drags
-# from counting as a double click.
-shown() {
-	sleep 0.45
-	v move 21 21
-	v down left
-	v move 999 699
-	v up left
-	sleep 0.1
-	printf '%s' "$(timeout 3 wl-paste -p -n 2>/dev/null)" >"$DIR/shown"
-	cat "$DIR/shown"
-}
 
 # expect <description> <grep -x pattern>: a line like that shows up
 expect() {
@@ -112,12 +82,9 @@ start_mwt() {
 }
 start_mwt
 
-# The grid in pixels, from the window; px gives the middle of a cell in X and Y.
+# The grid in pixels, from the window; px (lib.sh) gives the middle of a cell.
 read -r W H < <(window_rect mwt)
-[ -n "${W:-}" ] || die "no mwt window in sway's tree"
-CW=$(((W - 4) / 80))
-CH=$(((H - 4) / 24))
-px() { X=$((22 + $1 * CW + CW / 2)); Y=$((22 + $2 * CH + CH / 2)); }
+cells 80 24 || die "no mwt window in sway's tree"
 at() { px "$1" "$2"; v move "$X" "$Y"; }
 
 T 'echo $TERM' -k Return

@@ -61,7 +61,7 @@ esctest is GPL. The containers have no network, so fetch on the host first with
 | `test_vt.c`, `test_rc.c`, `test_input.c`, `test_paste.c`, `test_sel.c`, `test_shell.c`, `test_util.c` | unit tests; `test_vt`, `test_paste` and `test_sel` fail each allocation once through `--wrap`, `test_input` compiles keymaps from layout names, `test_shell` runs real ptys, pipes and processes |
 | `tests/replay.c` | plays recordings whole, byte by byte, in chunks and with resizes; the first three must end the same |
 | `tests/fuzz_vt.c` | libFuzzer harness; built with `-DFUZZ_STANDALONE` it is `fuzz_regress`. How to keep a finding: its head |
-| `tests/` | black-box and adversarial tests, from the mt project; `tests/mwtlib.py` for the Python ones |
+| `tests/` | black-box and adversarial tests, from the mt project; `tests/lib.sh` for the shell ones (directory, sway, its config, the screen read back), `tests/mwtlib.py` for the Python ones, `tests/swaytree.py` for both |
 
 Only changed rows are drawn. With double buffering, rows that differ from the buffer
 shown last are copied first; output follows frame callbacks. A build with

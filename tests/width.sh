@@ -17,41 +17,23 @@ done
 [ -x "$MWT" ] || { echo "width: $MWT not built"; exit 1; }
 [ -x "$VINPUT" ] || { echo "width: $VINPUT not built"; exit 1; }
 
-DIR=$(mktemp -d /tmp/mwt-width.XXXXXX) || exit 1
-mkdir -p "$DIR/home" "$DIR/config"
-export XDG_RUNTIME_DIR=$DIR HOME=$DIR/home SHELL=/bin/bash XDG_CONFIG_HOME=$DIR/config
-export WLR_BACKENDS=headless WLR_LIBINPUT_NO_DEVICES=1 WLR_RENDERER=pixman
-export LANG=C.UTF-8 LC_ALL=C.UTF-8 TMUX_TMPDIR=$DIR
-unset WAYLAND_DISPLAY DISPLAY TERMINFO TERMINFO_DIRS TMUX
-tic -x -o "$HOME/.terminfo" mwt.info || exit 1
-cat >"$DIR/sway.conf" <<'EOF'
-output HEADLESS-1 resolution 1000x700 position 0 0
-default_border none
-default_floating_border none
-for_window [app_id="mwt"] floating enable, move position 20 20
-EOF
+. tests/lib.sh
+harness_dir width
+export TMUX_TMPDIR=$DIR
+sway_conf
 
 SWAY=
 MPID=
 cleanup() {
 	[ -n "$MPID" ] && kill "$MPID" 2>/dev/null
 	tmux -L width kill-server 2>/dev/null
-	[ -n "${VIN_PID:-}" ] && kill "$VIN_PID" 2>/dev/null
-	[ -n "$SWAY" ] && kill "$SWAY" 2>/dev/null
-	wait 2>/dev/null
-	rm -rf "$DIR"
+	harness_cleanup
 }
 trap cleanup EXIT
-. tests/lib.sh
 sway_start || { echo "width: sway did not start"; exit 1; }
 
-# The whole screen through the primary selection, one line per row.
-shown() {
-	sleep 0.45
-	v move 21 21; v down left; v move 999 699; v up left
-	sleep 0.1
-	timeout 3 wl-paste -p -n 2>/dev/null >"$DIR/$1"
-}
+# The whole screen through the primary selection into DIR/name, one line per row.
+screen() { shown "$1" >/dev/null; }
 start_mwt() {
 	"$MWT" "$@" >>"$DIR/log" 2>&1 &
 	MPID=$!
@@ -87,7 +69,7 @@ printf 'PS1="%s \\$ "\nunset PROMPT_COMMAND\n' "$($W prompt)" >"$HOME/.bashrc"
 start_mwt
 T 'echo hallo' -k Left -k Left -k Left
 T 'X'
-shown bash
+screen bash
 want="$($W prompt-visible) \$ echo haXllo"
 if grep -qxF -- "$want" "$DIR/bash"; then
 	echo "OK    bash: the line reads '$want'"
@@ -100,10 +82,10 @@ stop_mwt
 echo "=== vim: replace the last character of each sample row"
 $W list "$DIR/samples.txt"
 start_mwt -e vim -u NONE -N -i NONE -c 'set nowrap' "$DIR/samples.txt"
-shown vim-before
+screen vim-before
 T ':%normal $rX' -k Return
 sleep 0.5
-shown vim-after
+screen vim-after
 report < <($W vim-check "$DIR/vim-before" "$DIR/vim-after")
 stop_mwt
 
@@ -117,7 +99,7 @@ pw=$(tmux -L width display -p -t '{left}' '#{pane_width}' 2>/dev/null)
 if [ -n "$pw" ]; then
 	$W tmux-list "$DIR/padded.txt" "$pw" "$DIR/tmux.json"
 	sleep 1
-	shown tmux
+	screen tmux
 	report < <($W tmux-check "$DIR/tmux" "$pw" "$DIR/tmux.json")
 else
 	echo "GAP   tmux did not start in mwt"

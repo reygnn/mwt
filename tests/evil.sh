@@ -20,13 +20,9 @@ CRASHES=0
 [ -x "$MWT" ] || { echo "evil: $MWT not built"; exit 1; }
 [ -x "$VINPUT" ] || { echo "evil: $VINPUT not built"; exit 1; }
 
-DIR=$(mktemp -d /tmp/ev.XXXXXX) || exit 1
-mkdir -p "$DIR/home" "$DIR/config"
-export XDG_RUNTIME_DIR=$DIR HOME=$DIR/home SHELL=/bin/bash XDG_CONFIG_HOME=$DIR/config
-export WLR_BACKENDS=headless WLR_LIBINPUT_NO_DEVICES=1 WLR_RENDERER=pixman
-export LANG=C.UTF-8 LC_ALL=C.UTF-8
+. tests/lib.sh
+harness_dir evil
 export ASAN_OPTIONS=detect_leaks=0 UBSAN_OPTIONS=print_stacktrace=1
-unset WAYLAND_DISPLAY DISPLAY MWC_ACTIVE MWC_INACTIVE
 printf 'PS1="\\w\\$ "\nunset PROMPT_COMMAND\n' >"$HOME/.bashrc"
 # A clipboard reader that asks and never reads, for stalled_pipes.
 STALL=$DIR/stallreader
@@ -46,30 +42,32 @@ cc -std=c11 -O1 -shared -fPIC -o "$FAILMEMFD" tests/failmemfd.c -ldl >>"$DIR/sta
 # And pidfd_open that fails, for no_pidfd.
 FAILPIDFD=$DIR/failpidfd.so
 cc -std=c11 -O1 -shared -fPIC -o "$FAILPIDFD" tests/failpidfd.c -ldl >>"$DIR/stall.build" 2>&1 || FAILPIDFD=
-tic -x -o "$HOME/.terminfo" mwt.info || exit 1
-cat >"$DIR/sway.conf" <<'EOF'
-output HEADLESS-1 resolution 1000x700 position 0 0
-default_border none
-default_floating_border none
 # no limit, as in compositors that have none: zoom_limit needs a window over 2 GiB
-floating_maximum_size -1 x -1
-for_window [app_id="mwt"] floating enable, move position 20 20
-EOF
+sway_conf "floating_maximum_size -1 x -1"
 
-trap 'kill "${SWAY:-}" 2>/dev/null; pkill -x "$NAME" 2>/dev/null; rm -rf "$DIR"' EXIT
+cleanup() {
+	pkill -x "$NAME" 2>/dev/null
+	harness_cleanup
+}
+trap cleanup EXIT
 SWAY=
 LOG=$DIR/log.none
 CASE=none
-. tests/lib.sh
 start_sway() { sway_start || { echo "evil: sway did not start"; exit 1; }; }
 start_sway
 
-# Selects the whole screen, or with sel_history everything from the top of the
-# scrollback. The pause keeps two drags from counting as a double click.
-sel_screen() { sleep 0.45; v move 21 21; v down left; v move 999 699; v up left; sleep 0.1; }
+# sel_screen and shown (lib.sh) select the screen; sel_history everything from
+# the top of the scrollback.
 pages() { local a=() i; for ((i = 0; i < $2; i++)); do a+=(-k "$1"); done; wtype -k Shift_L -M shift "${a[@]}" -m shift; sleep 0.5; }
-sel_history() { pages Prior 230; sleep 0.45; v move 21 21; v down left; v move 60 21; v up left; pages Next 230; v move 500 $R_LAST; shift_click; sleep 0.2; }
-shown() { sel_screen; printf '%s' "$(timeout 3 wl-paste -p -n 2>/dev/null)" >"$DIR/shown"; cat "$DIR/shown"; }
+sel_history() {
+	pages Prior 230
+	sleep 0.45
+	v move $((MWT_X + 1)) $((MWT_Y + 1)); v down left; v move 60 $((MWT_Y + 1)); v up left
+	pages Next 230
+	v move 500 "$R_LAST"
+	shift_click
+	sleep 0.2
+}
 try() { local n=$1 p=$2 i; for ((i = 0; i < n; i++)); do shown | grep -qx -- "$p" && return 0; sleep 0.2; done; return 1; }
 alive() { pgrep -x "$NAME" >/dev/null; }
 mwtpid() { pgrep -xn "$NAME"; }
@@ -77,29 +75,20 @@ mwtpid() { pgrep -xn "$NAME"; }
 # The middle of rows 1 and 2 and of the last row, in pixels, for the 80x24 window.
 # Without a window to measure the cases would click wrong rows: none are set.
 measure() {
-	local w h
-	read -r w h < <(window_rect mwt)
-	[ -n "${h:-}" ] || { echo "evil: no mwt window to measure the rows in"; exit 1; }
-	CH=$(((h - 4) / 24))
-	R1=$((22 + CH + CH / 2))
-	R2=$((R1 + CH))
-	R_LAST=$((22 + 23 * CH + CH / 2))
+	cells 80 24 || { echo "evil: no mwt window to measure the rows in"; exit 1; }
+	px 0 1; R1=$Y
+	px 0 2; R2=$Y
+	px 0 23; R_LAST=$Y
 }
 CH=
 # Until the window shows, or mwt is gone: some cases start one that ends at once,
 # or that never gets a window. At most 10 s.
+# gone after a moment, or it said why it ended
+mwt_gave_up() { { [ "$((SECONDS - WAIT_START))" -ge 1 ] && ! alive; } || [ -s "$DIR/rc" ]; }
 wait_mwt() {
-	local i
-	for ((i = 0; i < 100; i++)); do
-		if [ -n "$(window_rect mwt)" ]; then
-			[ -n "${CH:-}" ] || measure
-			return 0
-		fi
-		[ "$i" -gt 5 ] && ! alive && return 1
-		[ -s "$DIR/rc" ] && return 1
-		sleep 0.1
-	done
-	return 1
+	WAIT_START=$SECONDS
+	wait_window mwt "" mwt_gave_up || return 1
+	[ -n "${CH:-}" ] || measure
 }
 start_mwt() {
 	LOG=$DIR/log.$CASE
@@ -936,15 +925,6 @@ reply_flood_raw() {
 # 100,000 in a few reads, and libwayland before 1.23 ends the connection when
 # its buffer is full. Now the last one goes once a turn, once the compositor has
 # read the rest, and must be the one shown.
-window_title() {
-	swaymsg -t get_tree | python3 -c 'import json,sys
-def walk(n):
-    if n.get("app_id") == "mwt":
-        print(n.get("name") or ""); sys.exit()
-    for c in n.get("nodes", []) + n.get("floating_nodes", []):
-        walk(c)
-walk(json.load(sys.stdin))'
-}
 title_flood() {
 	start_mwt
 	T 'for i in $(seq 100000); do printf "\033]2;Titel %d\007" $i; done; echo titel-ende' -k Return

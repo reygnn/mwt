@@ -102,8 +102,8 @@ def test_drag():
         at(6, 5)
         expect(log, f"1002: drag with {name}", sgr(code + 32, 6, 5))
         x, y, w, h = rect()
-        cw = (w - 4) // 80
-        mouse.send("move", x + 2 + 6 * cw + 1, y + 2 + 5 * ((h - 4) // 24) + 1)
+        cw = (w - 2 * mwtlib.PAD) // 80
+        mouse.send("move", x + mwtlib.PAD + 6 * cw + 1, y + mwtlib.PAD + 5 * ((h - 2 * mwtlib.PAD) // 24) + 1)
         expect(log, f"1002: {name}, within the same cell nothing", b"")
         mouse.send("up", name)
         log.take()

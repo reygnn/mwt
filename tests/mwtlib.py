@@ -1,15 +1,24 @@
 """What tests/pixel.py and tests/keys.py share, under tests/headless.sh: windows,
 keys, the mouse, screenshots and the reporting of results."""
-import json
 import os
 import re
 import subprocess
 import time
 
+from swaytree import node
+
 DIR = os.environ["DIR"]
 MWT = os.environ["MWT"]
 LOG = os.path.join(DIR, "log")
-PAD = 2  # config.h padding, logical pixels
+
+
+def _padding():
+    """config.h's padding, logical pixels"""
+    with open(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "config.h")) as f:
+        return int(re.search(r"static const int padding = (\d+);", f.read()).group(1))
+
+
+PAD = _padding()
 fails = 0
 _count = 0
 
@@ -43,43 +52,23 @@ def finish():
     return 1 if fails else 0
 
 
-def _walk(n):
-    yield n
-    for k in ("nodes", "floating_nodes"):
-        for c in n.get(k, []):
-            yield from _walk(c)
-
-
 def swaymsg(*args):
     subprocess.run(["swaymsg", "-q", *args], check=False)
 
 
 def rect(app_id="mwt"):
     """x, y, width, height in logical pixels, or None."""
-    tree = json.loads(subprocess.run(["swaymsg", "-t", "get_tree"], capture_output=True, text=True).stdout)
-    for n in _walk(tree):
-        if n.get("app_id") == app_id:
-            r = n["rect"]
-            return r["x"], r["y"], r["width"], r["height"]
-    return None
-
-
-def node(app_id="mwt"):
-    """sway's tree node of the window, or None."""
-    tree = json.loads(subprocess.run(["swaymsg", "-t", "get_tree"], capture_output=True, text=True).stdout)
-    for n in _walk(tree):
-        if n.get("app_id") == app_id:
-            return n
-    return None
+    n = node(app_id)
+    if n is None:
+        return None
+    r = n["rect"]
+    return r["x"], r["y"], r["width"], r["height"]
 
 
 def urgent(app_id="mwt"):
     """Whether sway marks the window urgent; None without one."""
-    tree = json.loads(subprocess.run(["swaymsg", "-t", "get_tree"], capture_output=True, text=True).stdout)
-    for n in _walk(tree):
-        if n.get("app_id") == app_id:
-            return n.get("urgent")
-    return None
+    n = node(app_id)
+    return None if n is None else n.get("urgent")
 
 
 class Image:
