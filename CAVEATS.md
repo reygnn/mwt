@@ -160,6 +160,13 @@ Mongolian; on the key of A, C or V, where a layout that is not Latin may have `?
 (`ca(ike)`), it selects, copies or pastes.
 
 
+## Fonts
+
+A character the font has only in a bold or italic face, as U+27BF only in DejaVu Sans
+Mono Bold, is drawn from another font in the other styles, and from that face only when
+no font on the system has it.
+
+
 ## Installation
 
 `make install` puts the terminfo entry in `/usr/share/terminfo` whatever `PREFIX` is,

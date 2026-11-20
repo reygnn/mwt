@@ -146,6 +146,10 @@ struct font *font_open(const char *spec, double size_pt, int scale)
 		if (!p) /* FcPatternDel and FcPatternAdd* do not take NULL */
 			goto fail;
 		FcValue v;
+		/* A style name in the spec (style=Book) outranks weight and slant
+		 * in fontconfig and would give all four the same face. */
+		if (i)
+			FcPatternDel(p, FC_STYLE);
 		/* regular keeps a weight/slant given in the spec */
 		if (i || FcPatternGet(p, FC_WEIGHT, 0, &v) != FcResultMatch) {
 			FcPatternDel(p, FC_WEIGHT);
@@ -269,9 +273,19 @@ static bool sorted_fonts(struct font *f)
 	return f->sorted && f->cover;
 }
 
-/* find or load a face that has cp; NULL if none on the system */
-static struct face *find_fallback(struct font *f, uint32_t cp)
+/* Whether the style face i may stand in for style: it adds nothing that was not
+ * asked for. Bold Italic takes Bold; Regular takes none of the others. */
+static bool style_fits(int i, int style)
 {
+	return (i & ~style) == 0;
+}
+
+/* find or load a face that has cp; NULL if none on the system. Another style
+ * face of the font comes last: U+27BF, only in DejaVu's bold file, would be
+ * bold in regular text. */
+static struct face *find_fallback(struct font *f, uint32_t cp, int style)
+{
+	struct face *other = NULL;
 	for (int i = 0; i < f->nfallback; i++)
 		if (FT_Get_Char_Index(f->fallback[i].ft, cp)) {
 			f->fallback[i].used = ++f->tick;
@@ -296,20 +310,26 @@ static struct face *find_fallback(struct font *f, uint32_t cp)
 		/* Open already: a fallback face was tried above and lacks cp, but
 		 * bold or italic may have what regular lacks. */
 		bool open = false;
-		struct face *style = NULL;
+		struct face *fits = NULL;
 		for (int i = 0; i < 4; i++)
 			if (!strcmp(f->style[i].path, (const char *)file) && f->style[i].index == index) {
 				open = true;
-				if (!style && FT_Get_Char_Index(f->style[i].ft, cp))
-					style = &f->style[i];
+				if (!FT_Get_Char_Index(f->style[i].ft, cp))
+					continue;
+				if (style_fits(i, style)) {
+					if (!fits)
+						fits = &f->style[i];
+				} else if (!other) {
+					other = &f->style[i];
+				}
 			}
 		for (int i = 0; i < f->nfallback; i++)
 			open |= !strcmp(f->fallback[i].path, (const char *)file) &&
 				f->fallback[i].index == index;
 		if (open) {
 			FcPatternDestroy(m);
-			if (style)
-				return style;
+			if (fits)
+				return fits;
 			continue;
 		}
 		struct face nf = { 0 };
@@ -336,28 +356,40 @@ static struct face *find_fallback(struct font *f, uint32_t cp)
 		f->fallback[slot] = nf;
 		return &f->fallback[slot];
 	}
-	return NULL;
+	return other;
+}
+
+/* The face cp is drawn from in style, NULL if none has it; *embolden says
+ * whether to make it bold. */
+static struct face *face_for(struct font *f, uint32_t cp, int style, bool *embolden)
+{
+	struct face *fc = &f->style[style];
+	/* Bold and italic faces often cover less than regular (DejaVu Sans Mono
+	 * Oblique lacks hundreds): regular first, before the system's fonts. */
+	if (!FT_Get_Char_Index(fc->ft, cp) && style != STYLE_REGULAR)
+		fc = &f->style[STYLE_REGULAR];
+	if (!FT_Get_Char_Index(fc->ft, cp))
+		fc = find_fallback(f, cp, style);
+	if (!fc)
+		return NULL;
+	/* bold synthesized for a face not bold itself; the bold style faces are,
+	 * or carry embolden when they are regular's file again */
+	bool bold = style == STYLE_BOLD || style == STYLE_BOLD_ITALIC;
+	*embolden = fc->embolden ||
+		    (bold && fc != &f->style[STYLE_BOLD] && fc != &f->style[STYLE_BOLD_ITALIC]);
+	return fc;
 }
 
 static void render(struct font *f, uint32_t cp, int style, struct glyph *g)
 {
 	memset(g, 0, sizeof *g);
-	struct face *fc = &f->style[style];
-	bool bold = style == STYLE_BOLD || style == STYLE_BOLD_ITALIC;
-	FT_UInt gi = FT_Get_Char_Index(fc->ft, cp);
-	/* Bold and italic faces often cover less than regular (DejaVu Sans Mono
-	 * Oblique lacks hundreds): regular first, before the system's fonts. Bold
-	 * is synthesized below as for any face not the style's own. */
-	if (!gi && style != STYLE_REGULAR) {
-		fc = &f->style[STYLE_REGULAR];
-		gi = FT_Get_Char_Index(fc->ft, cp);
-	}
-	if (!gi && (fc = find_fallback(f, cp)))
-		gi = FT_Get_Char_Index(fc->ft, cp);
+	bool embolden;
+	struct face *fc = face_for(f, cp, style, &embolden);
+	FT_UInt gi = fc ? FT_Get_Char_Index(fc->ft, cp) : 0;
 	if (!gi || FT_Load_Glyph(fc->ft, gi, FT_LOAD_TARGET_LIGHT))
 		return;
 	FT_GlyphSlot s = fc->ft->glyph;
-	if (fc->embolden || (bold && fc != &f->style[style]))
+	if (embolden)
 		FT_GlyphSlot_Embolden(s);
 	if (FT_Render_Glyph(s, FT_RENDER_MODE_NORMAL))
 		return;
