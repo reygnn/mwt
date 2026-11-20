@@ -25,7 +25,7 @@ use mwc's `vinput` need `MWC_DIR`, which defaults to `../../mwc`:
 | `make width` | where mwt and bash, vim or tmux count widths differently |
 | `make esctest` | esctest in `mwt-esctest`, a report; most failures are by design (CAVEATS.md) |
 | `make evil` | all tests plus adversarial cases in Podman, also with sanitizers, about 20 minutes |
-| `make fonts` | fallback faces, `font_oom` and `font_cache` in an image with more fonts |
+| `make fonts` | fallback faces, styles and a `.ttc` (`font_oom`, `font_cache`, `font_lookup`, `font_style`, `font_ttc`) in an image with more fonts |
 | `make oldwayland` | the title floods against libwayland 1.22 (Ubuntu 24.04) in Podman |
 | `make profile` | where mwt spends its time, in the `make evil` container; measures only |
 | `make install`, `make uninstall` | the user's |

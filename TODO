@@ -12,10 +12,6 @@ TODO
   minimumContrast. Wenn nötig die Schrift und padding; Farbnamen wie in mwc
   nur mit einer eigenen Tabelle, mwt hat kein pango.
 
-* find_fallback vergleicht Pfad und Index (seit der FcFontSort-Liste), eine
-  andere Schrift aus derselben .ttc wird also genommen. Ein Test fehlt: er
-  braucht eine .ttc im Image von make fonts, aus der zwei Schriften nötig sind.
-
 Performance, aus der Review vom 2026-11-17 (docs/history/Review-2026-11-17.md):
 
 * Scrollen um eine Zeile zeichnet alle Zeilen neu, bei 200x55 und 1080p etwa

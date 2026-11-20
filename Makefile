@@ -128,6 +128,14 @@ font_style: tests/font_style.c font.c font.h
 		-fno-sanitize-recover=all $(shell pkg-config --cflags fontconfig freetype2) \
 		-o $@ tests/font_style.c $(shell pkg-config --libs fontconfig freetype2) -lm
 
+# Two faces of one .ttc, by index; one fails to load through --wrap. Under
+# sanitizers, with mwt-test.ttc of make fonts.
+font_ttc: tests/font_ttc.c font.c font.h
+	$(CC) -std=c11 -Wall -Wextra -g -O1 -I. -fsanitize=address,undefined \
+		-fno-sanitize-recover=all $(shell pkg-config --cflags fontconfig freetype2) \
+		-Wl,--wrap=FT_New_Face -o $@ tests/font_ttc.c \
+		$(shell pkg-config --libs fontconfig freetype2) -lm
+
 fuzz_regress: tests/fuzz_vt.c vt.c vt.h version.h
 	$(CC) -std=c11 -Wall -Wextra -g -O1 -I. -DFUZZ_STANDALONE -fsanitize=address,undefined \
 		-fno-sanitize-recover=all -o $@ tests/fuzz_vt.c vt.c
@@ -223,6 +231,6 @@ uninstall:
 	rm -f $(DESTDIR)$(PREFIX)/share/terminfo/m/mwt $(DESTDIR)$(PREFIX)/share/terminfo/6d/mwt
 
 clean:
-	rm -f mwt mwt-esctest test_vt test_rc test_input test_paste test_sel test_shell test_util vtdump test_replay fuzz_vt fuzz_regress fuzz_regress.log font_oom font_cache font_style font_lookup *.o $(PROTO_H) $(PROTO_C)
+	rm -f mwt mwt-esctest test_vt test_rc test_input test_paste test_sel test_shell test_util vtdump test_replay fuzz_vt fuzz_regress fuzz_regress.log font_oom font_cache font_style font_lookup font_ttc *.o $(PROTO_H) $(PROTO_C)
 
 .PHONY: all check replay fuzz terminfo keys pixel mouse keyboard test evil fonts oldwayland width esctest profile install uninstall clean

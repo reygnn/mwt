@@ -42,6 +42,10 @@ echo "=== styles drawn from regular ==="
 make -s font_style 2>&1 | grep -E 'warning|error'
 ASAN_OPTIONS=detect_leaks=1 LSAN_OPTIONS=suppressions=$HOME/lsan.supp:print_suppressions=0 \
 	./font_style || fail=1
+echo "=== two faces of one .ttc ==="
+make -s font_ttc 2>&1 | grep -E 'warning|error'
+ASAN_OPTIONS=detect_leaks=1 LSAN_OPTIONS=suppressions=$HOME/lsan.supp:print_suppressions=0 \
+	./font_ttc || fail=1
 build "-O2 -g" ""
 echo "=== fallback ==="
 tests/headless.sh tests/fallback.py 2>&1 | grep -E '^(FAIL|PASS|info|ok|=== )'

@@ -10,11 +10,17 @@
 # fonts-symbola          emoji as outlines, the face mwt should end up with
 # fonts-noto-core        a file per script, enough of them to go past the 16
 #                        fallback faces mwt keeps (MAX_FALLBACK)
+# mwt-test.ttc           two faces in one file, built by mkttc.py with fonttools,
+#                        for tests/font_ttc.c
 #
 # DejaVu Sans Mono stays what "monospace" means; tests/fonts-run.sh checks it.
 FROM localhost/mwt-test
 USER root
+COPY mkttc.py /tmp/mkttc.py
 RUN apt-get update && apt-get install -y --no-install-recommends \
     fonts-droid-fallback fonts-nanum fonts-noto-color-emoji fonts-symbola fonts-noto-core \
-    && rm -rf /var/lib/apt/lists/* && fc-cache -f
+    python3-fonttools \
+    && rm -rf /var/lib/apt/lists/* \
+    && mkdir -p /usr/local/share/fonts/mwt && python3 -I /tmp/mkttc.py /usr/local/share/fonts/mwt/mwt-test.ttc \
+    && rm /tmp/mkttc.py && fc-cache -f
 USER tester
