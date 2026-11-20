@@ -2270,6 +2270,11 @@ done:;
 	/* SIGCHLD left ignored by what started mwt has the kernel reap the shell:
 	 * without a pidfd its end would be seen only once jobs close the pty */
 	signal(SIGCHLD, SIG_DFL);
+	/* A mask inherited from what started mwt: with SIGTERM blocked, a logout's
+	 * SIGTERM would wait for good. What it ignores stays so (nohup). */
+	sigset_t none;
+	sigemptyset(&none);
+	sigprocmask(SIG_SETMASK, &none, NULL);
 
 	/* One message each: a long one would overflow its size field. */
 	static char app_buf[VT_OSC_MAX], title_buf[VT_OSC_MAX];

@@ -1090,6 +1090,12 @@ os.execv(sys.argv[1], sys.argv[1:])' "$MWT" >"$LOG" 2>&1 &)
 	T 'grep SigBlk /proc/self/status | tr -d "\t "' -k Return
 	if try 10 'SigBlk:0000000000000000'; then ok "a program in mwt starts with no signals blocked"
 	else gap "a program in mwt inherits a signal mask: $(shown | grep '^SigBlk' | head -1)"; fi
+	# mwt itself too: SIGTERM, blocked when it started, ends it
+	pkill -TERM -x "$NAME"
+	local i
+	for ((i = 0; i < 30; i++)); do alive || break; sleep 0.1; done
+	if alive; then gap "mwt started with SIGTERM blocked does not end on it"
+	else ok "mwt started with SIGTERM blocked ends on it"; fi
 }
 closed_stdio() {
 	LOG=$DIR/log.closed
