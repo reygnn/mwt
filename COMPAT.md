@@ -176,8 +176,8 @@ are left out is in CAVEATS.md.
 | Sequence | Name | From | mwt | Note |
 |---|---|---|:-:|---|
 | `CSI ? 6 n` | DECXCPR | VT420 | ✅ | |
-| `CSI > c` | DA2 | VT220 | ✅ | `CSI > 1 ; 10 ; 0 c` |
-| `CSI > q` | XTVERSION | xterm | ✅ | `DCS > \| mwt(version) ST` |
+| `CSI > c` | DA2 | VT220 | ✅ | `CSI > 1 ; 10 ; 0 c`; only for 0 or none, as xterm |
+| `CSI > q` | XTVERSION | xterm | ✅ | `DCS > \| mwt(version) ST`; only for 0 or none, as xterm |
 | `CSI ? Ps $ p`, `CSI Ps $ p` | DECRQM | VT320 | ✅ | DEC and ANSI modes; 4 for modes mwt knows of but does not have |
 | `CSI 18 t` | XTWINOPS, size in characters | xterm | 🟡 | only 18; the other window operations are ignored |
 | `CSI Pi ; Pg ; Pt ; Pl ; Pb ; Pr * y` | DECRQCRA, checksum | VT420 | 🟡 | only with `allow_checksum` in config.h, off by default as in xterm |

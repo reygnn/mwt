@@ -1069,9 +1069,11 @@ static void csi_dispatch(struct vt *vt, uint32_t f)
 		return;
 	}
 	if (vt->priv == '>') {
-		if (f == 'c')
+		/* as xterm, only for 0 or none: CSI > 1 c and CSI > 1 q are no
+		 * requests of these */
+		if (arg(vt, 0, 0) == 0 && f == 'c')
 			reply(vt, "\033[>1;10;0c");
-		else if (f == 'q')
+		else if (arg(vt, 0, 0) == 0 && f == 'q')
 			reply(vt, "\033P>|mwt(" MWT_VERSION ")\033\\");
 		return;
 	}

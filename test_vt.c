@@ -789,6 +789,18 @@ static void test_replies(void)
 	w(vt, "\033[>q");
 	CHECK_STR(replybuf, "\033P>|mwt(" MWT_VERSION ")\033\\");
 	replybuf[0] = 0;
+	w(vt, "\033[>0q");
+	CHECK_STR(replybuf, "\033P>|mwt(" MWT_VERSION ")\033\\");
+	replybuf[0] = 0;
+	w(vt, "\033[>c");
+	CHECK_STR(replybuf, "\033[>1;10;0c");
+	replybuf[0] = 0;
+	w(vt, "\033[>0c");
+	CHECK_STR(replybuf, "\033[>1;10;0c");
+	replybuf[0] = 0;
+	/* other parameters ask nothing, as in xterm */
+	w(vt, "\033[>1c\033[>1q");
+	CHECK_STR(replybuf, "");
 	w(vt, "\033[18t");
 	CHECK_STR(replybuf, "\033[8;5;10t");
 	w(vt, "\033]0;hello\a");
