@@ -27,17 +27,33 @@ PROTO_H = $(PROTOS:=-client-protocol.h)
 PROTO_C = $(PROTOS:=-protocol.c)
 OBJ = mwt.o vt.o font.o rc.o input.o paste.o sel.o shell.o util.o $(PROTO_C:.c=.o)
 
+# version.h and the commit it appends to the version
+VERSION_H = version.h build/gitversion.h
+
 all: mwt
+
+# The commit a build is from, after the version: +DATE.TIME.HASH, its commit time
+# in UTC, and .dirty for changes not committed. Rewritten only when it changes, so
+# what includes version.h is built again only then; empty without git.
+build/gitversion.h: FORCE
+	@mkdir -p build
+	@v=$$(TZ=UTC0 git log -1 --format=%cd.%h --date=format-local:%Y%m%d.%H%M 2>/dev/null); \
+	if [ -n "$$v" ] && ! git diff --quiet HEAD 2>/dev/null; then v=$$v.dirty; fi; \
+	line="#define MWT_GIT \"$${v:++$$v}\""; \
+	[ "$$(cat $@ 2>/dev/null)" = "$$line" ] || echo "$$line" >$@
+
+FORCE:
+.PHONY: FORCE
 
 mwt: $(OBJ)
 	$(CC) $(LDFLAGS) -o $@ $(OBJ) $(LDLIBS)
 
 # mwt that answers DECRQCRA, which esctest reads the screen with; see allow_checksum.
-mwt-esctest: mwt.c config.h version.h vt.h font.h rc.h input.h paste.h sel.h shell.h util.h $(PROTO_H) $(filter-out mwt.o,$(OBJ))
+mwt-esctest: mwt.c config.h $(VERSION_H) vt.h font.h rc.h input.h paste.h sel.h shell.h util.h $(PROTO_H) $(filter-out mwt.o,$(OBJ))
 	$(CC) $(CFLAGS) -DMWT_ALLOW_CHECKSUM $(LDFLAGS) -o $@ mwt.c $(filter-out mwt.o,$(OBJ)) $(LDLIBS)
 
-mwt.o: mwt.c config.h version.h vt.h font.h rc.h input.h paste.h sel.h shell.h util.h $(PROTO_H)
-vt.o: vt.c vt.h version.h
+mwt.o: mwt.c config.h $(VERSION_H) vt.h font.h rc.h input.h paste.h sel.h shell.h util.h $(PROTO_H)
+vt.o: vt.c vt.h $(VERSION_H)
 font.o: font.c font.h
 rc.o: rc.c rc.h
 input.o: input.c input.h vt.h
@@ -54,7 +70,7 @@ util.o: util.c util.h
 %-protocol.c: $$($$*_XML)
 	$(SCANNER) private-code $< $@
 
-test_vt: test_vt.c vt.c vt.h version.h
+test_vt: test_vt.c vt.c vt.h $(VERSION_H)
 	$(CC) $(TEST_CFLAGS) -Wl,--wrap=malloc,--wrap=calloc,--wrap=realloc -o $@ test_vt.c vt.c
 
 test_rc: test_rc.c rc.c rc.h
@@ -62,7 +78,7 @@ test_rc: test_rc.c rc.c rc.h
 
 # Keys and the mouse with keymaps compiled here: xkbcommon and its layouts, no
 # compositor.
-test_input: test_input.c input.c input.h vt.c vt.h version.h
+test_input: test_input.c input.c input.h vt.c vt.h $(VERSION_H)
 	$(CC) $(TEST_CFLAGS) $(shell pkg-config --cflags xkbcommon) -o $@ test_input.c input.c vt.c \
 		$(shell pkg-config --libs xkbcommon) -lm
 
@@ -73,7 +89,7 @@ test_paste: test_paste.c paste.c paste.h
 
 # The selection over lines the VT core holds; each allocation fails once through
 # --wrap.
-test_sel: test_sel.c sel.c sel.h paste.c paste.h vt.c vt.h version.h
+test_sel: test_sel.c sel.c sel.h paste.c paste.h vt.c vt.h $(VERSION_H)
 	$(CC) $(TEST_CFLAGS) -Wl,--wrap=malloc,--wrap=calloc,--wrap=realloc -o $@ test_sel.c sel.c paste.c vt.c
 
 # The shell and its pty with real ptys, pipes and processes, close_range refused
@@ -136,10 +152,10 @@ font_fallback: tests/font_fallback.c font.c font.h
 	$(CC) $(FONT_CFLAGS) -Wl,--wrap=FT_New_Face -Wl,--wrap=strdup -o $@ tests/font_fallback.c \
 		$(FONT_LIBS)
 
-fuzz_regress: tests/fuzz_vt.c vt.c vt.h version.h
+fuzz_regress: tests/fuzz_vt.c vt.c vt.h $(VERSION_H)
 	$(CC) $(TEST_CFLAGS) -O1 -I. -DFUZZ_STANDALONE -o $@ tests/fuzz_vt.c vt.c
 
-test_replay: tests/replay.c vt.c vt.h version.h
+test_replay: tests/replay.c vt.c vt.h $(VERSION_H)
 	$(CC) $(TEST_CFLAGS) -O1 -I. -o $@ tests/replay.c vt.c
 
 # About 290 recorded VT100 animations and ANSI files through the VT core, whole,
@@ -154,7 +170,7 @@ replay: test_replay
 # host if it has libFuzzer, otherwise the container of make evil (tests/fuzz.sh).
 # The corpus grows in tests/fuzz/corpus, a finding is tests/fuzz/crash-*.
 FUZZ_TIME ?= 600
-fuzz_vt: tests/fuzz_vt.c vt.c vt.h version.h
+fuzz_vt: tests/fuzz_vt.c vt.c vt.h $(VERSION_H)
 	clang -std=c11 -Wall -Wextra -g -O1 -I. -fsanitize=fuzzer,address,undefined \
 		-fno-sanitize-recover=all -o $@ tests/fuzz_vt.c vt.c
 
@@ -162,7 +178,7 @@ fuzz:
 	FUZZ_TIME=$(FUZZ_TIME) tests/fuzz.sh
 
 # Each capability of mwt.info against the VT core. Needs python3 and ncurses.
-vtdump: tests/vtdump.c vt.c vt.h version.h
+vtdump: tests/vtdump.c vt.c vt.h $(VERSION_H)
 	$(CC) $(TEST_CFLAGS) -I. -o $@ tests/vtdump.c vt.c
 
 terminfo: vtdump
@@ -236,5 +252,7 @@ uninstall:
 
 clean:
 	rm -f mwt mwt-esctest test_vt test_rc test_input test_paste test_sel test_shell test_util vtdump test_replay fuzz_vt fuzz_regress fuzz_regress.log font_oom font_cache font_style font_lookup font_ttc font_fallback *.o $(PROTO_H) $(PROTO_C)
+	rm -f build/gitversion.h
+	rmdir build 2>/dev/null || true
 
 .PHONY: all check replay fuzz terminfo keys bell wayland pixel mouse keyboard test evil fonts oldwayland width esctest profile install uninstall clean

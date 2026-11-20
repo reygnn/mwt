@@ -29,7 +29,13 @@ run() {
 	fi
 }
 
-version=$(sed -n 's/^#define MWT_VERSION "\(.*\)"$/\1/p' version.h)
+# The version from version.h, then the commit the build is from where git knows it.
+version=$(sed -n 's/^#define MWT_VERSION "\([^"]*\)".*/\1/p' version.h)
+[ -n "$version" ] || { echo "args: FAIL no MWT_VERSION in version.h"; exit 1; }
+if commit=$(TZ=UTC0 git log -1 --format=%cd.%h --date=format-local:%Y%m%d.%H%M 2>/dev/null); then
+	git diff --quiet HEAD || commit=$commit.dirty
+	version=$version+$commit
+fi
 n=$((n + 1))
 out=$("$MWT" -v 2>&1)
 rc=$?

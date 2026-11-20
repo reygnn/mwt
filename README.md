@@ -28,7 +28,9 @@ use `TERM=xterm-256color ssh host` or `infocmp -x mwt | ssh host tic -x -`.
 
     mwt [-v] [-h] [-f font] [-a app-id] [-T title] [-g COLSxROWS] [-e] [command [args...]]
 
-* `-v` prints the version, set in `version.h`, which XTVERSION also reports.
+* `-v` prints the version, set in `version.h`, and the commit built, as
+  `0.3.5+DATE.TIME.HASH` with its commit time in UTC and `.dirty` for changes not
+  committed. XTVERSION reports the same.
 * `-h` prints the usage and exits with code 2.
 * `-f "JetBrains Mono:size=12"` takes a fontconfig pattern.
 * `-a` sets the app_id, default `mwt`. mwc's mwmrc and the mwtrc match on it.

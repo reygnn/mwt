@@ -57,7 +57,7 @@ esctest is GPL. The containers have no network, so fetch on the host first with
 | `util.c` | `-g`, the context menu's keys, the first size within the compositor's bounds, cutting `-T` and `-a` |
 | `rc.c` | the mwtrc, the minimum contrast and the cursor's color on a cell; no Wayland |
 | `mwt.info` | terminfo; declares only what `vt.c` really does |
-| `config.h`, `version.h` | defaults; the version for `-v` and XTVERSION |
+| `config.h`, `version.h` | defaults; the version for `-v` and XTVERSION, with the commit from `build/gitversion.h` (the Makefile) |
 | `test_vt.c`, `test_rc.c`, `test_input.c`, `test_paste.c`, `test_sel.c`, `test_shell.c`, `test_util.c` | unit tests; `test_vt`, `test_paste` and `test_sel` fail each allocation once through `--wrap`, `test_input` compiles keymaps from layout names, `test_shell` runs real ptys, pipes and processes |
 | `tests/replay.c` | plays recordings whole, byte by byte, in chunks and with resizes; the first three must end the same |
 | `tests/fuzz_vt.c` | libFuzzer harness; built with `-DFUZZ_STANDALONE` it is `fuzz_regress`. How to keep a finding: its head |

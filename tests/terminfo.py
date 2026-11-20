@@ -430,8 +430,14 @@ def check_rv():
 
 
 def check_xr():
+    # the version from version.h, then the commit built from where git knows it
     with open(os.path.join(ROOT, "version.h")) as f:
         version = re.search(r'VERSION "([^"]+)"', f.read()).group(1)
+    git = subprocess.run(["git", "log", "-1", "--format=%cd.%h", "--date=format-local:%Y%m%d.%H%M"],
+                         cwd=ROOT, env={**os.environ, "TZ": "UTC0"}, capture_output=True, text=True)
+    if git.returncode == 0 and git.stdout.strip():
+        dirty = subprocess.run(["git", "diff", "--quiet", "HEAD"], cwd=ROOT).returncode != 0
+        version += "+" + git.stdout.strip() + (".dirty" if dirty else "")
     eq(Screen(S("XR")).reply, b"\033P>|mwt(%s)\033\\" % version.encode())
 
 
