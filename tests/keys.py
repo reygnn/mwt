@@ -38,9 +38,21 @@ CAP_KEYS = {
     "kri": ("Up", "shift"), "kNXT": ("Next", "shift"), "kPRV": ("Prior", "shift"),
     "kb2": ("KP_Begin",),
 }
-for n in range(1, 13):
-    CAP_KEYS[f"kf{n}"] = (f"F{n}",)
-    CAP_KEYS[f"kf{n + 12}"] = (f"F{n}", "shift")
+# The modified ones, by xterm's parameter: 1 + Shift + 2 Alt + 4 Ctrl. kUP and
+# kDN are kri and kind again; no kIC, Shift+Insert pastes.
+MODS = {2: ("shift",), 3: ("alt",), 4: ("shift", "alt"), 5: ("ctrl",),
+        6: ("shift", "ctrl"), 7: ("alt", "ctrl")}
+CAP_KEYS["kUP"], CAP_KEYS["kDN"] = ("Up", "shift"), ("Down", "shift")
+for cap, key in (("kDC", "Delete"), ("kDN", "Down"), ("kEND", "End"), ("kHOM", "Home"),
+                 ("kIC", "Insert"), ("kLFT", "Left"), ("kNXT", "Next"), ("kPRV", "Prior"),
+                 ("kRIT", "Right"), ("kUP", "Up")):
+    for m in range(3, 8):
+        CAP_KEYS[f"{cap}{m}"] = (key, *MODS[m])
+# kf13 on: twelve each with Shift, Ctrl, Ctrl+Shift, Alt, and three with Alt+Shift
+for i, m in enumerate((1, 2, 5, 6, 3, 4)):
+    for n in range(1, 13):
+        if 12 * i + n <= 63:
+            CAP_KEYS[f"kf{12 * i + n}"] = (f"F{n}", *MODS.get(m, ()))
 
 # mwt keeps these on the normal screen (paste, scrollback): no program sees them.
 MWT_KEEPS = [("Insert", "shift"), ("Prior", "shift"), ("Next", "shift"),

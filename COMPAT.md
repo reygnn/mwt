@@ -98,7 +98,7 @@ are left out is in CAVEATS.md.
 
 | Key | VT100 sends | mwt | Note |
 |---|---|:-:|---|
-| Cursor keys | `ESC [ A`, or `ESC O A` with DECCKM | ✅ | with modifiers `CSI 1 ; m A`, as xterm |
+| Cursor keys | `ESC [ A`, or `ESC O A` with DECCKM | ✅ | with modifiers `CSI 1 ; m A`, as xterm; mwt.info declares them (`kUP5` and the like) |
 | PF1–PF4 | `ESC O P` to `ESC O S` | ✅ | on F1 to F4 |
 | Return | CR, or CR LF with LNM | ✅ | |
 | Backspace | BS (0x08) | 🟡 | DEL (0x7F), as xterm and `kbs` in mwt.info; Ctrl+Backspace sends BS |

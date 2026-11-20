@@ -107,8 +107,9 @@ and DECRQM answers "unknown".
 
 Shift+PgUp and Shift+PgDn reach the program only in the alternate screen, Shift+Home
 and Shift+End also when it has the mouse; otherwise they scroll the history. `kPRV`,
-`kNXT`, `kHOM` and `kEND` in `mwt.info` hold only then. The keys of the keypad with
-NumLock and Shift always reach the program, as in xterm.
+`kNXT`, `kHOM` and `kEND` in `mwt.info` hold only then. There is no `kIC`: Shift+Insert
+always pastes. The keys of the keypad with NumLock and Shift always reach the program,
+as in xterm.
 
 Of the VT420 and xterm features esctest checks, these are left out, so most of what
 `make esctest` reports fails by design: left and right margins (DECLRMM, DECSLRM),

@@ -417,6 +417,23 @@ def check_da():
     yes(re.fullmatch(pat, s.reply), f"answer {s.reply!r} does not fit {CAPS['u8']!r}")
 
 
+def check_focus():
+    yes("focus" in Screen(S("fe")).modes, "fe does not turn on focus events")
+    yes("focus" not in Screen(S("fe") + S("fd")).modes, "fd does not turn them off")
+
+
+def check_rv():
+    # RV asks for the secondary DA, which programs (vim) match against xterm's
+    yes(re.fullmatch(rb"\033\[>[0-9]+;[0-9]+;[0-9]+c", Screen(S("RV")).reply),
+        "no secondary DA to RV")
+
+
+def check_xr():
+    with open(os.path.join(ROOT, "version.h")) as f:
+        version = re.search(r'VERSION "([^"]+)"', f.read()).group(1)
+    eq(Screen(S("XR")).reply, b"\033P>|mwt(%s)\033\\" % version.encode())
+
+
 CHECKS = {
     "am": check_am, "bce": check_bce, "mir": check_mir, "msgr": check_msgr, "npc": check_npc,
     "xenl": check_xenl, "Tc": check_rgb("setrgbf", 1),
@@ -455,6 +472,7 @@ CHECKS = {
     "u6": check_cpr, "u7": check_cpr, "u8": check_da, "u9": check_da,
     "BE": mode_set("BE", "bracketed"), "BD": mode_set("BD", "bracketed", off=True),
     "E3": check_e3, "Se": check_ss, "Ss": check_ss, "XM": check_xm_mode,
+    "fe": check_focus, "fd": check_focus, "RV": check_rv, "XR": check_xr,
 }
 
 # What mwt sends rather than what it takes, see tests/keys.py. PE and PS are the
