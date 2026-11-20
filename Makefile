@@ -120,7 +120,7 @@ font_cache: tests/font_cache.c font.c font.h
 font_lookup: tests/font_lookup.c font.c font.h
 	$(CC) -std=c11 -Wall -Wextra -g -O1 -I. -fsanitize=address,undefined \
 		-fno-sanitize-recover=all $(shell pkg-config --cflags fontconfig freetype2) \
-		-Wl,--wrap=FcFontMatch -Wl,--wrap=FcFontSort -o $@ tests/font_lookup.c \
+		-Wl,--wrap=FcFontMatch -Wl,--wrap=FcFontSort -Wl,--wrap=malloc -o $@ tests/font_lookup.c \
 		$(shell pkg-config --libs fontconfig freetype2) -lm
 
 # Each style draws what regular has, where its own face lacks it; under

@@ -1,14 +1,28 @@
 /* tests/font_lookup.c - glyphs no open face has cost one FcFontSort in all, not
  * an FcFontMatch each: a screen of new ones held up the event loop for seconds
  * with many fonts installed. font.c is built in, with FcFontMatch and FcFontSort
- * counted through --wrap. What the system covers must still be drawn. Needs a
- * font with Latin glyphs and others for the rest; make fonts runs it. */
+ * counted through --wrap. What the system covers must still be drawn. And out of
+ * memory once, a failed FcFontSort or a glyph's bitmap (malloc through --wrap)
+ * leaves the glyph blank only that time. Needs a font with Latin glyphs and
+ * others for the rest; make fonts runs it. */
+#define SORT_RETRY_MS 0
 #include "../font.c"
 
 #include <stdio.h>
 #include <time.h>
 
 static int matches, sorts;
+static bool fail_sort, fail_malloc; /* the next one fails */
+
+void *__real_malloc(size_t n);
+void *__wrap_malloc(size_t n)
+{
+	if (fail_malloc) {
+		fail_malloc = false;
+		return NULL;
+	}
+	return __real_malloc(n);
+}
 
 FcPattern *__real_FcFontMatch(FcConfig *c, FcPattern *p, FcResult *r);
 FcPattern *__wrap_FcFontMatch(FcConfig *c, FcPattern *p, FcResult *r)
@@ -21,6 +35,11 @@ FcFontSet *__real_FcFontSort(FcConfig *c, FcPattern *p, FcBool trim, FcCharSet *
 FcFontSet *__wrap_FcFontSort(FcConfig *c, FcPattern *p, FcBool trim, FcCharSet **cs, FcResult *r)
 {
 	sorts++;
+	if (fail_sort) {
+		fail_sort = false;
+		*r = FcResultOutOfMemory;
+		return NULL;
+	}
 	return __real_FcFontSort(c, p, trim, cs, r);
 }
 
@@ -78,6 +97,40 @@ int main(int argc, char **argv)
 		fails++;
 	}
 	font_close(f);
+	int lookup_sorts = sorts;
+
+	/* a covered character no style face has, from a fallback face */
+	uint32_t other = 0;
+	f = font_open(spec, 0, 1);
+	for (size_t k = 1; f && !other && k < sizeof ranges / sizeof ranges[0]; k++)
+		for (uint32_t cp = ranges[k][0]; !other && cp < ranges[k][1]; cp++)
+			if (cover && FcCharSetHasChar(cover, cp) &&
+			    !FT_Get_Char_Index(f->style[STYLE_REGULAR].ft, cp))
+				other = cp;
+	if (!other) {
+		printf("FAIL: no character from a fallback face to fail the lookup with\n");
+		fails++;
+	} else {
+		fail_sort = true;
+		bool blank = !font_glyph(f, other, STYLE_REGULAR)->w;
+		bool drawn = font_glyph(f, other, STYLE_REGULAR)->w > 0;
+		if (!blank || !drawn) {
+			printf("FAIL: U+%04X with FcFontSort failing once: %s the first time, %s the second\n",
+			       (unsigned)other, blank ? "blank" : "drawn", drawn ? "drawn" : "blank");
+			fails++;
+		}
+	}
+	if (f) {
+		fail_malloc = true;
+		bool blank = !font_glyph(f, 'A', STYLE_BOLD)->w;
+		bool drawn = font_glyph(f, 'A', STYLE_BOLD)->w > 0;
+		if (!blank || !drawn) {
+			printf("FAIL: A with its bitmap failing once: %s the first time, %s the second\n",
+			       blank ? "blank" : "drawn", drawn ? "drawn" : "blank");
+			fails++;
+		}
+		font_close(f);
+	}
 	if (all)
 		FcFontSetDestroy(all);
 	if (cover)
@@ -85,7 +138,8 @@ int main(int argc, char **argv)
 	FcPatternDestroy(p);
 	if (fails)
 		return 1;
-	printf("font_lookup: %d FcFontSort, %d of %d covered characters drawn, all in %.2f s\n",
-	       sorts, drawn, covered, dt);
+	printf("font_lookup: %d FcFontSort, %d of %d covered characters drawn, all in %.2f s; "
+	       "after a failed FcFontSort and a failed bitmap drawn the next time\n",
+	       lookup_sorts, drawn, covered, dt);
 	return 0;
 }

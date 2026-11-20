@@ -426,11 +426,14 @@ static void copy_clipboard(void)
 	}
 	free(t.clip_text);
 	t.clip_text = s;
+	/* The new source first: out of memory the old one stays, and as it sends
+	 * clip_text, the clipboard has the new text all the same. */
+	struct wl_data_source *src = wl_data_device_manager_create_data_source(t.ddm);
+	if (!src)
+		return;
 	if (t.clip_src)
 		wl_data_source_destroy(t.clip_src);
-	t.clip_src = wl_data_device_manager_create_data_source(t.ddm);
-	if (!t.clip_src) /* out of memory: the text stays, pasted here from it */
-		return;
+	t.clip_src = src;
 	for (size_t i = 0; i < LEN(mimes); i++)
 		wl_data_source_offer(t.clip_src, mimes[i]);
 	wl_data_source_add_listener(t.clip_src, &ds_listener, NULL);
@@ -446,11 +449,14 @@ static void copy_primary(void)
 	}
 	free(t.prim_text);
 	t.prim_text = s;
+	/* as copy_clipboard: the old source stays when there is no new one */
+	struct zwp_primary_selection_source_v1 *src =
+		zwp_primary_selection_device_manager_v1_create_source(t.psm);
+	if (!src)
+		return;
 	if (t.prim_src)
 		zwp_primary_selection_source_v1_destroy(t.prim_src);
-	t.prim_src = zwp_primary_selection_device_manager_v1_create_source(t.psm);
-	if (!t.prim_src)
-		return;
+	t.prim_src = src;
 	for (size_t i = 0; i < LEN(mimes); i++)
 		zwp_primary_selection_source_v1_offer(t.prim_src, mimes[i]);
 	zwp_primary_selection_source_v1_add_listener(t.prim_src, &ps_listener, NULL);
@@ -1447,6 +1453,11 @@ static void load_cursor_theme(void)
 	}
 	if (!t.cursor_surface)
 		t.cursor_surface = wl_compositor_create_surface(t.compositor);
+	if (!t.cursor_surface) { /* out of memory: the compositor's pointer, tried again */
+		wl_cursor_theme_destroy(theme);
+		t.cursor_retry = true;
+		return;
+	}
 	/* The theme may not have the size asked for: Adwaita gives 64 for 72 at scale 3.
 	 * A buffer scale must divide the buffer's size, or the surface is in error; take
 	 * the largest that does, and let a viewport shrink the image the rest. */
@@ -1455,12 +1466,13 @@ static void load_cursor_theme(void)
 	while (bscale > 1 && (w % bscale || h % bscale))
 		bscale--;
 	int dw = w / bscale, dh = h / bscale;
-	if (bscale != t.scale && t.viewporter) {
+	if (bscale != t.scale && t.viewporter && !t.cursor_viewport)
+		t.cursor_viewport = wp_viewporter_get_viewport(t.viewporter, t.cursor_surface);
+	/* without a viewport, out of memory, the largest scale that divides */
+	if (bscale != t.scale && t.cursor_viewport) {
 		bscale = 1;
 		dw = MAX(1, (w + t.scale / 2) / t.scale);
 		dh = MAX(1, (h + t.scale / 2) / t.scale);
-		if (!t.cursor_viewport)
-			t.cursor_viewport = wp_viewporter_get_viewport(t.viewporter, t.cursor_surface);
 		wp_viewport_set_destination(t.cursor_viewport, dw, dh);
 	} else if (t.cursor_viewport) {
 		wp_viewport_destroy(t.cursor_viewport);

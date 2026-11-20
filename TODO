@@ -31,8 +31,6 @@ Performance, aus der Review vom 2026-11-17 (docs/history/Review-2026-11-17.md):
   mehreren write() schickt, nicht halb gezeichnet wird.
 * Beim Resize und Zoom bei jedem Schritt zwei neue memfd-Puffer; ein Pool,
   der nur wächst, sparte die Seitenfehler.
-* Der Glyph-Hash nimmt die unteren Bits des Produkts; die oberen streuen
-  besser. Klein gegen blit.
 
 Zu entscheiden, aus der dritten Review (docs/history/Review-2026-11-08.md):
 

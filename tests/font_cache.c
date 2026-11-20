@@ -1,4 +1,5 @@
-/* tests/font_cache.c - the glyph cache keeps to its limits. font.c is built in
+/* tests/font_cache.c - the glyph cache keeps to its limits, and output cannot
+ * choose glyphs that pile up in its hash table. font.c is built in
  * here with small ones, so that a few hundred glyphs empty the cache many
  * times; this file can then look at the cache itself. Latin glyphs reach the
  * limit in bytes, empty ones from a private use plane, which no font has, the
@@ -7,6 +8,8 @@
  * glyphs, as the image of make evil has. */
 #define GLYPH_CACHE_MAX 64
 #define GLYPH_CACHE_BYTES (4u << 10)
+static unsigned long probes;
+#define SLOT_PROBE() (probes++)
 #include "../font.c"
 
 #include <stdio.h>
@@ -32,6 +35,53 @@ static bool same(const struct copy *c, const struct glyph *g)
 {
 	return c->w == g->w && c->h == g->h && c->left == g->left && c->top == g->top &&
 	       !memcmp(c->alpha, g->alpha, (size_t)g->w * g->h);
+}
+
+/* Where a fixed multiplier, 2654435761, put a key in a table of 2^BITS: by the
+ * low bits as it was, or by the top bits alone. */
+enum { BITS = 17 };
+static uint32_t fixed_slot(uint32_t key, bool top)
+{
+	uint32_t p = key * 2654435761u;
+	return top ? p >> (32 - BITS) : p & ((1u << BITS) - 1);
+}
+
+/* 60000 keys (code point and style, below 2^23) that the fixed multiplier
+ * starts in the first 60000 slots of a table of 2^17, the size 64k glyphs grow
+ * it to, and 1000 more it starts there too. Each of those walked the run to its
+ * end, 30000 steps on average. With the font's multiplier: a step or two. */
+static int hash_flood(struct font *f, bool top)
+{
+	enum { N = 60000, ASK = 1000 };
+	size_t cap = (size_t)1 << BITS;
+	struct entry *tab = calloc(cap, sizeof *tab);
+	if (!tab)
+		return 0;
+	int n = 0, ask = 0;
+	probes = 0;
+	unsigned long before = 0;
+	for (uint32_t key = 1; key < 1u << 23 && ask < ASK; key++) {
+		if (fixed_slot(key, top) >= N)
+			continue;
+		if (n < N) {
+			struct entry *e = slot(tab, cap, key, f->hash_mul);
+			e->used = true;
+			e->key = key;
+			n++;
+			before = probes;
+		} else {
+			slot(tab, cap, key, f->hash_mul);
+			ask++;
+		}
+	}
+	free(tab);
+	unsigned long steps = probes - before;
+	if (steps > 8 * ASK) {
+		printf("FAIL: %d lookups of keys chosen against the %s bits took %lu steps\n", ask,
+		       top ? "top" : "low", steps);
+		return 1;
+	}
+	return 0;
 }
 
 int main(int argc, char **argv)
@@ -85,6 +135,8 @@ int main(int argc, char **argv)
 		printf("FAIL: A after the cache was emptied is not the A before\n");
 		fails++;
 	}
+	fails += hash_flood(f, false);
+	fails += hash_flood(f, true);
 	font_close(f);
 	if (fails)
 		return 1;

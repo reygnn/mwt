@@ -13,6 +13,9 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/random.h>
+#include <time.h>
+#include <unistd.h>
 
 /* Fallback faces kept open at a time. With more scripts than that, the face used
  * longest ago makes room: glyphs already drawn stay in the cache, which holds
@@ -28,6 +31,18 @@
 #endif
 #ifndef GLYPH_CACHE_BYTES
 #define GLYPH_CACHE_BYTES (64u << 20)
+#endif
+
+/* A failed FcFontSort, out of memory, is tried again after this long, not at
+ * every missing glyph: each one can take milliseconds. tests/font_lookup.c
+ * sets 0. */
+/* tests/font_cache.c counts the steps of slot() with it */
+#ifndef SLOT_PROBE
+#define SLOT_PROBE() ((void)0)
+#endif
+
+#ifndef SORT_RETRY_MS
+#define SORT_RETRY_MS 1000
 #endif
 
 struct face {
@@ -54,6 +69,7 @@ struct font {
 	/* the system's fonts in order of preference, made once on the first
 	 * missing glyph, and what all of them cover together */
 	bool sorted_tried;
+	long long sort_retry; /* ms, after a failure */
 	FcPattern *sort_pat;
 	FcFontSet *sorted;
 	FcCharSet *cover;
@@ -63,6 +79,7 @@ struct font {
 	int cw, ch, ascent;
 	struct entry *cache;
 	size_t cache_cap, cache_used;
+	uint32_t hash_mul; /* random and odd: output cannot pick keys that collide */
 	size_t cache_bytes; /* of the bitmaps in it */
 };
 
@@ -218,6 +235,10 @@ struct font *font_open(const char *spec, double size_pt, int scale)
 		goto fail;
 	}
 
+	if (getrandom(&f->hash_mul, sizeof f->hash_mul, GRND_NONBLOCK) != sizeof f->hash_mul)
+		f->hash_mul = (uint32_t)time(NULL) * 2654435761u ^ (uint32_t)getpid() ^
+			      (uint32_t)(uintptr_t)f;
+	f->hash_mul |= 1;
 	f->cache = calloc(1024, sizeof *f->cache);
 	if (!f->cache)
 		goto fail;
@@ -275,11 +296,31 @@ double font_size_pt(const struct font *f)
 /* One FcFontSort for all missing glyphs instead of an FcFontMatch for each:
  * with hundreds of fonts a match took 0.2 ms, and a screen of characters no font
  * has, each new, held up the event loop for seconds. */
+static long long now_ms(void)
+{
+	struct timespec ts;
+	clock_gettime(CLOCK_MONOTONIC, &ts);
+	return ts.tv_sec * 1000LL + ts.tv_nsec / 1000000;
+}
+
 static bool sorted_fonts(struct font *f)
 {
-	if (f->sorted_tried)
-		return f->sorted && f->cover;
+	if (f->sorted_tried && (f->sorted && f->cover))
+		return true;
+	if (f->sorted_tried && now_ms() < f->sort_retry)
+		return false;
+	/* first, or again after a failure: what that left goes */
+	if (f->sorted)
+		FcFontSetDestroy(f->sorted);
+	if (f->cover)
+		FcCharSetDestroy(f->cover);
+	if (f->sort_pat)
+		FcPatternDestroy(f->sort_pat);
+	f->sorted = NULL;
+	f->cover = NULL;
+	f->sort_pat = NULL;
 	f->sorted_tried = true;
+	f->sort_retry = now_ms() + SORT_RETRY_MS;
 	f->sort_pat = FcPatternDuplicate(f->base);
 	if (!f->sort_pat) /* FcPatternAdd* and FcConfigSubstitute do not take NULL */
 		return false;
@@ -406,22 +447,26 @@ static struct face *face_for(struct font *f, uint32_t cp, int style, bool *embol
 	return fc;
 }
 
-static void render(struct font *f, uint32_t cp, int style, struct glyph *g)
+/* False when g is empty for lack of memory, and may not be the next time: the
+ * bitmap, or the list of the system's fonts to find a face in. */
+static bool render(struct font *f, uint32_t cp, int style, struct glyph *g)
 {
 	memset(g, 0, sizeof *g);
 	bool embolden;
 	struct face *fc = face_for(f, cp, style, &embolden);
 	FT_UInt gi = fc ? FT_Get_Char_Index(fc->ft, cp) : 0;
-	if (!gi || FT_Load_Glyph(fc->ft, gi, FT_LOAD_TARGET_LIGHT))
-		return;
+	if (!gi)
+		return !f->sorted_tried || (f->sorted && f->cover);
+	if (FT_Load_Glyph(fc->ft, gi, FT_LOAD_TARGET_LIGHT))
+		return true;
 	FT_GlyphSlot s = fc->ft->glyph;
 	if (embolden)
 		FT_GlyphSlot_Embolden(s);
 	if (FT_Render_Glyph(s, FT_RENDER_MODE_NORMAL))
-		return;
+		return true;
 	FT_Bitmap *b = &s->bitmap;
 	if (!b->width || !b->rows)
-		return;
+		return true;
 	g->w = b->width;
 	g->h = b->rows;
 	g->left = s->bitmap_left;
@@ -429,7 +474,7 @@ static void render(struct font *f, uint32_t cp, int style, struct glyph *g)
 	g->alpha = malloc((size_t)g->w * g->h);
 	if (!g->alpha) {
 		g->w = g->h = 0;
-		return;
+		return false;
 	}
 	for (int y = 0; y < g->h; y++) {
 		const uint8_t *src = b->buffer + y * b->pitch;
@@ -442,13 +487,20 @@ static void render(struct font *f, uint32_t cp, int style, struct glyph *g)
 		else
 			memset(dst, 0, g->w);
 	}
+	return true;
 }
 
-static struct entry *slot(struct entry *tab, size_t cap, uint32_t key)
+/* Multiply-shift: the top bits of the product, which depend on all of the key,
+ * with a multiplier output cannot know. The low bits of a fixed one let about
+ * 200 KB of chosen code points pile 64k glyphs into one run, and each lookup of
+ * a frame walked it. cap is a power of two. */
+static struct entry *slot(struct entry *tab, size_t cap, uint32_t key, uint32_t mul)
 {
-	size_t i = (key * 2654435761u) & (cap - 1);
-	while (tab[i].used && tab[i].key != key)
+	size_t i = cap > 1 ? (uint32_t)(key * mul) >> (32 - __builtin_ctzll(cap)) : 0;
+	while (tab[i].used && tab[i].key != key) {
+		SLOT_PROBE();
 		i = (i + 1) & (cap - 1);
+	}
 	return &tab[i];
 }
 
@@ -464,12 +516,12 @@ static void cache_empty(struct font *f)
 const struct glyph *font_glyph(struct font *f, uint32_t cp, int style)
 {
 	uint32_t key = cp << 2 | (style & 3);
-	struct entry *e = slot(f->cache, f->cache_cap, key);
+	struct entry *e = slot(f->cache, f->cache_cap, key, f->hash_mul);
 	if (e->used)
 		return &e->g;
 	if (f->cache_used >= GLYPH_CACHE_MAX || f->cache_bytes >= GLYPH_CACHE_BYTES) {
 		cache_empty(f);
-		e = slot(f->cache, f->cache_cap, key);
+		e = slot(f->cache, f->cache_cap, key, f->hash_mul);
 	}
 	if ((f->cache_used + 1) * 10 > f->cache_cap * 7) {
 		size_t ncap = f->cache_cap * 2;
@@ -477,11 +529,11 @@ const struct glyph *font_glyph(struct font *f, uint32_t cp, int style)
 		if (n) {
 			for (size_t i = 0; i < f->cache_cap; i++)
 				if (f->cache[i].used)
-					*slot(n, ncap, f->cache[i].key) = f->cache[i];
+					*slot(n, ncap, f->cache[i].key, f->hash_mul) = f->cache[i];
 			free(f->cache);
 			f->cache = n;
 			f->cache_cap = ncap;
-			e = slot(f->cache, f->cache_cap, key);
+			e = slot(f->cache, f->cache_cap, key, f->hash_mul);
 		} else if (f->cache_used + 1 >= f->cache_cap) {
 			/* no memory to grow, and a full table would leave slot()
 			 * without a free place: draw nothing for this one */
@@ -489,9 +541,14 @@ const struct glyph *font_glyph(struct font *f, uint32_t cp, int style)
 			return &none;
 		}
 	}
+	if (!render(f, cp, style & 3, &e->g)) {
+		/* not kept: the next time may have the memory. The slot was free
+		 * and is the end of its run, so leaving it free breaks no run. */
+		static const struct glyph none;
+		return &none;
+	}
 	e->used = true;
 	e->key = key;
-	render(f, cp, style & 3, &e->g);
 	f->cache_used++;
 	f->cache_bytes += (size_t)e->g.w * e->g.h;
 	return &e->g;
