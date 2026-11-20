@@ -12,6 +12,10 @@ TODO
   minimumContrast. Wenn nötig die Schrift und padding; Farbnamen wie in mwc
   nur mit einer eigenen Tabelle, mwt hat kein pango.
 
+* mwt.info deklariert kein rep, obwohl vt.c REP kann (seit der zweiten Review
+  des REP-Fixes auch wie xterm). ncurses nutzt es, um Zeichenfolgen kürzer zu
+  schicken. Dazu ein Check in tests/terminfo.py.
+
 Performance, aus der Review vom 2026-11-17 (docs/history/Review-2026-11-17.md):
 
 * Scrollen um eine Zeile zeichnet alle Zeilen neu, bei 200x55 und 1080p etwa
