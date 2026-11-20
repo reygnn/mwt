@@ -121,6 +121,9 @@ reverse wraparound (`?45`), 132 columns (DECCOLM), reverse screen (DECSCNM), dou
 lines (`ESC # 3` to `6`), national character sets and G2 and G3, XTSAVE and XTRESTORE,
 DECSCL, and the DECDSR reports for printer, keyboard and locator.
 
+DA2 answers `CSI > 1 ; 10 ; 0 c`, a VT220 as DA does, with a version below xterm's:
+esctest wants xterm's 41 and 314 or more, and programs like vim would take mwt for xterm.
+
 Combining characters are discarded, see Character widths. Setting colors through OSC is
 ignored; queries are answered.
 
