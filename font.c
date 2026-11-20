@@ -78,6 +78,10 @@ struct font {
 	FcPattern *sort_pat;
 	FcFontSet *sorted;
 	FcCharSet *cover;
+	/* sorted's indices, the monospaced fonts first, nmono of them; and the
+	 * fonts that will not load, so that they are not tried at each glyph */
+	int *order, nmono;
+	bool *dead;
 	unsigned long tick;
 	double size_pt, size_px;
 	int slant; /* regular's, for the fallback faces */
@@ -88,24 +92,27 @@ struct font {
 	size_t cache_bytes; /* of the bitmaps in it */
 };
 
-static bool load_face(struct font *f, FcPattern *match, struct face *out)
+/* 1 when loaded, 0 out of memory, -1 for a face that will not load: not
+ * scalable, as Noto Color Emoji, or unreadable */
+static int load_face(struct font *f, FcPattern *match, struct face *out)
 {
 	FcChar8 *file;
 	int index = 0;
 	FcBool emb = FcFalse;
 	FcMatrix *fcm;
 	if (FcPatternGetString(match, FC_FILE, 0, &file) != FcResultMatch)
-		return false;
+		return -1;
 	FcPatternGetInteger(match, FC_INDEX, 0, &index);
 	FcPatternGetBool(match, FC_EMBOLDEN, 0, &emb);
 	out->weight = FC_WEIGHT_REGULAR;
 	FcPatternGetDouble(match, FC_WEIGHT, 0, &out->weight);
-	if (FT_New_Face(f->lib, (const char *)file, index, &out->ft))
-		return false;
+	FT_Error err = FT_New_Face(f->lib, (const char *)file, index, &out->ft);
+	if (err)
+		return err == FT_Err_Out_Of_Memory ? 0 : -1;
 	if (!FT_IS_SCALABLE(out->ft)) {
 		FT_Done_Face(out->ft);
 		out->ft = NULL;
-		return false;
+		return -1;
 	}
 	FT_Set_Char_Size(out->ft, 0, (FT_F26Dot6)lround(f->size_px * 64), 72, 72);
 	if (FcPatternGetMatrix(match, FC_MATRIX, 0, &fcm) == FcResultMatch) {
@@ -120,11 +127,11 @@ static bool load_face(struct font *f, FcPattern *match, struct face *out)
 	if (!out->path) {
 		FT_Done_Face(out->ft);
 		out->ft = NULL;
-		return false;
+		return 0;
 	}
 	out->embolden = emb;
 	out->index = index;
-	return true;
+	return 1;
 }
 
 static FcPattern *match_pattern(FcPattern *p)
@@ -197,7 +204,7 @@ struct font *font_open(const char *spec, double size_pt, int scale)
 		FcPatternAddBool(p, FC_SCALABLE, FcTrue);
 		FcPattern *m = match_pattern(p);
 		FcPatternDestroy(p);
-		bool ok = m && load_face(f, m, &f->style[i]);
+		bool ok = m && load_face(f, m, &f->style[i]) > 0;
 		if (ok && i == 0) {
 			/* fontconfig gives some font for any name: a family it does not
 			 * know comes out proportional, and the grid does not line up */
@@ -294,6 +301,8 @@ void font_close(struct font *f)
 		FcCharSetDestroy(f->cover);
 	if (f->sort_pat)
 		FcPatternDestroy(f->sort_pat);
+	free(f->order);
+	free(f->dead);
 	if (f->base)
 		FcPatternDestroy(f->base);
 	if (f->lib)
@@ -323,9 +332,16 @@ static long long now_ms(void)
 	return ts.tv_sec * 1000LL + ts.tv_nsec / 1000000;
 }
 
+static bool is_mono(FcPattern *p)
+{
+	int spacing = FC_PROPORTIONAL;
+	FcPatternGetInteger(p, FC_SPACING, 0, &spacing);
+	return spacing >= FC_DUAL;
+}
+
 static bool sorted_fonts(struct font *f)
 {
-	if (f->sorted_tried && (f->sorted && f->cover))
+	if (f->sorted_tried && (f->sorted && f->cover && f->order && f->dead))
 		return true;
 	if (f->sorted_tried && now_ms() < f->sort_retry)
 		return false;
@@ -336,9 +352,13 @@ static bool sorted_fonts(struct font *f)
 		FcCharSetDestroy(f->cover);
 	if (f->sort_pat)
 		FcPatternDestroy(f->sort_pat);
+	free(f->order);
+	free(f->dead);
 	f->sorted = NULL;
 	f->cover = NULL;
 	f->sort_pat = NULL;
+	f->order = NULL;
+	f->dead = NULL;
 	f->sorted_tried = true;
 	f->sort_retry = now_ms() + SORT_RETRY_MS;
 	f->sort_pat = FcPatternDuplicate(f->base);
@@ -360,7 +380,23 @@ static bool sorted_fonts(struct font *f)
 	 * before it, and so D2Coding behind NanumGothic, the monospaced face behind
 	 * the proportional one find_fallback should pass over. */
 	f->sorted = FcFontSort(NULL, f->sort_pat, FcFalse, &f->cover, &res);
-	return f->sorted && f->cover;
+	if (!f->sorted || !f->cover)
+		return false;
+	int n = f->sorted->nfont;
+	f->order = malloc((n ? n : 1) * sizeof *f->order);
+	f->dead = calloc(n ? n : 1, sizeof *f->dead);
+	if (!f->order || !f->dead)
+		return false;
+	/* once: walking the whole list for the few monospaced fonts cost 5 µs a
+	 * glyph with 300 fonts */
+	f->nmono = 0;
+	for (int k = 0; k < n; k++)
+		if (is_mono(f->sorted->fonts[k]))
+			f->order[f->nmono++] = k;
+	for (int k = 0, j = f->nmono; k < n; k++)
+		if (!is_mono(f->sorted->fonts[k]))
+			f->order[j++] = k;
+	return true;
 }
 
 /* How close the style face i is to style, for one that does not fit: what they
@@ -368,13 +404,6 @@ static bool sorted_fonts(struct font *f)
 static int style_near(int i, int style)
 {
 	return 4 * __builtin_popcount((unsigned)(i & style)) - __builtin_popcount((unsigned)(i & ~style));
-}
-
-static bool is_mono(FcPattern *p)
-{
-	int spacing = FC_PROPORTIONAL;
-	FcPatternGetInteger(p, FC_SPACING, 0, &spacing);
-	return spacing >= FC_DUAL;
 }
 
 static struct face *found(struct font *f, struct face *fc)
@@ -400,12 +429,13 @@ static struct face *find_fallback(struct font *f, uint32_t cp, int style)
 		}
 	if (!sorted_fonts(f) || !FcCharSetHasChar(f->cover, cp))
 		return prop ? found(f, prop) : NULL;
-	/* an open proportional face before loading another */
-	for (int pass = 0; pass < (prop ? 1 : 2); pass++)
-	for (int k = 0; k < f->sorted->nfont; k++) {
-		bool mono = is_mono(f->sorted->fonts[k]);
+	/* the monospaced fonts, then the others; an open proportional face
+	 * before loading another */
+	for (int j = 0; j < (prop ? f->nmono : f->sorted->nfont); j++) {
+		int k = f->order[j];
+		bool mono = j < f->nmono;
 		FcCharSet *cs;
-		if (mono != (pass == 0) ||
+		if (f->dead[k] ||
 		    FcPatternGetCharSet(f->sorted->fonts[k], FC_CHARSET, 0, &cs) != FcResultMatch ||
 		    !FcCharSetHasChar(cs, cp))
 			continue;
@@ -436,10 +466,12 @@ static struct face *find_fallback(struct font *f, uint32_t cp, int style)
 			continue;
 		}
 		struct face nf = { 0 };
-		bool ok = load_face(f, m, &nf);
+		int ok = load_face(f, m, &nf);
 		FcPatternDestroy(m);
-		if (!ok)
-			continue; /* not scalable, or unreadable: the next may do */
+		if (ok <= 0) { /* the next may do */
+			f->dead[k] = ok < 0;
+			continue;
+		}
 		if (!FT_Get_Char_Index(nf.ft, cp)) {
 			free_face(&nf);
 			continue;
@@ -509,14 +541,17 @@ static void set_size(struct face *fc, double px)
 
 /* A glyph of a fallback face in its cells, w wide (6.2 of the review of
  * 2026-11-18): a proportional font draws ① or a hanja wider than the grid, and
- * taller than its row. One too large is drawn smaller and centred; one that
- * fits is centred by its advance, as a monospaced font would place it, and
- * moved into the cells where it sticks out. NULL for none. */
+ * taller than its row. One too large is drawn smaller and centred, across, and
+ * down only where it was too tall: a letter a little too wide keeps its
+ * baseline, in line with the others of its word. One that fits is centred by
+ * its advance, as a monospaced font would place it. Either is moved into the
+ * cells where it sticks out. NULL for none. */
 static FT_GlyphSlot fit(struct font *f, struct face *fc, FT_UInt gi, bool embolden, int w,
 			FT_GlyphSlot s, int *left, int *top)
 {
 	int bw = (int)s->bitmap.width, bh = (int)s->bitmap.rows;
 	if (bw > w || bh > f->ch) {
+		bool tall = bh > f->ch;
 		/* hinting may round the smaller size up a pixel: a few tries */
 		double px = f->size_px;
 		for (int i = 0; i < 4 && s && (bw > w || bh > f->ch); i++) {
@@ -535,7 +570,7 @@ static FT_GlyphSlot fit(struct font *f, struct face *fc, FT_UInt gi, bool embold
 		if (!s || bw > w || bh > f->ch)
 			return NULL;
 		*left = (w - bw) / 2;
-		*top = f->ascent - (f->ch - bh) / 2;
+		*top = tall ? f->ascent - (f->ch - bh) / 2 : s->bitmap_top;
 	} else {
 		int adv = (int)lround(s->advance.x / 64.0);
 		*left = s->bitmap_left + (adv > 0 ? (w - adv) / 2 : 0);
@@ -558,7 +593,7 @@ static bool render(struct font *f, uint32_t cp, int style, bool wide, struct gly
 	struct face *fc = face_for(f, cp, style, &embolden);
 	FT_UInt gi = fc ? FT_Get_Char_Index(fc->ft, cp) : 0;
 	if (!gi)
-		return !f->sorted_tried || (f->sorted && f->cover);
+		return !f->sorted_tried || (f->sorted && f->cover && f->order && f->dead);
 	FT_GlyphSlot s = load(fc, gi, embolden);
 	if (!s || !s->bitmap.width || !s->bitmap.rows)
 		return true;

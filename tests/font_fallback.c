@@ -10,6 +10,34 @@
 
 #include <stdio.h>
 
+FT_Error __real_FT_New_Face(FT_Library, const char *, FT_Long, FT_Face *);
+
+/* faces opened from a file FreeType cannot draw from: Noto Color Emoji, which
+ * fontconfig calls monospaced and scalable, is bitmaps only */
+static int unusable;
+
+FT_Error __wrap_FT_New_Face(FT_Library lib, const char *path, FT_Long index, FT_Face *face)
+{
+	FT_Error err = __real_FT_New_Face(lib, path, index, face);
+	unusable += !err && !FT_IS_SCALABLE(*face);
+	return err;
+}
+
+char *__real_strdup(const char *);
+
+/* a strdup of a path with this in it fails, counted in refused */
+static const char *refuse;
+static int refused;
+
+char *__wrap_strdup(const char *s)
+{
+	if (refuse && strstr(s, refuse)) {
+		refused++;
+		return NULL;
+	}
+	return __real_strdup(s);
+}
+
 static int fails;
 
 #define FAIL(...) do { if (fails++ < 20) printf("FAIL: " __VA_ARGS__); } while (0)
@@ -55,6 +83,9 @@ static int clamp(int v, int lo, int hi)
 	return v < lo ? lo : v > hi ? hi : v;
 }
 
+/* glyphs drawn smaller for their height, at all sizes: at some none are */
+static int all_tall;
+
 static void fit_at(double pt, int scale)
 {
 	struct font *f = font_open("monospace", pt, scale);
@@ -62,10 +93,11 @@ static void fit_at(double pt, int scale)
 		FAIL("no font at %g pt, scale %d\n", pt, scale);
 		return;
 	}
-	int checked = 0, shrunk = 0, moved = 0;
+	int checked = 0, shrunk = 0, moved = 0, tall = 0;
+	unusable = 0;
 	for (size_t r = 0; r < sizeof ranges / sizeof *ranges; r++)
 		for (uint32_t cp = ranges[r].from; cp <= ranges[r].to; cp++)
-			for (int st = 0; st < 4; st += 3) {
+			for (int st = 0; st < 4; st++) {
 				bool emb;
 				struct face *fc = face_for(f, cp, st, &emb);
 				struct raw rr;
@@ -90,7 +122,22 @@ static void fit_at(double pt, int scale)
 					     scale, (unsigned)cp, g->left, y, g->w, g->h, W, f->ch);
 				if (rw > W || rh > f->ch) {
 					shrunk++;
-					if (abs(2 * g->left - (W - g->w)) > 1 || abs(2 * y - (f->ch - g->h)) > 1)
+					/* down only if too tall; else on the baseline,
+					 * which keeps its ink at the scaled height */
+					bool down = rh > f->ch;
+					tall += down;
+					/* below the baseline as much as at its own size,
+					 * scaled; hinting may move it a pixel or two, a
+					 * little more far from the baseline.
+					 * Clamped into the row, it may not be. */
+					double below = (double)(rh - rr.top) * g->h / rh;
+					bool clamped = g->top == f->ascent || g->top - g->h == f->ascent - f->ch;
+					if (!down && !clamped && fabs((g->h - g->top) - below) > 2 + fabs(below) / 8)
+						FAIL("%g pt, scale %d: U+%04X drawn smaller %d px below the "
+						     "baseline, not about %.1f\n", pt, scale, (unsigned)cp,
+						     g->h - g->top, below);
+					if (abs(2 * g->left - (W - g->w)) > 1 ||
+					    (down && abs(2 * y - (f->ch - g->h)) > 1))
 						FAIL("%g pt, scale %d: U+%04X drawn smaller at %d,%d, %dx%d, "
 						     "not centred in %dx%d\n", pt, scale, (unsigned)cp, g->left,
 						     y, g->w, g->h, W, f->ch);
@@ -108,9 +155,13 @@ static void fit_at(double pt, int scale)
 					moved += rr.adv != W;
 				}
 			}
-	if (checked < 1000 || shrunk < 100 || moved < 100)
-		FAIL("%g pt, scale %d: only %d glyphs from fallback faces, %d too large, %d "
-		     "with another advance\n", pt, scale, checked, shrunk, moved);
+	if (checked < 1000 || shrunk < 100 || moved < 100 || shrunk - tall < 100)
+		FAIL("%g pt, scale %d: only %d glyphs from fallback faces, %d too large (%d too "
+		     "tall), %d with another advance\n", pt, scale, checked, shrunk, tall, moved);
+	/* tried once, not at each emoji */
+	if (unusable > 1)
+		FAIL("%g pt, scale %d: a face that cannot be drawn from opened %d times\n", pt,
+		     scale, unusable);
 	/* the size the faces are set to after all that */
 	for (int i = 0; i < f->nfallback; i++)
 		if (f->fallback[i].ft->size->metrics.y_ppem != f->style[0].ft->size->metrics.y_ppem)
@@ -125,8 +176,9 @@ static void fit_at(double pt, int scale)
 			FAIL("%g pt: '%c' moved in a wide cell\n", pt, (int)cp);
 	}
 	font_close(f);
-	printf("%g pt, scale %d: %d glyphs, %d drawn smaller, %d centred by their advance\n",
-	       pt, scale, checked, shrunk, moved);
+	all_tall += tall;
+	printf("%g pt, scale %d: %d glyphs, %d drawn smaller (%d too tall), %d centred by their "
+	       "advance\n", pt, scale, checked, shrunk, tall, moved);
 }
 
 /* fonts fontconfig calls monospaced that mwt can load: the oracle */
@@ -216,6 +268,29 @@ static void mono_order(const char *name, const uint32_t (*walk)[2], int n)
 	font_close(f);
 }
 
+/* A face that did not load for want of memory is tried again, unlike one that
+ * cannot load: D2Coding, regular and bold refused for 한, draws 핝 after it. */
+static void mono_oom(void)
+{
+	struct font *f = font_open("monospace", 11, 1);
+	if (!f) {
+		FAIL("no font\n");
+		return;
+	}
+	bool emb;
+	refuse = "/D2Coding";
+	struct face *a = face_for(f, 0xd55c, STYLE_REGULAR, &emb);
+	if (!refused)
+		FAIL("oom: D2Coding not loaded for U+D55C\n");
+	refuse = NULL;
+	struct face *b = face_for(f, 0xd55d, STYLE_REGULAR, &emb);
+	if (!a || strstr(a->path, "/D2Coding"))
+		FAIL("oom: U+D55C from %s with D2Coding refused\n", a ? a->path : "nothing");
+	if (!b || !strstr(b->path, "/D2Coding"))
+		FAIL("oom: U+D55D from %s after D2Coding was refused\n", b ? b->path : "nothing");
+	font_close(f);
+}
+
 static char *family_file(const char *family)
 {
 	FcPattern *p = FcNameParse((const FcChar8 *)family);
@@ -301,12 +376,15 @@ int main(int argc, char **argv)
 	for (int i = 0; i < 3; i++)
 		for (int scale = 1; scale <= 2; scale++)
 			fit_at(pts[i], scale);
+	if (all_tall < 5)
+		FAIL("only %d glyphs too tall for their row\n", all_tall);
 	/* CJK first: hanzi D2Coding lacks open Droid Sans Fallback or NanumGothic,
 	 * which have Hangul too */
 	static const uint32_t cjk_first[][2] = { { 0x9fff, 0x4e00 }, { 0xac00, 0xd7a3 } };
 	static const uint32_t hangul_first[][2] = { { 0xac00, 0xd7a3 }, { 0x4e00, 0x9fff } };
 	mono_order("CJK first", cjk_first, 2);
 	mono_order("Hangul first", hangul_first, 2);
+	mono_oom();
 	if (monos)
 		FcFontSetDestroy(monos);
 	monos = NULL;

@@ -130,10 +130,11 @@ font_ttc: tests/font_ttc.c font.c font.h
 	$(CC) $(FONT_CFLAGS) -Wl,--wrap=FT_New_Face -o $@ tests/font_ttc.c \
 		$(FONT_LIBS)
 
-# Fallback glyphs fitted to their cells, monospaced faces first; under
-# sanitizers, with the fonts of make fonts.
+# Fallback glyphs fitted to their cells, monospaced faces first; FT_New_Face
+# counted and a strdup failed through --wrap; under sanitizers, with the fonts of make fonts.
 font_fallback: tests/font_fallback.c font.c font.h
-	$(CC) $(FONT_CFLAGS) -o $@ tests/font_fallback.c $(FONT_LIBS)
+	$(CC) $(FONT_CFLAGS) -Wl,--wrap=FT_New_Face -Wl,--wrap=strdup -o $@ tests/font_fallback.c \
+		$(FONT_LIBS)
 
 fuzz_regress: tests/fuzz_vt.c vt.c vt.h version.h
 	$(CC) $(TEST_CFLAGS) -O1 -I. -DFUZZ_STANDALONE -o $@ tests/fuzz_vt.c vt.c
