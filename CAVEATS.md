@@ -166,6 +166,9 @@ A character the font has only in a bold or italic face, as U+27BF only in DejaVu
 Mono Bold, is drawn from another font in the other styles, and from that face only when
 no font on the system has it.
 
+A face that maps a character to an empty glyph counts as having it. DejaVu Sans Mono
+Oblique does so for U+1D3D, which is blank in italic and bold italic.
+
 
 ## Installation
 
