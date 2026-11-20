@@ -178,6 +178,23 @@ def test_cursor(win):
         check(outline and px((x0 + x1) // 2, (y0 + y1) // 2) == BG, "without focus an outline")
     g = Grid(settle(), 80, 24)
     check(g.colors(10, 2) == {CURSOR}, "with focus back a block again")
+    # On a reverse cell the cursor color is the cell's: there the cell's text
+    # color, the background, which the block or bar shows in.
+    win.feed(b"\033c\033[7m \033[m\033[1;1H")
+    g = Grid(settle(), 80, 24)
+    check(g.colors(0, 0) == {BG}, "on a reverse cell the block is the text color", str(g.colors(0, 0)))
+    win.feed(b"\033[6 q")
+    g = Grid(settle(), 80, 24)
+    cols = g.full_cols(0, 0, BG)
+    check(cols == [0, 1], "on a reverse cell the bar too", str(cols))
+    # Text under the block keeps the minimum contrast: grey on the light cursor
+    # would be 2.5, it is drawn in the background color instead.
+    grey = 0x8a8a8a
+    win.feed(b"\033[2 q\033c\033[38;2;0;0;0;48;2;138;138;138mX\033[m\033[1;1H")
+    g = Grid(settle(), 80, 24)
+    got = g.colors(0, 0)
+    check(CURSOR in got and BG in got and grey not in got,
+          "text under the block cursor in a color that stands out", str(sorted(got)[:6]))
 
 
 def test_selection(win, mouse):

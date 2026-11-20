@@ -207,6 +207,17 @@ uint32_t rc_readable(uint32_t fg, uint32_t bg, const struct rc_colors *c)
 	return fmax(with_fg, with_bg) > have ? best : fg;
 }
 
+/* Below this two colors read as one: white on #e5e5e5 is 1.27. */
+#define CURSOR_MIN_CONTRAST 1.5
+
+uint32_t rc_cursor(uint32_t cursor, uint32_t fg, uint32_t bg)
+{
+	double have = rc_contrast(cursor, bg);
+	if (have >= CURSOR_MIN_CONTRAST)
+		return cursor;
+	return rc_contrast(fg, bg) > have ? fg : cursor;
+}
+
 bool rc_path(char *buf, size_t size)
 {
 	const char *xdg = getenv("XDG_CONFIG_HOME"), *home = getenv("HOME");

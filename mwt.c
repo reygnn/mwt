@@ -784,20 +784,25 @@ static void draw_row(struct buffer *b, int r, bool sel, int64_t ba, int bc,
 			if (c.attr & ATTR_REVERSE) {
 				uint32_t tmp = fg; fg = bg; bg = tmp;
 			}
-			if (pass == 1) { /* pass 0 needs only bg */
-				fg = readable(fg, bg);
-				if (c.attr & ATTR_DIM)
-					fg = blend(bg, fg, DIM_ALPHA) & 0xffffff;
-			}
-			if (sel && sel_covers(ba, bc, ea, ec, abs, col, span)) {
+			bool selected = sel && sel_covers(ba, bc, ea, ec, abs, col, span);
+			if (selected) {
 				fg = t.col.sel_fg;
 				bg = t.col.sel_bg;
 			}
 			bool cur = cur_row && (vt->c.x == col || (span == 2 && vt->c.x == col + 1));
+			/* one that stands out from the cell: on a reverse cell the
+			 * foreground color would vanish */
+			uint32_t cc = cur ? rc_cursor(t.col.cursor, fg, bg) : 0;
 			bool block = cur && t.focused && vt->cursor_style == CURSOR_BLOCK;
 			if (block) {
 				fg = bg;
-				bg = t.col.cursor;
+				bg = cc;
+			}
+			if (pass == 1) { /* pass 0 needs only bg; the selection's are kept */
+				if (!selected || block)
+					fg = readable(fg, bg);
+				if ((c.attr & ATTR_DIM) && !selected && !block)
+					fg = blend(bg, fg, DIM_ALPHA) & 0xffffff;
 			}
 			if (pass == 0) {
 				if (run_w && run_bg == bg && run_x + run_w == x0) {
@@ -828,14 +833,14 @@ static void draw_row(struct buffer *b, int r, bool sel, int64_t ba, int bc,
 			if (cur && !block) {
 				int w = span * t.cw;
 				if (!t.focused) {
-					fill_rect(b, x0, y0, w, thick, t.col.cursor);
-					fill_rect(b, x0, y0 + t.ch - thick, w, thick, t.col.cursor);
-					fill_rect(b, x0, y0, thick, t.ch, t.col.cursor);
-					fill_rect(b, x0 + w - thick, y0, thick, t.ch, t.col.cursor);
+					fill_rect(b, x0, y0, w, thick, cc);
+					fill_rect(b, x0, y0 + t.ch - thick, w, thick, cc);
+					fill_rect(b, x0, y0, thick, t.ch, cc);
+					fill_rect(b, x0 + w - thick, y0, thick, t.ch, cc);
 				} else if (vt->cursor_style == CURSOR_UNDERLINE) {
-					fill_rect(b, x0, y0 + t.ch - 2 * thick, w, 2 * thick, t.col.cursor);
+					fill_rect(b, x0, y0 + t.ch - 2 * thick, w, 2 * thick, cc);
 				} else {
-					fill_rect(b, x0, y0, 2 * thick, t.ch, t.col.cursor);
+					fill_rect(b, x0, y0, 2 * thick, t.ch, cc);
 				}
 			}
 			col += span - 1;
