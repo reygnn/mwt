@@ -67,10 +67,16 @@ sway_start() {
 	sway -c "$DIR/sway.conf" >"$DIR/sway.log" 2>&1 &
 	SWAY=$!
 	sway_wait || return 1
-	# a sway started again (evil.sh compositor_dies) gets a vinput of its own
-	[ -n "${VIN_PID:-}" ] && kill "$VIN_PID" 2>/dev/null
+	# A sway started again (evil.sh compositor_dies) gets a vinput of its own.
+	# The old one reaped first: bash, reaping a coproc, unsets VIN and VIN_PID,
+	# and would take the new one's.
+	if [ -n "${VIN_PID:-}" ]; then
+		kill "$VIN_PID" 2>/dev/null
+		wait "$VIN_PID" 2>/dev/null
+	fi
 	coproc VIN { "$VINPUT" 1000 700; }
-	VIN_PID=$VIN_PID
+	VIN_PID=${VIN_PID:-}
+	[ -n "$VIN_PID" ] || { echo "vinput ended at once" >&2; return 1; }
 	# Bash closes a coproc's descriptors in subshells, and `shown | grep` is one.
 	exec 7>&"${VIN[1]}" 8<&"${VIN[0]}"
 }
