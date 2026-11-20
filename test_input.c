@@ -318,6 +318,13 @@ static void test_shortcuts(void)
 	CHECK(xkb_state_key_get_one_sym(k.st, KEY_Q + 8) == XKB_KEY_Prior);
 	CHECK(key(&k, KEY_Q, S | NUM | CAPS).act == DO_VIEW_PAGE_UP);
 	CHECK(key(&k, KEY_Q, S | NUM).act == DO_VIEW_PAGE_UP);
+	/* Ctrl+Shift there is no shortcut of the base letter (a, c, v; ä as c) */
+	CHECK_SEND(key(&k, KEY_D, C | S | NUM), "\033[1;6B");
+	CHECK_SEND(key(&k, KEY_R, C | S | NUM), "\033[3;6~");
+	CHECK_SEND(key(&k, KEY_C, C | S | NUM), "\033[2;6~");
+	CHECK_SEND(key(&k, KEY_W, C | S | NUM), "\b");
+	/* the letters themselves still are */
+	CHECK(key(&k, KEY_D, C | S).act == DO_SELECT_ALL);
 	kb_free(&k);
 	k = kb_new("us", NULL);
 	/* with Ctrl or Alt they go to the program */

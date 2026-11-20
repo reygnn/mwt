@@ -157,7 +157,9 @@ static bool key_bytes(struct xkb_state *st, struct xkb_compose_state *compose,
 	bool ctrl = mods & VT_MOD_CTRL, alt = mods & VT_MOD_ALT, shift = mods & VT_MOD_SHIFT;
 	unsigned kmods = mods;
 
-	if (ctrl && shift) {
+	/* by the key's base letter, but not for a cursor or editing key: Neo's
+	 * layer 4 has Down on the a key and Delete on the c key */
+	if (ctrl && shift && input_vt_key(sym) == VT_KEY_COUNT) {
 		out->act = shortcut(input_ctrl_latin(xkb_state_get_keymap(st), code,
 						     base_sym(st, code)));
 		if (out->act != DO_NONE)
