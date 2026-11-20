@@ -167,7 +167,8 @@ fuzz:
 
 # Each capability of mwt.info against the VT core. Needs python3 and ncurses.
 vtdump: tests/vtdump.c vt.c vt.h version.h
-	$(CC) -std=c11 -Wall -Wextra -g -fsanitize=address,undefined -I. -o $@ tests/vtdump.c vt.c
+	$(CC) -std=c11 -Wall -Wextra -g -fsanitize=address,undefined -fno-sanitize-recover=all \
+		-I. -o $@ tests/vtdump.c vt.c
 
 terminfo: vtdump
 	tests/terminfo.py

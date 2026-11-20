@@ -4,6 +4,7 @@
 #include "version.h"
 
 #include <limits.h>
+#include <stdint.h>
 #include <locale.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -1325,6 +1326,109 @@ static void test_dirty_scrolled_back(void)
 	vt_free(vt);
 }
 
+/* Section 8 of the review of 2026-11-18: mutants of vt.c these caught none of. */
+
+/* ESC D, E and M drop a pending wrap, as they move the cursor; ESC H and ESC Z
+ * keep it. */
+static void test_wrap_flag_esc(void)
+{
+	struct vt *vt = mk(10, 4, 0);
+	w(vt, "0123456789\033Dy");
+	CHECK(vt->pri[1][9].cp == 'y' && vt->pri[2][0].cp == ' ');
+	w(vt, "\033c0123456789\033Ey");
+	CHECK(vt->pri[1][0].cp == 'y' && vt->pri[2][0].cp == ' ');
+	w(vt, "\033c\033[2;1H0123456789\033My");
+	CHECK(vt->pri[0][9].cp == 'y' && vt->pri[1][9].cp == '9');
+	w(vt, "\033c0123456789\033Hy");
+	CHECK(vt->pri[0][9].cp == '9' && vt->pri[1][0].cp == 'y');
+	w(vt, "\033c0123456789\033Zy");
+	CHECK(vt->pri[0][9].cp == '9' && vt->pri[1][0].cp == 'y');
+	vt_free(vt);
+}
+
+/* A resize in the alternate screen keeps each screen's cursor line, and the
+ * primary's lines above go to the history; a view scrolled back comes down. */
+static void test_resize_alt_and_view(void)
+{
+	struct vt *vt = mk(10, 5, 10);
+	w(vt, "1\r\n2\r\n3\r\n4\r\n5\033[?1049ha\r\nb\r\nc\r\nd\r\ne");
+	CHECK(vt->c.y == 4);
+	vt_resize(vt, 6, 3);
+	CHECK_STR(row(vt, 0), "c");
+	CHECK_STR(row(vt, 2), "e");
+	CHECK(vt->c.y == 2 && vt->hist_count == 2);
+	w(vt, "\033[?1049l");
+	CHECK_STR(row(vt, 0), "3");
+	CHECK_STR(row(vt, 2), "5");
+	CHECK(vt->c.y == 2 && vt->c.x == 1);
+	/* scrolled back: the view is the live screen again after a resize */
+	vt_scroll_view(vt, 2);
+	CHECK(vt->view == 2);
+	vt_resize(vt, 8, 3);
+	CHECK(vt->view == 0);
+	CHECK_STR(row(vt, 2), "5");
+	vt_free(vt);
+}
+
+/* SGR 22 ends dim too, 4:0 ends the underline and 4:3 starts one, 25 ends
+ * blinking, and sub-parameters of what mwt does not know are skipped, not read
+ * as the next parameters. */
+static void test_sgr_details(void)
+{
+	struct vt *vt = mk(20, 2, 0);
+	w(vt, "\033[1;2ma\033[22mb\033[4mc\033[4:0md\033[4:3me\033[m"
+	      "\033[5mf\033[25mg\033[m\033[1:2:3;31mh\033[m\033[73:2:3mi");
+	struct cell *l = vt->pri[0];
+	CHECK((l[0].attr & ATTR_DIM) && !(l[1].attr & (ATTR_BOLD | ATTR_DIM)));
+	CHECK((l[2].attr & ATTR_UNDERLINE) && !(l[3].attr & ATTR_UNDERLINE));
+	CHECK(l[4].attr & ATTR_UNDERLINE);
+	CHECK((l[5].attr & ATTR_BLINK) && !(l[6].attr & ATTR_BLINK));
+	CHECK((l[7].attr & ATTR_BOLD) && !(l[7].attr & (ATTR_DIM | ATTR_ITALIC)) && l[7].fg == 1);
+	CHECK(!(l[8].attr & (ATTR_DIM | ATTR_ITALIC)));
+	vt_free(vt);
+}
+
+/* CNL and CPL stop at the scroll region from inside it; mode 1048 saves and
+ * restores the cursor; DECRQM tells origin mode (6). */
+static void test_cnl_cpl_1048_decom(void)
+{
+	struct vt *vt = mk(10, 8, 0);
+	w(vt, "\033[3;6r\033[4;5H\033[9E");
+	CHECK(vt->c.y == 5 && vt->c.x == 0);
+	w(vt, "\033[4;5H\033[9F");
+	CHECK(vt->c.y == 2 && vt->c.x == 0);
+	/* outside the region: the screen's edge */
+	w(vt, "\033[8;5H\033[2F");
+	CHECK(vt->c.y == 5);
+	w(vt, "\033[1;5H\033[1F");
+	CHECK(vt->c.y == 0);
+	w(vt, "\033[r\033[2;3H\033[?1048h\033[6;7H\033[?1048l");
+	CHECK(vt->c.y == 1 && vt->c.x == 2);
+	replybuf[0] = 0;
+	w(vt, "\033[?6$p\033[?6h\033[?6$p\033[?6l");
+	CHECK_STR(replybuf, "\033[?6;2$y\033[?6;1$y");
+	vt_free(vt);
+}
+
+/* Lines out of range: none, and no length, below the oldest in the history and
+ * past the last of the screen. */
+static void test_abs_line_range(void)
+{
+	struct vt *vt = mk(10, 3, 2);
+	w(vt, "1\r\n2\r\n3\r\n4\r\n5\r\n6"); /* 3 lines gone, 2 kept */
+	int len = 99;
+	int64_t first = vt_abs_first(vt), last = (int64_t)vt->scrolled + vt->rows - 1;
+	CHECK(vt->hist_count == 2);
+	CHECK(vt_abs_line(vt, first, &len) && len > 0);
+	CHECK(!vt_abs_line(vt, first - 1, &len) && len == 0);
+	len = 99;
+	CHECK(vt_abs_line(vt, last, &len) && len == 10);
+	CHECK(!vt_abs_line(vt, last + 1, &len) && len == 0);
+	len = 99;
+	CHECK(!vt_abs_line(vt, INT64_MIN / 2, &len) && len == 0);
+	vt_free(vt);
+}
+
 static void test_alloc_failures(void)
 {
 	/* vt_new: any one allocation failing gives NULL and leaks nothing */
@@ -1425,6 +1529,11 @@ int main(void)
 	test_dirty_scrolled_back();
 	test_cursor_style_redraw();
 	test_index_and_charsets();
+	test_wrap_flag_esc();
+	test_resize_alt_and_view();
+	test_sgr_details();
+	test_cnl_cpl_1048_decom();
+	test_abs_line_range();
 	test_alloc_failures();
 	test_rep();
 	test_xterm_resets();

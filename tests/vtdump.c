@@ -40,7 +40,7 @@ int main(int argc, char **argv)
 
 	static const struct { unsigned bit; const char *name; } modes[] = {
 		{ MODE_APPCURSOR, "appcursor" }, { MODE_APPKEYPAD, "appkeypad" },
-		{ MODE_ORIGIN, "origin" }, { MODE_AUTOWRAP, "autowrap" },
+		{ MODE_AUTOWRAP, "autowrap" },
 		{ MODE_INSERT, "insert" }, { MODE_HIDECURSOR, "hidecursor" },
 		{ MODE_ALTSCREEN, "altscreen" }, { MODE_BRACKETED, "bracketed" },
 		{ MODE_MOUSE_BTN, "mousebtn" }, { MODE_MOUSE_DRAG, "mousedrag" },
@@ -59,6 +59,9 @@ int main(int argc, char **argv)
 			printf("%s\"%s\"", sep, modes[i].name);
 			sep = ",";
 		}
+	/* origin mode is the cursor's, not a mode bit */
+	if (vt->c.origin)
+		printf("%s\"origin\"", sep);
 	printf("],\"reply\":\"");
 	for (size_t i = 0; i < nreply; i++)
 		printf("%02x", (unsigned char)reply[i]);

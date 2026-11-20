@@ -377,10 +377,10 @@ def check_rs1():
 
 
 def check_is2():
-    s = Screen(b"keep" + b"\033[2;3r\033[?1h\033=\033[?7l\033[4h\033[?25l" + S("is2"))
+    s = Screen(b"keep" + b"\033[2;3r\033[?1h\033=\033[?7l\033[4h\033[?25l\033[?6h" + S("is2"))
     eq(s.row(0), "keep")
     eq((s.top, s.bot), (0, ROWS - 1))
-    yes(not {"appcursor", "appkeypad", "insert", "hidecursor"} & set(s.modes), f"modes stay: {s.modes}")
+    yes(not {"appcursor", "appkeypad", "insert", "hidecursor", "origin"} & set(s.modes), f"modes stay: {s.modes}")
     yes("autowrap" in s.modes, "autowrap is not back on")
 
 

@@ -38,7 +38,7 @@ struct cell {
 enum {
 	MODE_APPCURSOR  = 1 << 0,  /* DECCKM */
 	MODE_APPKEYPAD  = 1 << 1,  /* DECKPAM */
-	MODE_ORIGIN     = 1 << 2,  /* DECOM */
+	/* 1 << 2 free: origin mode (DECOM) is the cursor's, c.origin */
 	MODE_AUTOWRAP   = 1 << 3,  /* DECAWM */
 	MODE_INSERT     = 1 << 4,  /* IRM */
 	MODE_HIDECURSOR = 1 << 5,  /* !DECTCEM */

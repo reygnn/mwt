@@ -529,7 +529,9 @@ paste_queue_limit() {
 	else gap "four 17 MB pastes wait for a program that does not read, mwt at $(ps -o rss= -p "$(mwtpid)") kB"; fi
 	C c
 	sleep 0.5
-	alive || gap "mwt died"
+	alive || { gap "mwt died"; return; }
+	T 'echo nach dem paste' -k Return
+	if try 25 'nach dem paste'; then ok "and mwt goes on after it"; else gap "after the dropped paste mwt does not go on"; fi
 }
 # Latin-1 doubles as UTF-8: 40 MB of STRING is 80 MB to send, over the limit.
 paste_latin1_limit() {
@@ -1128,7 +1130,13 @@ exit_with_jobs() {
 no_pidfd() {
 	[ -n "$FAILPIDFD" ] || { info "failpidfd did not build"; return 0; }
 	start_mwt LD_PRELOAD="$FAILPIDFD" ASAN_OPTIONS=detect_leaks=0:verify_asan_link_order=0
-	T '(while :; do echo x; sleep 0.01; done) & sleep 1000 & exit' -k Return
+	# while the shell runs, with a job, mwt runs: asked four times a second, the
+	# child is there
+	T 'sleep 1000 &' -k Return
+	sleep 2
+	if alive; then ok "without a pidfd mwt stays while the shell runs"
+	else gap "without a pidfd mwt ended while the shell ran"; return 0; fi
+	T '(while :; do echo x; sleep 0.01; done) & exit' -k Return
 	local i
 	for ((i = 0; i < 25; i++)); do alive || break; sleep 0.2; done
 	if alive; then gap "without a pidfd mwt stays after the shell exits with jobs on the pty"
@@ -1516,7 +1524,8 @@ first_buffer_fail() {
 # of 2 GiB takes a while, under ASan longer: the key waits.
 zoom_limit() {
 	LOG=$DIR/log.$CASE
-	(cd "$HOME" && "$MWT" -g 2048x1500 -e sleep 300 >"$LOG" 2>&1 &)
+	# "drawn" comes after the zoom: mwt must still draw then
+	(cd "$HOME" && "$MWT" -g 2048x1500 -e sh -c 'read x; echo drawn; exec sleep 300' >"$LOG" 2>&1 &)
 	local i
 	for ((i = 0; i < 50; i++)); do swaymsg -t get_tree | grep -q '"app_id": "mwt"' && break; sleep 0.2; done
 	K plus
@@ -1525,6 +1534,16 @@ zoom_limit() {
 		ok "a zoom past a 2 GiB buffer is refused, mwt stays at its size"
 	else gap "a zoom past a 2 GiB buffer: $(grep -m1 '2 GiB' "$LOG" | cut -c1-90)"; fi
 	alive || gap "mwt died"
+	# by the picture, not the selection, which reads the VT core's text
+	grim -t ppm "$DIR/zoom-before.ppm" 2>/dev/null
+	T -k Return
+	local same=1
+	for ((i = 0; i < 50; i++)); do
+		sleep 0.2
+		grim -t ppm "$DIR/zoom-after.ppm" 2>/dev/null
+		cmp -s "$DIR/zoom-before.ppm" "$DIR/zoom-after.ppm" || { same=0; break; }
+	done
+	if [ "$same" = 0 ]; then ok "and it still draws"; else gap "after the refused zoom nothing new is drawn"; fi
 	stop_mwt
 }
 compositor_dies() {
