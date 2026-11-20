@@ -187,6 +187,20 @@ def test_cursor(win):
     g = Grid(settle(), 80, 24)
     cols = g.full_cols(0, 0, BG)
     check(cols == [0, 1], "on a reverse cell the bar too", str(cols))
+    win.feed(b"\033[4 q")
+    g = Grid(settle(), 80, 24)
+    rows = g.full_rows(0, 0, BG)
+    check(rows == [g.ch - 2, g.ch - 1], "on a reverse cell the underline too", str(rows))
+    win.feed(b"\033[2 q")
+    settle()
+    with Window("sleep", "100", app_id="other", geometry="10x2"):
+        g = Grid(settle(), 80, 24)
+        x0, y0, x1, y1 = g.box(0, 0)
+        px = g.img.px
+        outline = (px(x0, y0) == BG and px(x1 - 1, y1 - 1) == BG and
+                   px((x0 + x1) // 2, (y0 + y1) // 2) == FG)
+        check(outline, "on a reverse cell the outline too")
+    settle()
     # Text under the block keeps the minimum contrast: grey on the light cursor
     # would be 2.5, it is drawn in the background color instead.
     grey = 0x8a8a8a

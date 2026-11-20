@@ -34,8 +34,9 @@ uint32_t rc_readable(uint32_t fg, uint32_t bg, const struct rc_colors *c);
 
 /* The cursor's color on a cell drawn fg on bg: cursor, or where it hardly
  * stands out from bg, as on a reverse cell with the cursor in the foreground
- * color, fg, if that does better: the cell reversed, as xterm draws it. */
-uint32_t rc_cursor(uint32_t cursor, uint32_t fg, uint32_t bg);
+ * color, fg: the cell reversed, as xterm draws it. If that hardly stands out
+ * either, the theme's foreground or background, whichever does more. */
+uint32_t rc_cursor(uint32_t cursor, uint32_t fg, uint32_t bg, const struct rc_colors *c);
 
 /* $XDG_CONFIG_HOME/mwt/mwtrc or ~/.config/mwt/mwtrc, into buf; false if
  * neither variable is set or the path does not fit. */

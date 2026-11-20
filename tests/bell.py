@@ -32,9 +32,11 @@ def main():
     log = os.path.join(mwtlib.DIR, "bell-wayland.log")
     win = Window(env={"WAYLAND_DEBUG": "1"}, stderr=log)
 
+    # sway leaves a focused window alone anyway: the log tells whether mwt asked
     win.feed(b"\a")
     time.sleep(0.5)
-    check(urgent() is False, "focused: BEL leaves the window as it is", repr(urgent()))
+    check(urgent() is False and tokens(log) == 0, "focused: BEL asks for nothing",
+          f"urgent {urgent()!r}, {tokens(log)} tokens")
 
     other = Window("sleep", "100", app_id="other", geometry="10x2")
     time.sleep(0.3)

@@ -210,12 +210,21 @@ uint32_t rc_readable(uint32_t fg, uint32_t bg, const struct rc_colors *c)
 /* Below this two colors read as one: white on #e5e5e5 is 1.27. */
 #define CURSOR_MIN_CONTRAST 1.5
 
-uint32_t rc_cursor(uint32_t cursor, uint32_t fg, uint32_t bg)
+uint32_t rc_cursor(uint32_t cursor, uint32_t fg, uint32_t bg, const struct rc_colors *c)
 {
-	double have = rc_contrast(cursor, bg);
-	if (have >= CURSOR_MIN_CONTRAST)
+	if (rc_contrast(cursor, bg) >= CURSOR_MIN_CONTRAST)
 		return cursor;
-	return rc_contrast(fg, bg) > have ? fg : cursor;
+	if (rc_contrast(fg, bg) >= CURSOR_MIN_CONTRAST)
+		return fg;
+	uint32_t best = cursor;
+	double have = rc_contrast(cursor, bg);
+	uint32_t cand[3] = { fg, c->fg, c->bg };
+	for (int i = 0; i < 3; i++)
+		if (rc_contrast(cand[i], bg) > have) {
+			best = cand[i];
+			have = rc_contrast(cand[i], bg);
+		}
+	return best;
 }
 
 bool rc_path(char *buf, size_t size)

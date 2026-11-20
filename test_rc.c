@@ -214,18 +214,29 @@ static void test_contrast(void)
 
 static void test_cursor(void)
 {
+	struct rc_colors def = { .fg = 0xdcdccc, .bg = 0x1e1e1e, .cursor = 0xdcdccc };
+	struct rc_colors paper = { .fg = 0x38322b, .bg = 0xf6efe3, .cursor = 0x38322b };
+	struct rc_colors indigo3 = { .fg = 0xd8dbe0, .bg = 0x111c40, .cursor = 0xd8dbe0 };
 	/* the defaults: the cursor in the foreground color on the background */
-	CHECK(rc_cursor(0xdcdccc, 0xdcdccc, 0x1e1e1e) == 0xdcdccc);
+	CHECK(rc_cursor(0xdcdccc, 0xdcdccc, 0x1e1e1e, &def) == 0xdcdccc);
 	/* a reverse cell: on the foreground color, the cell's text color */
-	CHECK(rc_cursor(0xdcdccc, 0x1e1e1e, 0xdcdccc) == 0x1e1e1e);
+	CHECK(rc_cursor(0xdcdccc, 0x1e1e1e, 0xdcdccc, &def) == 0x1e1e1e);
 	/* indigo3 on a status line in its foreground */
-	CHECK(rc_cursor(0xd8dbe0, 0x111c40, 0xd8dbe0) == 0x111c40);
+	CHECK(rc_cursor(0xd8dbe0, 0x111c40, 0xd8dbe0, &indigo3) == 0x111c40);
 	/* close is as bad: a light grey bar, 1.27 */
-	CHECK(rc_cursor(0xffffff, 0x000000, 0xe5e5e5) == 0x000000);
+	CHECK(rc_cursor(0xffffff, 0x000000, 0xe5e5e5, &def) == 0x000000);
 	/* paper's dark cursor on green, 1.64, stands out enough */
-	CHECK(rc_cursor(0x38322b, 0xf6efe3, 0x2a5e1e) == 0x38322b);
-	/* text hidden in its own background does no better: the cursor stays */
-	CHECK(rc_cursor(0x777777, 0x787878, 0x787878) == 0x777777);
+	CHECK(rc_cursor(0x38322b, 0xf6efe3, 0x2a5e1e, &paper) == 0x38322b);
+	/* both poor, the text color a little better (1.47): the theme's cream */
+	CHECK(rc_cursor(0x38322b, 0x444444, 0x2a2a2a, &paper) == 0xf6efe3);
+	/* white text on light grey (1.26) under the default cursor: its background */
+	CHECK(rc_cursor(0xdcdccc, 0xffffff, 0xe5e5e5, &def) == 0x1e1e1e);
+	/* text hidden in its own grey: the theme's dark background does most, 3.77
+	 * against 3.15 for its foreground */
+	CHECK(rc_cursor(0x777777, 0x787878, 0x787878, &def) == 0x1e1e1e);
+	/* nothing does better than the cursor: it stays */
+	struct rc_colors grey = { .fg = 0x787878, .bg = 0x787878, .cursor = 0x777777 };
+	CHECK(rc_cursor(0x777777, 0x787878, 0x787878, &grey) == 0x777777);
 }
 
 static void test_path(void)

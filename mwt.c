@@ -85,9 +85,7 @@ static struct {
 	struct zwp_primary_selection_device_v1 *pdev;
 	struct wp_viewporter *viewporter;
 	struct xdg_activation_v1 *activation;
-	/* BEL while not focused: a token asked for, to ask for attention with */
-	struct xdg_activation_token_v1 *bell_token;
-	bool bell_asked; /* since the focus went: once is enough */
+	bool bell_asked; /* BEL since the focus went: once is enough */
 
 	/* window */
 	struct wl_surface *surface;
@@ -254,30 +252,34 @@ static void vt_reply(void *ud, const char *s, size_t n)
 		fprintf(stderr, "mwt: %zu bytes to the program dropped: out of memory\n", n);
 }
 
-/* A token without a serial: activating with it does not take the focus, the
- * compositor marks the window urgent instead (sway, KWin, mutter). */
+/* A token without a serial: sway and mutter mark the window urgent rather
+ * than focus it. KWin focuses it when no window is active, or when its focus
+ * stealing prevention is off (CAVEATS.md). */
 static void bell_token_done(void *d, struct xdg_activation_token_v1 *tok, const char *token)
 {
 	(void)d;
-	if (t.surface)
-		xdg_activation_v1_activate(t.activation, token, t.surface);
+	xdg_activation_v1_activate(t.activation, token, t.surface);
 	xdg_activation_token_v1_destroy(tok);
-	t.bell_token = NULL;
 }
 static const struct xdg_activation_token_v1_listener bell_token_listener = { bell_token_done };
 
 /* BEL asks for attention while the window has no focus, once until it gets it
- * back: a program ringing in a loop sends no more. */
+ * back: a program ringing in a loop sends no more. Not before the window shows:
+ * compositors take a token then as where to start it (sway: the workspace
+ * focused now). Not while mwt's menu is open, where the compositor gives the
+ * menu the keyboard (mutter, KWin; sway keeps it on the window). tests/bell.py
+ * covers neither of these two: a BEL that early is a race, and sway keeps the
+ * focus. */
 static void vt_bell(void *ud)
 {
 	(void)ud;
-	if (t.focused || t.bell_asked || !t.activation || !t.surface)
+	if (t.focused || t.bell_asked || !t.activation || !t.last || t.menu.popup)
 		return;
 	t.bell_asked = true;
-	t.bell_token = xdg_activation_v1_get_activation_token(t.activation);
-	xdg_activation_token_v1_add_listener(t.bell_token, &bell_token_listener, NULL);
-	xdg_activation_token_v1_set_surface(t.bell_token, t.surface);
-	xdg_activation_token_v1_commit(t.bell_token);
+	struct xdg_activation_token_v1 *tok = xdg_activation_v1_get_activation_token(t.activation);
+	xdg_activation_token_v1_add_listener(tok, &bell_token_listener, NULL);
+	xdg_activation_token_v1_set_surface(tok, t.surface);
+	xdg_activation_token_v1_commit(tok);
 }
 
 /* Only noted: a program may set thousands in one read, and each would be a
@@ -823,7 +825,7 @@ static void draw_row(struct buffer *b, int r, bool sel, int64_t ba, int bc,
 			bool cur = cur_row && (vt->c.x == col || (span == 2 && vt->c.x == col + 1));
 			/* one that stands out from the cell: on a reverse cell the
 			 * foreground color would vanish */
-			uint32_t cc = cur ? rc_cursor(t.col.cursor, fg, bg) : 0;
+			uint32_t cc = cur ? rc_cursor(t.col.cursor, fg, bg, &t.col) : 0;
 			bool block = cur && t.focused && vt->cursor_style == CURSOR_BLOCK;
 			if (block) {
 				fg = bg;
