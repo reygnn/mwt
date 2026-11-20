@@ -50,10 +50,12 @@ echo "=== evil under sway, sanitizers ==="
 tests/evil.sh || fail=1
 echo "=== evil under mwc, sanitizers ==="
 tests/evil-mwc.sh || fail=1
-echo "=== terminfo, keys, pixel, mouse, keyboard, leaks, sanitizers ==="
+echo "=== terminfo, keys, bell, pixel, mouse, keyboard, leaks, sanitizers ==="
 make terminfo 2>&1 | grep -E '^(FAIL|PASS|=== )'
 [ "${PIPESTATUS[0]}" = 0 ] || fail=1
 tests/headless.sh tests/keys.py 2>&1 | grep -E '^(FAIL|PASS|info|=== )'
+[ "${PIPESTATUS[0]}" = 0 ] || fail=1
+tests/headless.sh tests/bell.py 2>&1 | grep -E '^(FAIL|PASS|info|=== )'
 [ "${PIPESTATUS[0]}" = 0 ] || fail=1
 tests/headless.sh tests/pixel.py 2>&1 | grep -E '^(FAIL|PASS|info|=== )'
 [ "${PIPESTATUS[0]}" = 0 ] || fail=1

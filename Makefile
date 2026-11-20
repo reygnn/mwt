@@ -8,9 +8,11 @@ CFLAGS ?= -O2 -g
 CFLAGS += -std=c11 -Wall -Wextra $(shell pkg-config --cflags $(PKGS)) -I.
 LDLIBS += $(shell pkg-config --libs $(PKGS)) -lutil -lm
 
-PROTOS = xdg-shell xdg-decoration-unstable-v1 primary-selection-unstable-v1 viewporter
+PROTOS = xdg-shell xdg-decoration-unstable-v1 primary-selection-unstable-v1 viewporter \
+	xdg-activation-v1
 xdg-shell_XML = $(WP)/stable/xdg-shell/xdg-shell.xml
 viewporter_XML = $(WP)/stable/viewporter/viewporter.xml
+xdg-activation-v1_XML = $(WP)/staging/xdg-activation/xdg-activation-v1.xml
 xdg-decoration-unstable-v1_XML = $(WP)/unstable/xdg-decoration/xdg-decoration-unstable-v1.xml
 primary-selection-unstable-v1_XML = $(WP)/unstable/primary-selection/primary-selection-unstable-v1.xml
 
@@ -174,6 +176,9 @@ terminfo: vtdump
 keys: mwt
 	tests/headless.sh tests/keys.py
 
+bell: mwt
+	tests/headless.sh tests/bell.py
+
 pixel: mwt
 	tests/headless.sh tests/pixel.py
 
@@ -233,4 +238,4 @@ uninstall:
 clean:
 	rm -f mwt mwt-esctest test_vt test_rc test_input test_paste test_sel test_shell test_util vtdump test_replay fuzz_vt fuzz_regress fuzz_regress.log font_oom font_cache font_style font_lookup font_ttc *.o $(PROTO_H) $(PROTO_C)
 
-.PHONY: all check replay fuzz terminfo keys pixel mouse keyboard test evil fonts oldwayland width esctest profile install uninstall clean
+.PHONY: all check replay fuzz terminfo keys bell pixel mouse keyboard test evil fonts oldwayland width esctest profile install uninstall clean

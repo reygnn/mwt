@@ -18,6 +18,7 @@ use mwc's `vinput` need `MWC_DIR`, which defaults to `../../mwc`:
 | `make fuzz` | libFuzzer on the VT core, `FUZZ_TIME` seconds (600); clang on the host or the `make evil` container |
 | `make terminfo` | each capability of `mwt.info` against the VT core; python3 and ncurses |
 | `make keys` | what mwt sends for keys and the mouse, against `mwt.info`, under headless sway |
+| `make bell` | BEL marks the window urgent without the focus, once, under headless sway |
 | `make pixel` | what mwt draws, by screenshot, under headless sway |
 | `make mouse` | the mouse modes, under headless sway |
 | `make keyboard` | dead keys, Compose and key repeat, under headless sway |
@@ -47,13 +48,13 @@ esctest is GPL. The containers have no network, so fetch on the host first with
 |---|---|
 | `vt.c`, `vt.h` | parser after Paul Williams' DEC state machine, grid, scrollback; no Wayland, so testable headless |
 | `font.c` | fontconfig and FreeType, four styles, fallback faces, glyph cache |
-| `mwt.c` | Wayland (xdg-shell, xdg-decoration, viewporter, wl_shm, data device, primary selection), keyboard and pointer events, pty, event loop |
+| `mwt.c` | Wayland (xdg-shell, xdg-decoration, viewporter, xdg-activation, wl_shm, data device, primary selection), keyboard and pointer events, pty, event loop |
 | `input.c` | what keys and the mouse send: xkbcommon with Compose, shortcuts, mouse reports; no Wayland |
 | `paste.c` | what a paste becomes: UTF-8 checks, decoding, the control filter, the brackets; the clipboard's types and Latin-1 |
 | `sel.c` | the selection over the VT core's lines: words, lines, clicks, drags, its text |
 | `shell.c` | the shell on its pty: what waits to be written, the paste dropped for a signal; spawn, reap, hang up |
 | `util.c` | `-g` and the context menu's keys |
-| `rc.c` | the mwtrc and the minimum contrast; no Wayland |
+| `rc.c` | the mwtrc, the minimum contrast and the cursor's color on a cell; no Wayland |
 | `mwt.info` | terminfo; declares only what `vt.c` really does |
 | `config.h`, `version.h` | defaults; the version for `-v` and XTVERSION |
 | `test_vt.c`, `test_rc.c`, `test_input.c`, `test_paste.c`, `test_sel.c`, `test_shell.c`, `test_util.c` | unit tests; `test_vt`, `test_paste` and `test_sel` fail each allocation once through `--wrap`, `test_input` compiles keymaps from layout names, `test_shell` runs real ptys, pipes and processes |

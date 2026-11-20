@@ -34,6 +34,7 @@
 #include "xdg-decoration-unstable-v1-client-protocol.h"
 #include "primary-selection-unstable-v1-client-protocol.h"
 #include "viewporter-client-protocol.h"
+#include "xdg-activation-v1-client-protocol.h"
 
 #include "config.h"
 #include "rc.h"
@@ -83,6 +84,10 @@ static struct {
 	struct zwp_primary_selection_device_manager_v1 *psm;
 	struct zwp_primary_selection_device_v1 *pdev;
 	struct wp_viewporter *viewporter;
+	struct xdg_activation_v1 *activation;
+	/* BEL while not focused: a token asked for, to ask for attention with */
+	struct xdg_activation_token_v1 *bell_token;
+	bool bell_asked; /* since the focus went: once is enough */
 
 	/* window */
 	struct wl_surface *surface;
@@ -247,6 +252,32 @@ static void vt_reply(void *ud, const char *s, size_t n)
 	(void)ud;
 	if (!out_reply(&t.out, t.pty, s, n, REPLY_BACKLOG_MAX))
 		fprintf(stderr, "mwt: %zu bytes to the program dropped: out of memory\n", n);
+}
+
+/* A token without a serial: activating with it does not take the focus, the
+ * compositor marks the window urgent instead (sway, KWin, mutter). */
+static void bell_token_done(void *d, struct xdg_activation_token_v1 *tok, const char *token)
+{
+	(void)d;
+	if (t.surface)
+		xdg_activation_v1_activate(t.activation, token, t.surface);
+	xdg_activation_token_v1_destroy(tok);
+	t.bell_token = NULL;
+}
+static const struct xdg_activation_token_v1_listener bell_token_listener = { bell_token_done };
+
+/* BEL asks for attention while the window has no focus, once until it gets it
+ * back: a program ringing in a loop sends no more. */
+static void vt_bell(void *ud)
+{
+	(void)ud;
+	if (t.focused || t.bell_asked || !t.activation || !t.surface)
+		return;
+	t.bell_asked = true;
+	t.bell_token = xdg_activation_v1_get_activation_token(t.activation);
+	xdg_activation_token_v1_add_listener(t.bell_token, &bell_token_listener, NULL);
+	xdg_activation_token_v1_set_surface(t.bell_token, t.surface);
+	xdg_activation_token_v1_commit(t.bell_token);
 }
 
 /* Only noted: a program may set thousands in one read, and each would be a
@@ -1548,6 +1579,7 @@ static void kb_enter(void *d, struct wl_keyboard *kb, uint32_t serial,
 	if (s && s == t.menu.surface)
 		return;
 	t.focused = true;
+	t.bell_asked = false;
 	t.vt->dirty[t.vt->c.y] = true;
 	t.need_redraw = true;
 	if (t.vt->mode & MODE_FOCUS)
@@ -2031,6 +2063,8 @@ static void reg_global(void *d, struct wl_registry *r, uint32_t name,
 			&zwp_primary_selection_device_manager_v1_interface, 1);
 	} else if (!strcmp(iface, wp_viewporter_interface.name)) {
 		t.viewporter = wl_registry_bind(r, name, &wp_viewporter_interface, 1);
+	} else if (!strcmp(iface, xdg_activation_v1_interface.name)) {
+		t.activation = wl_registry_bind(r, name, &xdg_activation_v1_interface, 1);
 	}
 	seat_devices();
 }
@@ -2213,7 +2247,8 @@ done:;
 		exit(2);
 	}
 
-	struct vt_callbacks cb = { .write = vt_reply, .title = vt_title, .color = vt_color };
+	struct vt_callbacks cb = { .write = vt_reply, .title = vt_title, .color = vt_color,
+				   .bell = vt_bell };
 	t.vt = vt_new(t.init_cols, t.init_rows, histsize, &cb);
 	if (!t.vt)
 		die("out of memory");

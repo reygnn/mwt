@@ -160,6 +160,14 @@ Mongolian; on the key of A, C or V, where a layout that is not Latin may have `?
 (`ca(ike)`), it selects, copies or pastes.
 
 
+## Bell
+
+BEL makes no sound and does not flash. Without the focus the window asks for attention
+through xdg-activation, once until it gets the focus back: sway marks it urgent, others
+show it in their own way. With the focus nothing happens. Compositors without xdg-activation, mwc among
+them, show nothing.
+
+
 ## Fonts
 
 A character the font has only in a bold or italic face, as U+27BF only in DejaVu Sans

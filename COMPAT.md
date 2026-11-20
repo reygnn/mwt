@@ -30,7 +30,7 @@ are left out is in CAVEATS.md.
 |---|---|:-:|---|
 | 0x00 | NUL | ✅ | ignored, as on the VT100 |
 | 0x05 | ENQ | ❌ | no answerback message |
-| 0x07 | BEL | 🟡 | accepted, but nothing happens yet: mwt.c does not set the VT core's `bell` callback. Urgency through xdg-activation is planned (review of 2026-11-18, 1.6); until then `bel` in mwt.info promises more than mwt does |
+| 0x07 | BEL | 🟡 | without the focus the window asks for attention through xdg-activation, once until it has the focus again; no sound, no flash (CAVEATS.md) |
 | 0x08 | BS | ✅ | stops at the first column |
 | 0x09 | HT | ✅ | |
 | 0x0A–0x0C | LF, VT, FF | ✅ | with LNM also a carriage return |

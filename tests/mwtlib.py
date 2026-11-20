@@ -64,6 +64,15 @@ def rect(app_id="mwt"):
     return None
 
 
+def urgent(app_id="mwt"):
+    """Whether sway marks the window urgent; None without one."""
+    tree = json.loads(subprocess.run(["swaymsg", "-t", "get_tree"], capture_output=True, text=True).stdout)
+    for n in _walk(tree):
+        if n.get("app_id") == app_id:
+            return n.get("urgent")
+    return None
+
+
 class Image:
     def __init__(self, ppm, scale=1):
         m = re.match(rb"P6\s+(\d+)\s+(\d+)\s+255\s", ppm)
