@@ -131,6 +131,13 @@ def main():
             fail(f"{name}: in mwt.info, but no key here")
     for name in sorted(known - set(caps)):
         fail(f"{name}: listed here, but not in mwt.info")
+    # Not only what the entry says: xterm's parameter for the modifiers, which a
+    # vt_key and an entry wrong the same way would both miss. Shift+Tab is CSI Z.
+    for name, spec in sorted(CAP_KEYS.items()):
+        m = 1 + ("shift" in spec) + 2 * ("alt" in spec) + 4 * ("ctrl" in spec)
+        if m > 1 and name in caps and name != "kcbt":
+            check(caps[name].endswith(b";%d" % m + caps[name][-1:]),
+                  f"{name}: {caps[name]!r} has not the parameter {m}")
 
     # As programs using terminfo run: smkx, on the alternate screen where mwt leaves
     # the Shift keys that scroll to the program.

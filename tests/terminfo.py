@@ -139,11 +139,17 @@ def sgr_on(on, name):
     return check
 
 
+# Every mode one of these capabilities turns off, on: a cap that resets more (RIS)
+# fails as one that sets more does.
+MODES_ON = b"\033[?2004h\033[?1h\033=\033[?1000;1006h\033[?25l\033[?1004h\033[?1049h"
+
+
 def mode_set(cap, *modes, off=False):
     def check():
-        got = Screen(("\033[?2004h\033[?1h\033=\033[?1000;1006h\033[?25l\033[?1049h".encode() if off else b"") + S(cap)).modes
-        for m in modes:
-            yes((m in got) != off, f"{m} {'still' if off else 'not'} set: {got}")
+        before = Screen(MODES_ON if off else b"").modes
+        got = Screen((MODES_ON if off else b"") + S(cap)).modes
+        want = set(before) - set(modes) if off else set(before) | set(modes)
+        yes(set(got) == want, f"modes {sorted(got)}, expected {sorted(want)}")
     return check
 
 
@@ -417,11 +423,6 @@ def check_da():
     yes(re.fullmatch(pat, s.reply), f"answer {s.reply!r} does not fit {CAPS['u8']!r}")
 
 
-def check_focus():
-    yes("focus" in Screen(S("fe")).modes, "fe does not turn on focus events")
-    yes("focus" not in Screen(S("fe") + S("fd")).modes, "fd does not turn them off")
-
-
 def check_rv():
     # RV asks for the secondary DA, which programs (vim) match against xterm's
     yes(re.fullmatch(rb"\033\[>[0-9]+;[0-9]+;[0-9]+c", Screen(S("RV")).reply),
@@ -472,7 +473,7 @@ CHECKS = {
     "u6": check_cpr, "u7": check_cpr, "u8": check_da, "u9": check_da,
     "BE": mode_set("BE", "bracketed"), "BD": mode_set("BD", "bracketed", off=True),
     "E3": check_e3, "Se": check_ss, "Ss": check_ss, "XM": check_xm_mode,
-    "fe": check_focus, "fd": check_focus, "RV": check_rv, "XR": check_xr,
+    "fe": mode_set("fe", "focus"), "fd": mode_set("fd", "focus", off=True), "RV": check_rv, "XR": check_xr,
 }
 
 # What mwt sends rather than what it takes, see tests/keys.py. PE and PS are the

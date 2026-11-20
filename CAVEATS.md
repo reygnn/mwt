@@ -80,7 +80,8 @@ took effect, the keypad would send ESC O q instead of 1 as soon as a curses prog
 starts (`smkx` in `mwt.info` turns it on), and without `ka1`, `kent` and the like in the
 terminfo no program would understand it. `kb2` in `mwt.info` is the keypad's 5 without
 NumLock, ESC O E under `smkx` as cursor keys go; xterm's entries have the keypad mode's
-ESC O u.
+ESC O u. With NumLock a keypad key is a cursor key only with Shift, so `kUP5` and the
+like come from it only without NumLock; Ctrl+8 there sends DEL, Alt+8 ESC 8.
 
 
 ## Character widths
