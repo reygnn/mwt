@@ -36,6 +36,10 @@
 /* A failed FcFontSort, out of memory, is tried again after this long, not at
  * every missing glyph: each one can take milliseconds. tests/font_lookup.c
  * sets 0. */
+/* How glyphs are loaded, and M for the cell width: the same, as FT_LOAD_DEFAULT
+ * hints the advance another way (17 pixels for DejaVu's 18 at 11 pt and scale 2). */
+#define LOAD_FLAGS FT_LOAD_TARGET_LIGHT
+
 /* tests/font_cache.c counts the steps of slot() with it */
 #ifndef SLOT_PROBE
 #define SLOT_PROBE() ((void)0)
@@ -199,7 +203,8 @@ struct font *font_open(const char *spec, double size_pt, int scale)
 			static bool told; /* once: a zoom opens the font again */
 			int spacing = FC_PROPORTIONAL;
 			FcPatternGetInteger(m, FC_SPACING, 0, &spacing);
-			if (spacing < FC_DUAL && !told) {
+			/* FreeType too: Noto Sans Mono sets no spacing */
+			if (spacing < FC_DUAL && !FT_IS_FIXED_WIDTH(f->style[0].ft) && !told) {
 				told = true;
 				FcChar8 *fam = NULL;
 				FcPatternGetString(m, FC_FAMILY, 0, &fam);
@@ -241,9 +246,7 @@ struct font *font_open(const char *spec, double size_pt, int scale)
 		f->ch = (int)(r->size->metrics.height / 64);
 	f->cw = (int)ceil(r->size->metrics.max_advance / 64.0);
 	FT_UInt gi = FT_Get_Char_Index(r, 'M');
-	/* as the glyphs are loaded: FT_LOAD_DEFAULT hints the advance another way,
-	 * 17 pixels for DejaVu's 18 at 11 pt and scale 2 */
-	if (gi && !FT_Load_Glyph(r, gi, FT_LOAD_TARGET_LIGHT))
+	if (gi && !FT_Load_Glyph(r, gi, LOAD_FLAGS))
 		f->cw = (int)lround(r->glyph->advance.x / 64.0);
 	if (f->cw < 1)
 		f->cw = 1;
@@ -473,7 +476,7 @@ static bool render(struct font *f, uint32_t cp, int style, struct glyph *g)
 	FT_UInt gi = fc ? FT_Get_Char_Index(fc->ft, cp) : 0;
 	if (!gi)
 		return !f->sorted_tried || (f->sorted && f->cover);
-	if (FT_Load_Glyph(fc->ft, gi, FT_LOAD_TARGET_LIGHT))
+	if (FT_Load_Glyph(fc->ft, gi, LOAD_FLAGS))
 		return true;
 	FT_GlyphSlot s = fc->ft->glyph;
 	if (embolden)

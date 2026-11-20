@@ -48,6 +48,17 @@ def test_wide(win):
     check(bold > regular, "bold CJK from a fallback face is emboldened", f"{regular} to {bold} pixels")
 
 
+def test_too_wide(win):
+    """U+FDFD from Noto Sans Arabic is about 12 cells wide, with a width of 1: it may
+    lean a cell into the next, as an italic does, but not over the text after."""
+    win.feed(RESET + "\ufdfd    x".encode())
+    g = Grid(settle(), 80, 24)
+    check(g.ink(0, 0), "U+FDFD draws")
+    check(not any(g.ink(c, 0) for c in (2, 3, 4)), "U+FDFD at most a cell into the next",
+          str([c for c in range(2, 5) if g.ink(c, 0)]))
+    check(g.ink(5, 0), "the x after it draws")
+
+
 def test_emoji(win):
     """The README promises emoji as outlines if a fallback face has them. Here
     fontconfig may rank the bitmap face first, which load_face refuses, and
@@ -124,6 +135,7 @@ def main():
     mouse = Mouse()
     with Window() as win:
         test_wide(win)
+        test_too_wide(win)
         test_emoji(win)
         test_zoom(win)
     test_many_scripts()

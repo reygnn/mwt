@@ -467,6 +467,13 @@ def test_hidpi():
         # DejaVu's oblique W reaches 2 pixels into the next cell at scale 2:
         # glyphs are cut at the row, not at their cell
         check(g.colors(1, 2) != {BG}, "scale 2: an italic W leans into the next cell")
+        # but not into the padding, which no row draws again
+        win.feed(b"\0337\033[3;30H\033[3mW\033[0m")
+        g = Grid(settle(scale=2), 30, 8)
+        x0, y0, x1, y1 = g.box(29, 2)
+        pad = {g.img.px(x, y) for y in range(y0, y1) for x in range(x1, two.w)}
+        check(pad == {BG}, "scale 2: and not into the padding", str(sorted(hex6(c) for c in pad)[:4]))
+        win.feed(b"\033[3;30H \0338")  # as it was, for the picture at scale 1
         swaymsg("output", "HEADLESS-1", "scale", "1")
         time.sleep(0.5)
         check(settle() == one, "back at scale 1 the same picture")

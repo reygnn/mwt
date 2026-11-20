@@ -861,11 +861,14 @@ static void draw_row(struct buffer *b, int r, bool sel, int64_t ba, int bc,
 			if (c.cp > ' ' && !(c.attr & ATTR_INVISIBLE)) {
 				int style = (c.attr & ATTR_BOLD ? 1 : 0) | (c.attr & ATTR_ITALIC ? 2 : 0);
 				const struct glyph *g = font_glyph(t.font, c.cp, style);
-				/* to the row, not the cell: an italic or a bold leans
-				 * into the next, and as rows are drawn whole, what it
-				 * covers there is drawn again with it */
+				/* A cell beyond its own either way, in the grid: an
+				 * italic or a bold leans into the next, and as rows
+				 * are drawn whole, what it covers there is drawn again
+				 * with it. No more: a fallback glyph far too wide, as
+				 * U+FDFD at 12 cells, would cover the text after it. */
 				if (g->w)
-					blit(b, g, x0, y0 + t.ascent, t.pad, t.pad + vt->cols * t.cw,
+					blit(b, g, x0, y0 + t.ascent, MAX(t.pad, x0 - t.cw),
+					     MIN(t.pad + vt->cols * t.cw, x0 + (span + 1) * t.cw),
 					     y0, y0 + t.ch, fg);
 			}
 			int thick = MAX(1, t.scale);

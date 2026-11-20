@@ -47,6 +47,13 @@ make -s font_ttc 2>&1 | grep -E 'warning|error'
 ASAN_OPTIONS=detect_leaks=1 LSAN_OPTIONS=suppressions=$HOME/lsan.supp:print_suppressions=0 \
 	./font_ttc || fail=1
 build "-O2 -g" ""
+echo "=== monospaced fonts without FC_SPACING: no warning ==="
+for f in "Noto Sans Mono" "DejaVu Sans Mono" "Noto Mono"; do
+	if WAYLAND_DISPLAY=nichtda XDG_RUNTIME_DIR=/tmp ./mwt -f "$f" -e true 2>&1 | grep -q 'not monospaced'; then
+		echo "FAIL: '$f' warns that it is not monospaced"
+		fail=1
+	fi
+done
 echo "=== fallback ==="
 tests/headless.sh tests/fallback.py 2>&1 | grep -E '^(FAIL|PASS|info|ok|=== )'
 [ "${PIPESTATUS[0]}" = 0 ] || fail=1

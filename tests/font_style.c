@@ -249,7 +249,8 @@ static void follow_weight(const char *spec, struct font *f)
 	}
 }
 
-/* The cell is as wide as M is in the load mode the glyphs are drawn in. */
+/* The cell is as wide as the printable ASCII characters are, loaded as the
+ * glyphs are drawn (LOAD_FLAGS). */
 static void cell_width(const char *spec)
 {
 	for (int scale = 1; scale <= 4; scale++)
@@ -258,11 +259,19 @@ static void cell_width(const char *spec)
 			if (!f)
 				continue;
 			FT_Face r = f->style[STYLE_REGULAR].ft;
-			FT_UInt gi = FT_Get_Char_Index(r, 'M');
-			if (gi && !FT_Load_Glyph(r, gi, FT_LOAD_TARGET_LIGHT) &&
-			    f->cw != (int)lround(r->glyph->advance.x / 64.0))
-				FAIL("'%s' at %g pt, scale %d: cells %d wide, M %.2f\n", spec, pt, scale,
-				     f->cw, r->glyph->advance.x / 64.0);
+			int off = 0;
+			uint32_t which = 0;
+			for (uint32_t cp = 0x21; cp < 0x7f; cp++) {
+				FT_UInt gi = FT_Get_Char_Index(r, cp);
+				if (gi && !FT_Load_Glyph(r, gi, LOAD_FLAGS) &&
+				    f->cw != (int)lround(r->glyph->advance.x / 64.0) && !off++)
+					which = cp;
+			}
+			if (off)
+				FAIL("'%s' at %g pt, scale %d: cells %d wide, %d characters not, '%c' %.2f\n",
+				     spec, pt, scale, f->cw, off, (char)which,
+				     (FT_Load_Glyph(r, FT_Get_Char_Index(r, which), LOAD_FLAGS),
+				      r->glyph->advance.x / 64.0));
 			font_close(f);
 		}
 }
@@ -304,6 +313,6 @@ int main(int argc, char **argv)
 	}
 	printf("font_style: %d characters missing from a style face, all drawn; %d only a "
 	       "style face has, each from the right face; also with weight=bold and a style "
-	       "in the spec; cells as wide as M\n", gaps, only);
+	       "in the spec; cells as wide as the ASCII characters\n", gaps, only);
 	return 0;
 }
