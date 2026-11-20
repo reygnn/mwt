@@ -111,6 +111,57 @@ static bool devnull(int fd)
 
 /* in a child, with some of 0 to 2 closed: those come back on /dev/null, the
  * rest stays, and what is opened next is 3 */
+static void test_clip(void)
+{
+	CHECK(utf8_clip("", 4) == 0);
+	CHECK(utf8_clip("abc", 4) == 3);
+	CHECK(utf8_clip("abcd", 4) == 4);
+	CHECK(utf8_clip("abcde", 4) == 4);
+	/* ä is two bytes: not cut in half */
+	CHECK(utf8_clip("ab\xc3\xa4", 3) == 2);
+	CHECK(utf8_clip("ab\xc3\xa4", 4) == 4);
+	/* a four byte emoji at the end, cut anywhere inside */
+	CHECK(utf8_clip("a\xf0\x9f\x99\x82", 2) == 1);
+	CHECK(utf8_clip("a\xf0\x9f\x99\x82", 4) == 1);
+	CHECK(utf8_clip("a\xf0\x9f\x99\x82", 5) == 5);
+	CHECK(utf8_clip("a\xf0\x9f\x99\x82" "b", 5) == 5);
+	/* invalid bytes are no sequence to keep whole: cut where it falls */
+	CHECK(utf8_clip("\xff\xff\xff", 2) == 2);
+	/* only continuation bytes: nothing left */
+	CHECK(utf8_clip("\x80\x80\x80", 2) == 0);
+	/* a long one reads no further than max + 1 */
+	static char big[70000];
+	memset(big, 'x', sizeof big - 1);
+	CHECK(utf8_clip(big, 1023) == 1023);
+}
+
+static void test_bounds(void)
+{
+	int c = 400, r = 200;
+	/* 1000x700 at scale 1, padding 2, cells 9x18: 110 by 38 */
+	fit_bounds(&c, &r, 1000, 700, 1, 2, 9, 18);
+	CHECK(c == 110 && r == 38);
+	/* what fits stays */
+	c = 80, r = 24;
+	fit_bounds(&c, &r, 1000, 700, 1, 2, 9, 18);
+	CHECK(c == 80 && r == 24);
+	/* no bounds */
+	c = 400, r = 200;
+	fit_bounds(&c, &r, 0, 0, 1, 2, 9, 18);
+	CHECK(c == 400 && r == 200);
+	/* scale 2: buffer pixels, padding 4, cells 18x36 */
+	fit_bounds(&c, &r, 1000, 700, 2, 4, 18, 36);
+	CHECK(c == 110 && r == 38);
+	/* only one side bounded */
+	c = 400, r = 200;
+	fit_bounds(&c, &r, 1000, 0, 1, 2, 9, 18);
+	CHECK(c == 110 && r == 200);
+	/* smaller than a cell: one */
+	c = 80, r = 24;
+	fit_bounds(&c, &r, 3, 3, 1, 2, 9, 18);
+	CHECK(c == 1 && r == 1);
+}
+
 static void test_stdio(void)
 {
 	static const int closed[] = { 1, 2, 4, 5, 7 }; /* bit i: fd i is closed */
@@ -151,6 +202,8 @@ int main(void)
 {
 	test_geometry();
 	test_menu();
+	test_clip();
+	test_bounds();
 	test_stdio();
 	printf("test_util: %d/%d checks passed\n", checks - failures, checks);
 	return failures != 0;

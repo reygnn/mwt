@@ -64,6 +64,15 @@ def rect(app_id="mwt"):
     return None
 
 
+def node(app_id="mwt"):
+    """sway's tree node of the window, or None."""
+    tree = json.loads(subprocess.run(["swaymsg", "-t", "get_tree"], capture_output=True, text=True).stdout)
+    for n in _walk(tree):
+        if n.get("app_id") == app_id:
+            return n
+    return None
+
+
 def urgent(app_id="mwt"):
     """Whether sway marks the window urgent; None without one."""
     tree = json.loads(subprocess.run(["swaymsg", "-t", "get_tree"], capture_output=True, text=True).stdout)
@@ -113,7 +122,8 @@ def settle(app_id="mwt", scale=1, quiet=0.25, limit=6.0):
 class Window:
     """mwt with a program in raw mode that writes what feed() gets, unchanged."""
 
-    def __init__(self, *args, app_id="mwt", geometry="80x24", font=None, env=None, stderr=None):
+    def __init__(self, *args, app_id="mwt", geometry="80x24", font=None, env=None, stderr=None,
+                 opts=()):
         global _count
         _count += 1
         self.app_id = app_id
@@ -122,7 +132,8 @@ class Window:
         log = open(LOG, "a")
         prog = args or ("sh", "-c", f"stty raw -echo; exec cat '{self.fifo}'")
         err = open(stderr, "w") if stderr else log
-        self.proc = subprocess.Popen([MWT, "-a", app_id, "-g", geometry, *(["-f", font] if font else []), "-e", *prog],
+        self.proc = subprocess.Popen([MWT, "-a", app_id, "-g", geometry, *(["-f", font] if font else []),
+                                      *opts, "-e", *prog],
                                      stdout=log, stderr=err, cwd=os.environ["HOME"],
                                      env={**os.environ, **env} if env else None)
         log.close()

@@ -101,6 +101,9 @@ static struct {
 	int cfg_w, cfg_h;
 	bool cfg_fixed;    /* maximized, fullscreen or tiled: use size as given */
 	bool configured, focused, running, need_redraw;
+	bool acked;        /* a configure acked and not yet committed */
+	int bounds_w, bounds_h; /* configure_bounds: the most the first size may be */
+	int min_w, min_h;  /* the last min size sent */
 	bool need_full;    /* the grid moved in the window: next frame from scratch */
 	char title[VT_OSC_MAX]; /* the last one the program set, to send once a turn */
 	bool title_new;
@@ -144,8 +147,7 @@ static struct {
 	double px, py;
 	int mcol, mrow;
 	struct buttons buttons;
-	double axis_acc[2]; /* vertical, horizontal */
-	bool axis_discrete[2]; /* this frame's wheel notches are already counted */
+	struct input_axis axis; /* the wheel and touchpad, a wl_pointer.frame at a time */
 	struct clicks clicks;
 
 	struct sel sel;
@@ -1118,6 +1120,8 @@ static void draw(void)
 #endif
 	wl_surface_set_buffer_scale(t.surface, t.scale);
 	wl_surface_attach(t.surface, b->wb, 0, 0);
+	if (t.frame_cb) /* drawn for a configure before the last frame was done */
+		wl_callback_destroy(t.frame_cb);
 	t.frame_cb = wl_surface_frame(t.surface);
 	if (t.frame_cb) /* out of memory: no pacing, the next change draws */
 		wl_callback_add_listener(t.frame_cb, &frame_listener, NULL);
@@ -1125,6 +1129,7 @@ static void draw(void)
 	b->busy = true;
 	t.last = b;
 	t.need_redraw = false;
+	t.acked = false;
 }
 
 /* ---- context menu ----------------------------------------------------- */
@@ -1373,6 +1378,19 @@ static void snap_size(int cols, int rows, int *w, int *h)
 	*h = (rows * t.ch + 2 * t.pad + t.scale - 1) / t.scale;
 }
 
+/* One cell at least: a compositor's resize may otherwise make the window smaller
+ * than the padding, a grid of 1x1 in no space. Sent when it changes. */
+static void send_min_size(void)
+{
+	int w, h;
+	snap_size(1, 1, &w, &h);
+	if (t.toplevel && (w != t.min_w || h != t.min_h)) {
+		xdg_toplevel_set_min_size(t.toplevel, w, h);
+		t.min_w = w;
+		t.min_h = h;
+	}
+}
+
 static void update_grid(void)
 {
 	int cols = MIN(MAX(1, (t.width * t.scale - 2 * t.pad) / t.cw), VT_MAX_COLS);
@@ -1388,6 +1406,7 @@ static void update_grid(void)
 		if (t.pty >= 0)
 			ioctl(t.pty, TIOCSWINSZ, &ws);
 	}
+	send_min_size();
 	/* No vt_mark_all: a new grid is marked by vt_resize, new cells or a new
 	 * window size draw whole (need_full, a new buffer). sway configures at
 	 * each focus change, and that redrew every row. */
@@ -1594,6 +1613,8 @@ static void kb_leave(void *d, struct wl_keyboard *kb, uint32_t serial, struct wl
 	stop_repeat();
 	if (t.compose)
 		xkb_compose_state_reset(t.compose);
+	/* Shift let go elsewhere would still count, for Shift+wheel or a click */
+	input_leave(t.xkb_state);
 	/* the menu going away reports a leave too, without a surface */
 	if ((s && s == t.menu.surface) || !t.focused)
 		return;
@@ -1823,50 +1844,44 @@ static void wheel_step(uint32_t a, bool positive)
 	}
 }
 
+static void axis_frame(void)
+{
+	int steps[2];
+	input_axis_frame(&t.axis, touchpad_step, steps);
+	if (t.menu.popup)
+		return;
+	for (uint32_t a = 0; a < 2; a++)
+		for (int i = steps[a] < 0 ? -steps[a] : steps[a]; i > 0; i--)
+			wheel_step(a, steps[a] > 0);
+}
+
 static void ptr_axis(void *d, struct wl_pointer *p, uint32_t time, uint32_t axis, wl_fixed_t v)
 {
-	(void)d; (void)p; (void)time;
-	if (axis > WL_POINTER_AXIS_HORIZONTAL_SCROLL || t.menu.popup || t.axis_discrete[axis])
-		return;
-	double *acc = &t.axis_acc[axis];
-	/* a few steps at most, whatever a compositor sends */
-	*acc = fmax(-10 * touchpad_step, fmin(10 * touchpad_step, *acc + wl_fixed_to_double(v)));
-	while (*acc >= touchpad_step) {
-		*acc -= touchpad_step;
-		wheel_step(axis, true);
-	}
-	while (*acc <= -touchpad_step) {
-		*acc += touchpad_step;
-		wheel_step(axis, false);
-	}
+	(void)d; (void)time;
+	input_axis_value(&t.axis, axis, wl_fixed_to_double(v));
+	/* before version 5 there are no frames: each event is one */
+	if (wl_pointer_get_version(p) < WL_POINTER_FRAME_SINCE_VERSION)
+		axis_frame();
 }
 
 static void ptr_frame(void *d, struct wl_pointer *p)
 {
 	(void)d; (void)p;
-	t.axis_discrete[0] = t.axis_discrete[1] = false;
+	axis_frame();
 }
 static void ptr_axis_source(void *d, struct wl_pointer *p, uint32_t s) { (void)d; (void)p; (void)s; }
 static void ptr_axis_stop(void *d, struct wl_pointer *p, uint32_t tm, uint32_t a)
 {
 	(void)d; (void)p; (void)tm;
-	if (a <= WL_POINTER_AXIS_HORIZONTAL_SCROLL)
-		t.axis_acc[a] = 0;
+	input_axis_stop(&t.axis, a);
 }
-/* A wheel counts its notches here, before the axis event with the same move in
- * pixels: 15 a notch, which touchpad_step's 10 would turn into 1.5 steps. So only
- * what has no notches, a touchpad, goes by the distance. */
+/* A wheel's notches, 15 pixels each in the axis event of the same frame, which
+ * touchpad_step's 10 would make 1.5 steps: where a frame has notches, they count
+ * and the pixels do not (input_axis_frame). */
 static void ptr_axis_discrete(void *d, struct wl_pointer *p, uint32_t a, int32_t n)
 {
 	(void)d; (void)p;
-	if (a > WL_POINTER_AXIS_HORIZONTAL_SCROLL)
-		return;
-	t.axis_discrete[a] = true;
-	if (t.menu.popup)
-		return;
-	/* a few notches at most, whatever a compositor counts */
-	for (int i = n < -10 || n > 10 ? 10 : n < 0 ? -n : n; i > 0; i--)
-		wheel_step(a, n > 0);
+	input_axis_discrete(&t.axis, a, n);
 }
 
 /* bound at version 5, so the newer events are never sent */
@@ -1968,13 +1983,17 @@ static void xs_configure(void *d, struct xdg_surface *xs, uint32_t serial)
 {
 	(void)d;
 	xdg_surface_ack_configure(xs, serial);
+	t.acked = true;
 	int w = t.cfg_w, h = t.cfg_h;
 	if (w <= 0 || h <= 0) {
 		if (t.configured) {
 			w = t.width;
 			h = t.height;
 		} else {
-			snap_size(t.init_cols, t.init_rows, &w, &h);
+			/* -g, but no larger than the compositor says fits */
+			int cols = t.init_cols, rows = t.init_rows;
+			fit_bounds(&cols, &rows, t.bounds_w, t.bounds_h, t.scale, t.pad, t.cw, t.ch);
+			snap_size(cols, rows, &w, &h);
 		}
 	} else if (!t.cfg_fixed) {
 		int cols = MAX(1, (w * t.scale - 2 * t.pad) / t.cw);
@@ -2016,7 +2035,9 @@ static void tl_close(void *d, struct xdg_toplevel *tl)
 }
 static void tl_bounds(void *d, struct xdg_toplevel *tl, int32_t w, int32_t h)
 {
-	(void)d; (void)tl; (void)w; (void)h;
+	(void)d; (void)tl;
+	t.bounds_w = w;
+	t.bounds_h = h;
 }
 static void tl_caps(void *d, struct xdg_toplevel *tl, struct wl_array *c)
 {
@@ -2233,6 +2254,12 @@ done:;
 	 * without a pidfd its end would be seen only once jobs close the pty */
 	signal(SIGCHLD, SIG_DFL);
 
+	/* One message each: a long one would overflow its size field. */
+	static char app_buf[VT_OSC_MAX], title_buf[VT_OSC_MAX];
+	snprintf(app_buf, sizeof app_buf, "%.*s", (int)utf8_clip(app_id, sizeof app_buf - 1), app_id);
+	snprintf(title_buf, sizeof title_buf, "%.*s", (int)utf8_clip(title, sizeof title_buf - 1), title);
+	app_id = app_buf;
+	title = title_buf;
 	load_colors(app_id);
 	init_palette();
 	t.font = font_open(t.font_spec, 0, 1);
@@ -2289,20 +2316,24 @@ done:;
 	xdg_toplevel_add_listener(t.toplevel, &tl_listener, NULL);
 	xdg_toplevel_set_app_id(t.toplevel, app_id);
 	xdg_toplevel_set_title(t.toplevel, title);
+	send_min_size();
 	if (t.deco_mgr) {
 		t.deco = zxdg_decoration_manager_v1_get_toplevel_decoration(t.deco_mgr, t.toplevel);
 		zxdg_toplevel_decoration_v1_set_mode(t.deco,
 			ZXDG_TOPLEVEL_DECORATION_V1_MODE_SERVER_SIDE);
 	}
+	/* before the roundtrip: a close in it would be lost */
+	t.running = true;
 	wl_surface_commit(t.surface);
 	wl_display_roundtrip(t.display);
 
 	spawn(cmd);
-	t.running = true;
 	int wlfd = wl_display_get_fd(t.display);
 
 	while (t.running) {
-		if (t.need_redraw && !t.frame_cb && t.configured)
+		/* A hidden window gets no frame callback, but a configure it acked
+		 * waits for a commit: some compositors stall until it comes. */
+		if (t.need_redraw && t.configured && (!t.frame_cb || t.acked))
 			draw();
 		if (t.menu.popup && t.menu.configured && t.menu.dirty && menu_buffer())
 			menu_draw(menu_buffer());

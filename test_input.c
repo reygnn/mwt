@@ -721,6 +721,77 @@ static void test_wheel(void)
 	CHECK(input_wheel_code(true, false) == 66 && input_wheel_code(true, true) == 67);
 }
 
+static void test_leave(void)
+{
+	struct kb k = kb_new("de,ru", NULL);
+	/* Shift and Ctrl held, Caps Lock on, the second layout locked */
+	hold(&k, S | C | CAPS, 0);
+	xkb_state_update_mask(k.st, xkb_state_serialize_mods(k.st, XKB_STATE_MODS_DEPRESSED),
+			      0, xkb_state_serialize_mods(k.st, XKB_STATE_MODS_LOCKED), 0, 0, 1);
+	CHECK(input_mods(k.st) == (S | C));
+	input_leave(k.st);
+	CHECK(input_mods(k.st) == 0);
+	CHECK(xkb_state_mod_name_is_active(k.st, XKB_MOD_NAME_CAPS, XKB_STATE_MODS_EFFECTIVE) > 0);
+	CHECK(xkb_state_serialize_layout(k.st, XKB_STATE_LAYOUT_LOCKED) == 1);
+	input_leave(NULL);
+	kb_free(&k);
+}
+
+static void test_axis(void)
+{
+	struct input_axis ax = { 0 };
+	int st[2];
+	/* sway: the notch first, then its 15 pixels: one notch, one step */
+	input_axis_discrete(&ax, 0, 1);
+	input_axis_value(&ax, 0, 15);
+	input_axis_frame(&ax, 10, st);
+	CHECK(st[0] == 1 && st[1] == 0);
+	/* mutter, KWin: pixels before the notch in the same frame: still one */
+	input_axis_value(&ax, 0, 10);
+	input_axis_discrete(&ax, 0, 1);
+	input_axis_value(&ax, 0, 5);
+	input_axis_frame(&ax, 10, st);
+	CHECK(st[0] == 1);
+	/* and the pixels of a notch do not build up toward the touchpad's steps */
+	input_axis_value(&ax, 0, 9);
+	input_axis_frame(&ax, 10, st);
+	CHECK(st[0] == 0);
+	input_axis_value(&ax, 0, 1);
+	input_axis_frame(&ax, 10, st);
+	CHECK(st[0] == 1);
+	/* a touchpad: 4 pixels a frame, a step every 10, up as down */
+	int sum = 0;
+	for (int i = 0; i < 5; i++) {
+		input_axis_value(&ax, 0, -4);
+		input_axis_frame(&ax, 10, st);
+		sum += st[0];
+	}
+	CHECK(sum == -2);
+	/* the finger lifted: what was not a step goes */
+	input_axis_stop(&ax, 0);
+	input_axis_value(&ax, 0, -8);
+	input_axis_frame(&ax, 10, st);
+	CHECK(st[0] == 0);
+	input_axis_stop(&ax, 0);
+	/* two notches back, sideways, in one frame */
+	input_axis_discrete(&ax, 1, -1);
+	input_axis_discrete(&ax, 1, -1);
+	input_axis_value(&ax, 1, -30);
+	input_axis_frame(&ax, 10, st);
+	CHECK(st[0] == 0 && st[1] == -2);
+	/* at most 10 either way */
+	input_axis_discrete(&ax, 0, 500);
+	input_axis_value(&ax, 1, 1e9);
+	input_axis_frame(&ax, 10, st);
+	CHECK(st[0] == 10 && st[1] == 10);
+	input_axis_stop(&ax, 1);
+	/* an axis past the two is left out */
+	input_axis_value(&ax, 2, 50);
+	input_axis_discrete(&ax, 2, 3);
+	input_axis_frame(&ax, 10, st);
+	CHECK(st[0] == 0 && st[1] == 0);
+}
+
 static void test_cell(void)
 {
 	int c, r;
@@ -755,6 +826,8 @@ int main(void)
 		return 1;
 	}
 	test_vt_key_map();
+	test_axis();
+	test_leave();
 	test_text();
 	test_special_keys();
 	test_shortcuts();

@@ -1,6 +1,7 @@
 /* input.c - keys and mouse reports; see input.h */
 #define _GNU_SOURCE
 #include <linux/input-event-codes.h>
+#include <math.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -21,6 +22,14 @@ unsigned input_mods(struct xkb_state *st)
 	return (mod_active(st, XKB_MOD_NAME_SHIFT) ? VT_MOD_SHIFT : 0) |
 	       (mod_active(st, XKB_MOD_NAME_ALT) ? VT_MOD_ALT : 0) |
 	       (mod_active(st, XKB_MOD_NAME_CTRL) ? VT_MOD_CTRL : 0);
+}
+
+void input_leave(struct xkb_state *st)
+{
+	if (!st)
+		return;
+	xkb_state_update_mask(st, 0, 0, xkb_state_serialize_mods(st, XKB_STATE_MODS_LOCKED), 0, 0,
+			      xkb_state_serialize_layout(st, XKB_STATE_LAYOUT_LOCKED));
 }
 
 /* The keypad ones with NumLock off are the same keys: see CAVEATS.md on the
@@ -348,4 +357,49 @@ void input_cell(double px, double py, int scale, int pad, int cw, int ch, int co
 	int x = (int)(px * scale) - pad, y = (int)(py * scale) - pad;
 	*col = x < 0 ? 0 : MIN(x / cw, cols - 1);
 	*row = y < 0 ? 0 : MIN(y / ch, rows - 1);
+}
+
+void input_axis_value(struct input_axis *ax, unsigned axis, double v)
+{
+	if (axis < 2)
+		ax->value[axis] += v;
+}
+
+void input_axis_discrete(struct input_axis *ax, unsigned axis, int n)
+{
+	if (axis < 2) {
+		ax->discrete[axis] += n;
+		ax->notched[axis] = true;
+	}
+}
+
+void input_axis_stop(struct input_axis *ax, unsigned axis)
+{
+	if (axis < 2)
+		ax->acc[axis] = 0;
+}
+
+void input_axis_frame(struct input_axis *ax, double step, int steps[2])
+{
+	for (int a = 0; a < 2; a++) {
+		int n = 0;
+		if (ax->notched[a]) {
+			n = ax->discrete[a];
+		} else {
+			/* a few steps at most, whatever a compositor sends */
+			ax->acc[a] = fmax(-10 * step, fmin(10 * step, ax->acc[a] + ax->value[a]));
+			while (ax->acc[a] >= step) {
+				ax->acc[a] -= step;
+				n++;
+			}
+			while (ax->acc[a] <= -step) {
+				ax->acc[a] += step;
+				n--;
+			}
+		}
+		steps[a] = n < -10 ? -10 : n > 10 ? 10 : n;
+		ax->value[a] = 0;
+		ax->discrete[a] = 0;
+		ax->notched[a] = false;
+	}
 }

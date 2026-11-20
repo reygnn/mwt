@@ -5,6 +5,8 @@
 #include <stdlib.h>
 #include <unistd.h>
 
+#include <string.h>
+
 #include "util.h"
 
 int parse_geometry(const char *s, int max_cols, int max_rows, int *cols, int *rows)
@@ -52,4 +54,28 @@ bool stdio_fill(void)
 		}
 	}
 	return true;
+}
+
+size_t utf8_clip(const char *s, size_t max)
+{
+	size_t n = strnlen(s, max + 1);
+	if (n <= max)
+		return n;
+	n = max;
+	/* back over continuation bytes to the start of the cut sequence */
+	while (n > 0 && ((unsigned char)s[n] & 0xc0) == 0x80)
+		n--;
+	return n;
+}
+
+void fit_bounds(int *cols, int *rows, int bw, int bh, int scale, int pad, int cw, int ch)
+{
+	if (bw > 0) {
+		int n = ((long long)bw * scale - 2 * pad) / cw;
+		*cols = *cols < n ? *cols : n < 1 ? 1 : n;
+	}
+	if (bh > 0) {
+		int n = ((long long)bh * scale - 2 * pad) / ch;
+		*rows = *rows < n ? *rows : n < 1 ? 1 : n;
+	}
 }

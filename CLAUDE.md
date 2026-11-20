@@ -19,6 +19,7 @@ use mwc's `vinput` need `MWC_DIR`, which defaults to `../../mwc`:
 | `make terminfo` | each capability of `mwt.info` against the VT core; python3 and ncurses |
 | `make keys` | what mwt sends for keys and the mouse, against `mwt.info`, under headless sway |
 | `make bell` | BEL marks the window urgent without the focus, once, under headless sway |
+| `make wayland` | a hidden window's configure, the min size, long `-T` and `-a`, from mwt's Wayland log, under headless sway |
 | `make pixel` | what mwt draws, by screenshot, under headless sway |
 | `make mouse` | the mouse modes, under headless sway |
 | `make keyboard` | dead keys, Compose and key repeat, under headless sway |
@@ -53,7 +54,7 @@ esctest is GPL. The containers have no network, so fetch on the host first with
 | `paste.c` | what a paste becomes: UTF-8 checks, decoding, the control filter, the brackets; the clipboard's types and Latin-1 |
 | `sel.c` | the selection over the VT core's lines: words, lines, clicks, drags, its text |
 | `shell.c` | the shell on its pty: what waits to be written, the paste dropped for a signal; spawn, reap, hang up |
-| `util.c` | `-g` and the context menu's keys |
+| `util.c` | `-g`, the context menu's keys, the first size within the compositor's bounds, cutting `-T` and `-a` |
 | `rc.c` | the mwtrc, the minimum contrast and the cursor's color on a cell; no Wayland |
 | `mwt.info` | terminfo; declares only what `vt.c` really does |
 | `config.h`, `version.h` | defaults; the version for `-v` and XTVERSION |

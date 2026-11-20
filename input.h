@@ -33,6 +33,10 @@ struct key_out {
 /* VT_MOD_* bits of what is held in st; 0 without a state. */
 unsigned input_mods(struct xkb_state *st);
 
+/* The keyboard left: every key counts as let go, as wl_keyboard.leave says;
+ * Caps Lock, NumLock and the layout stay. */
+void input_leave(struct xkb_state *st);
+
 /* The vt_key() a keysym stands for, or VT_KEY_COUNT. */
 enum vt_key input_vt_key(xkb_keysym_t sym);
 
@@ -100,6 +104,25 @@ enum wheel_do input_wheel(unsigned vt_mode, unsigned mods, bool sideways);
 
 /* Its code: 64 up, 65 down, 66 left, 67 right, as xterm. */
 int input_wheel_code(bool sideways, bool positive);
+
+/* The wheel and the touchpad within one wl_pointer.frame. A wheel's notches
+ * (axis_discrete) and the same move in pixels (axis) may come in either order:
+ * mutter and KWin send part of the pixels first. So the frame is decided at its
+ * end: notches where there are any, else the distance, which builds up over
+ * frames to a step every step pixels. Vertical 0, horizontal 1. */
+struct input_axis {
+	double value[2];   /* this frame's pixels */
+	int discrete[2];   /* this frame's notches */
+	bool notched[2];   /* a notch came in this frame */
+	double acc[2];     /* distance over frames, not yet a step */
+};
+void input_axis_value(struct input_axis *ax, unsigned axis, double v);
+void input_axis_discrete(struct input_axis *ax, unsigned axis, int n);
+/* the finger left the touchpad: what built up goes */
+void input_axis_stop(struct input_axis *ax, unsigned axis);
+/* The frame's steps per axis, positive down or right, at most 10 either way;
+ * the frame starts afresh. */
+void input_axis_frame(struct input_axis *ax, double step, int steps[2]);
 
 /* The code to report for a move to another cell with buttons held (bits as in
  * struct buttons; left before middle before right before the side buttons, as

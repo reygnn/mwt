@@ -33,6 +33,9 @@ asked for through xdg-decoration. Where that is missing, as in GNOME and Weston,
 compositor answers that the client draws them, the window has no frame, no title bar and
 no border.
 
+HiDPI needs `wl_compositor` version 6, which tells a surface its scale. Where a
+compositor offers only an older one, mwt draws at scale 1, blurry on a HiDPI output.
+
 There is no reflow: shrinking the window cuts off what no longer fits. A resize also
 sets the tab stops back to every eighth column.
 
@@ -145,7 +148,9 @@ SUB is dropped where xterm prints ␦.
 ## Input
 
 mwt binds the first seat the compositor announces. Should that seat go away, another one
-it announced already is not taken up; only a seat announced later is.
+it announced already is not taken up; only a seat announced later is. Other globals
+that go away (clipboard, primary selection, decorations, activation) are kept; what mwt
+asks of them then does nothing.
 
 A mouse that goes off the seat with its button down on an item of the context menu runs
 the item. sway sends the release itself, which mwt cannot tell from one let go; where a

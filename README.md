@@ -131,9 +131,9 @@ checks:
   its pty and of `-g`, and the kept fuzz findings, under ASan and UBSan, and checks
   mwt's command line. `make fuzz` searches for new findings with libFuzzer, and `make
   replay` plays about 290 recorded terminal files through the core.
-* `make test`, `make keys`, `make bell`, `make pixel`, `make mouse` and `make keyboard`
-  drive mwt under a headless sway with a simulated mouse and keyboard, and check what it
-  sends to the program and what it draws.
+* `make test`, `make keys`, `make bell`, `make wayland`, `make pixel`, `make mouse` and
+  `make keyboard` drive mwt under a headless sway with a simulated mouse and keyboard,
+  and check what it sends to the program and what it draws.
 * `make evil` runs all of it in a container, with sanitizers, leak checks and
   adversarial cases such as floods, stalled pipes and running out of memory.
 * `make terminfo` checks that `mwt.info` promises only what mwt does.

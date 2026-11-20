@@ -58,7 +58,7 @@ test_rc: test_rc.c rc.c rc.h
 test_input: test_input.c input.c input.h vt.c vt.h version.h
 	$(CC) -std=c11 -Wall -Wextra -g -fsanitize=address,undefined -fno-sanitize-recover=all \
 		$(shell pkg-config --cflags xkbcommon) -o $@ test_input.c input.c vt.c \
-		$(shell pkg-config --libs xkbcommon)
+		$(shell pkg-config --libs xkbcommon) -lm
 
 # What a paste becomes, and the clipboard's Latin-1; each allocation fails once
 # through --wrap.
@@ -179,6 +179,9 @@ keys: mwt
 bell: mwt
 	tests/headless.sh tests/bell.py
 
+wayland: mwt
+	tests/headless.sh tests/wayland.py
+
 pixel: mwt
 	tests/headless.sh tests/pixel.py
 
@@ -238,4 +241,4 @@ uninstall:
 clean:
 	rm -f mwt mwt-esctest test_vt test_rc test_input test_paste test_sel test_shell test_util vtdump test_replay fuzz_vt fuzz_regress fuzz_regress.log font_oom font_cache font_style font_lookup font_ttc *.o $(PROTO_H) $(PROTO_C)
 
-.PHONY: all check replay fuzz terminfo keys bell pixel mouse keyboard test evil fonts oldwayland width esctest profile install uninstall clean
+.PHONY: all check replay fuzz terminfo keys bell wayland pixel mouse keyboard test evil fonts oldwayland width esctest profile install uninstall clean

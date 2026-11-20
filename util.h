@@ -17,6 +17,17 @@ int parse_geometry(const char *s, int max_cols, int max_rows, int *cols, int *ro
  * none can be chosen. */
 int menu_next(int hover, int n, int dir, unsigned enabled);
 
+#include <stddef.h>
+
+/* cols and rows made to fit configure_bounds of bw x bh logical pixels (0: no
+ * bound), with cells of cw x ch and pad on each side in buffer pixels of the
+ * scale; one cell at least. KWin and mutter send bounds, sway does not. */
+void fit_bounds(int *cols, int *rows, int bw, int bh, int scale, int pad, int cw, int ch);
+
+/* How much of s fits in max bytes without cutting a UTF-8 sequence: -T and -a
+ * go out in one Wayland message, whose size field is 16 bits. */
+size_t utf8_clip(const char *s, size_t max);
+
 /* Each of fds 0 to 2 that is closed opened on /dev/null, so that nothing mwt
  * opens later takes its place: a message for stderr would go into the pty or
  * the Wayland socket. False when /dev/null cannot be opened. */
