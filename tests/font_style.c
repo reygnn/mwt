@@ -59,18 +59,24 @@ static bool other_font_has(struct font *f, uint32_t cp)
 	return found;
 }
 
-/* a font on the system of regular weight that has cp */
-static bool regular_font_has(uint32_t cp)
+static void check_bold(uint32_t cp, int s, struct face *fc, bool emb);
+
+/* a font on the system of at least or below weight that has cp */
+static bool weight_font_has(uint32_t cp, bool bold)
 {
 	FcPattern *p = FcPatternCreate();
 	FcCharSet *cs = FcCharSetCreate();
-	FcObjectSet *os = FcObjectSetBuild(FC_FILE, (char *)NULL);
+	FcObjectSet *os = FcObjectSetBuild(FC_WEIGHT, (char *)NULL);
 	FcCharSetAddChar(cs, cp);
 	FcPatternAddCharSet(p, FC_CHARSET, cs);
 	FcPatternAddBool(p, FC_SCALABLE, FcTrue);
-	FcPatternAddInteger(p, FC_WEIGHT, FC_WEIGHT_REGULAR);
 	FcFontSet *set = FcFontList(NULL, p, os);
-	bool found = set && set->nfont > 0;
+	bool found = false;
+	for (int k = 0; set && k < set->nfont && !found; k++) {
+		double w;
+		if (FcPatternGetDouble(set->fonts[k], FC_WEIGHT, 0, &w) == FcResultMatch)
+			found = bold ? w >= FC_WEIGHT_DEMIBOLD : w < FC_WEIGHT_DEMIBOLD;
+	}
 	if (set)
 		FcFontSetDestroy(set);
 	FcObjectSetDestroy(os);
@@ -79,11 +85,13 @@ static bool regular_font_has(uint32_t cp)
 	return found;
 }
 
-/* The fallback faces are regular ones, whatever weight the spec gives: bold
- * ones would be emboldened again in bold. The first 200 characters none of the
- * style faces has. */
+/* The fallback faces in regular text are as bold as regular: a bold face, or
+ * one made bold, with a bold regular; a regular one not made bold otherwise,
+ * where the system has one for the character. The first 200 characters
+ * none of the style faces has. */
 static void fallback_weight(const char *spec, struct font *f)
 {
+	bool bold = f->style[STYLE_REGULAR].weight >= FC_WEIGHT_DEMIBOLD;
 	int n = 0;
 	for (uint32_t cp = 0x21; cp < 0x10000 && n < 200; cp++) {
 		bool style = false;
@@ -96,9 +104,15 @@ static void fallback_weight(const char *spec, struct font *f)
 		if (!fc)
 			continue;
 		n++;
-		if (fc->weight >= FC_WEIGHT_DEMIBOLD && regular_font_has(cp))
-			FAIL("'%s': U+%04X from the bold %s, a regular font has it\n", spec,
+		bool drawn_bold = emb || fc->weight >= FC_WEIGHT_DEMIBOLD;
+		if (bold && !drawn_bold)
+			FAIL("'%s': U+%04X from the regular %s, not made bold\n", spec,
 			     (unsigned)cp, fc->path);
+		if (!bold && drawn_bold && weight_font_has(cp, false))
+			FAIL("'%s': U+%04X bold from %s, a regular font has it\n", spec,
+			     (unsigned)cp, fc->path);
+		check_bold(cp, STYLE_REGULAR, fc, emb);
+		check_bold(cp, STYLE_BOLD, face_for(f, cp, STYLE_BOLD, &emb), emb);
 	}
 	if (!n)
 		FAIL("'%s': no character from a fallback face, nothing was tested\n", spec);

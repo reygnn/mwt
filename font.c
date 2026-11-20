@@ -59,6 +59,7 @@ struct font {
 	FcCharSet *cover;
 	unsigned long tick;
 	double size_pt, size_px;
+	int slant; /* regular's, for the fallback faces */
 	int cw, ch, ascent;
 	struct entry *cache;
 	size_t cache_cap, cache_used;
@@ -176,6 +177,7 @@ struct font *font_open(const char *spec, double size_pt, int scale)
 			rweight = f->style[0].weight;
 			FcPatternGetDouble(m, FC_WIDTH, 0, &rwidth);
 			FcPatternGetInteger(m, FC_SLANT, 0, &rslant);
+			f->slant = rslant;
 		}
 		if (m)
 			FcPatternDestroy(m);
@@ -281,11 +283,14 @@ static bool sorted_fonts(struct font *f)
 	f->sort_pat = FcPatternDuplicate(f->base);
 	if (!f->sort_pat) /* FcPatternAdd* and FcConfigSubstitute do not take NULL */
 		return false;
-	/* the fallback faces in regular: a style=Bold or :bold in the spec put
-	 * bold files first, emboldened once more in bold */
+	/* The fallback faces as regular came out, by weight and slant: a bold or
+	 * light spec gets bold or light ones. Not by the style name, which says
+	 * nothing in another family and outranks the weight. */
 	FcPatternDel(f->sort_pat, FC_STYLE);
 	FcPatternDel(f->sort_pat, FC_WEIGHT);
+	FcPatternAddDouble(f->sort_pat, FC_WEIGHT, f->style[STYLE_REGULAR].weight);
 	FcPatternDel(f->sort_pat, FC_SLANT);
+	FcPatternAddInteger(f->sort_pat, FC_SLANT, f->slant);
 	FcPatternAddBool(f->sort_pat, FC_SCALABLE, FcTrue);
 	FcConfigSubstitute(NULL, f->sort_pat, FcMatchPattern);
 	FcDefaultSubstitute(f->sort_pat);
@@ -365,7 +370,6 @@ static struct face *find_fallback(struct font *f, uint32_t cp, int style)
 		} else {
 			f->nfallback++;
 		}
-		nf.embolden = false;
 		nf.used = ++f->tick;
 		f->fallback[slot] = nf;
 		return &f->fallback[slot];
