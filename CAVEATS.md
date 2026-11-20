@@ -9,7 +9,7 @@ Behaviour of mwt that is meant that way or that mwt cannot change.
 message goes to the window, which closes at once.
 
 If `$SHELL` is not executable or not an absolute path (`SHELL=bash`), the window closes
-at once. Only an empty `$SHELL` falls back to the passwd entry.
+at once. Only an empty or unset `$SHELL` falls back to the passwd entry.
 
 The shell gets mwt's environment as it is, apart from `TERM`, `COLORTERM`, `LINES` and
 `COLUMNS`. Started from within tmux or kitty, `TMUX`, `TERM_PROGRAM` and the like come
@@ -29,8 +29,9 @@ the grid stays at 4096x2048 in the largest window. A zoom that would pass 2 GiB 
 refused, with a message on stderr.
 
 mwt draws no frame of its own and uses no libdecor: frames are the compositor's job,
-asked for through xdg-decoration. Where that is missing, as in GNOME and Weston, the
-window has no frame, no title bar and no border.
+asked for through xdg-decoration. Where that is missing, as in GNOME and Weston, or the
+compositor answers that the client draws them, the window has no frame, no title bar and
+no border.
 
 There is no reflow: shrinking the window cuts off what no longer fits. A resize also
 sets the tab stops back to every eighth column.
@@ -43,7 +44,7 @@ The selected text reaches only as far as the scrollback, 5000 lines (`config.h`)
 A paste over 64 MiB is dropped whole, with a message on stderr. It counts as UTF-8,
 which Latin-1 doubles, and together with what still waits for the program: a program
 that does not read takes 64 MiB of pastes at most. Of the controls only tab, CR and LF
-are pasted, LF and CR LF as CR; C1 goes too, also as UTF-8.
+are pasted, LF and CR LF as CR; C1 controls are dropped as well, also as UTF-8.
 
 With Ctrl+Shift+letter on non-Latin layouts without a Latin second layout, the key's
 QWERTY position counts.
@@ -67,21 +68,23 @@ A program that stops output with `tcflow(TCOOFF)` is the only one that can start
 again. The stop is in the kernel; no key helps.
 
 An unterminated DCS or OSC (ESC P or ESC ] without its end) swallows output up to the
-next ESC, CAN or SUB. bash usually ends it with the sequence of its next prompt.
+next ESC, CAN or SUB, an OSC also up to BEL. bash usually ends it with the sequence of
+its next prompt.
 
 
 ## Keypad mode
 
 The application keypad mode (ESC =, ESC >, CSI ? 66 h and l) is kept and reported by
-DECRQM but does not change the keys. With NumLock the digits send digits and Enter
-sends `\r`; without it xkb gives KP_Home, KP_Up and so on, which send the normal cursor
-and tilde sequences. This is xterm's behaviour with its default mode 1035. If the mode
-took effect, the keypad would send ESC O q instead of 1 as soon as a curses program
-starts (`smkx` in `mwt.info` turns it on), and without `ka1`, `kent` and the like in the
-terminfo no program would understand it. `kb2` in `mwt.info` is the keypad's 5 without
-NumLock, ESC O E under `smkx` as cursor keys go; xterm's entries have the keypad mode's
-ESC O u. With NumLock a keypad key is a cursor key only with Shift, so `kUP5` and the
-like come from it only without NumLock; Ctrl+8 there sends DEL, Alt+8 ESC 8.
+DECRQM but does not change the keys. With NumLock the digits send digits and Enter sends
+`\r` (CR LF in newline mode); without it xkb gives KP_Home, KP_Up and so on, which send
+the normal cursor and tilde sequences. This is xterm's behaviour with its default mode
+1035. If the mode took effect, the keypad would send ESC O q instead of 1 as soon as a
+curses program starts (`smkx` in `mwt.info` turns it on), and without `ka1`, `kent` and
+the like in the terminfo no program would understand it. `kb2` in `mwt.info` is the
+keypad's 5 without NumLock, ESC O E under `smkx` as cursor keys go; xterm's entries have
+the keypad mode's ESC O u. With NumLock a keypad key is a cursor key only with Shift, so
+`kUP5` and the like come from it only without NumLock; Ctrl+8 there sends DEL, Alt+8
+ESC 8.
 
 
 ## Character widths
@@ -101,6 +104,9 @@ xterm reports whether a cursor is saved, which mwt does not keep track of.
 
 The cursor never blinks: the blinking styles of DECSCUSR (1, 3, 5) are drawn steady,
 and DECRQM reports mode 12 as permanently reset.
+
+Of SGR, blinking (5, 6) is kept but not drawn, double underline (21) is drawn single,
+and the underline color (58) is read and ignored.
 
 The wheel in the alternate screen sends arrow keys when no program has the mouse, as
 xterm's alternate scroll mode (1007). In mwt it is always on: `CSI ? 1007 l` is ignored
@@ -186,6 +192,9 @@ Oblique does so for U+1D3D, which is blank in italic and bold italic.
 since ncurses does not look under `/usr/local`.
 
 Without the entry mwt falls back to `TERM=xterm-256color`, which promises more than mwt
-does: changing colors (`ccc`, `initc`), a visual bell (`flash`, reverse screen), meta
-mode (`smm`, `rmm`), and the keypad keys `ka1` to `kc3`, which mwt sends as the normal
+does: changing colors (`ccc`, `initc`, `oc`, `Cs`, `Cr`), a visual bell (`flash`,
+reverse screen), meta mode (`km`, `smm`, `rmm`), blinking text (`blink`), left and right
+margins (`smglr`, `smglp`, `smgrp`, `mgc`), the printer (`mc0`, `mc4`, `mc5`, `mc5i`),
+memory lock (`meml`, `memu`), setting the selection (`Ms`), `kIC`, which pastes (see
+Sequences left out), and the keypad keys `ka1` to `kc3`, which mwt sends as the normal
 cursor keys (see Keypad mode). Install the entry.

@@ -73,7 +73,8 @@ line is skipped and named on stderr; a missing file is no error. On a light
 background, set `color7` and `color15` too.
 
 `docs/mwtrc` has four complete color sets: `indigo3` after the SGI IRIS Indigo winterm,
-`dracula`, `paper` (dark on cream) and `amber`. Try them with `mwt -a indigo3`.
+`dracula`, `paper` (dark on cream) and `amber`. Copy it to `~/.config/mwt/mwtrc` and try
+them with `mwt -a indigo3`.
 
 
 ## Controls
@@ -83,7 +84,7 @@ background, set `color7` and `color15` too.
 | Drag with button 1 | select; copied to the primary selection on release |
 | Double or triple click | select a word or a line |
 | Shift+click | extend the selection |
-| Button 3 | menu: Copy, Paste, Select All; arrows, Return and Escape work in it |
+| Button 3 | menu: Copy, Paste, Select all; arrows, Return and Escape work in it |
 | Button 2, Shift+Insert | paste the primary selection |
 | Ctrl+Shift+A | select all: scrollback and screen, in the alternate screen only the screen |
 | Ctrl+Shift+C, Ctrl+Shift+V | copy to and paste from the clipboard |
@@ -125,13 +126,14 @@ mwt is developed with Claude (Anthropic) as a coding assistant. I set the scope 
 architecture and review the changes; Claude writes most of the code and the tests. The
 checks:
 
-* `make check` runs the unit tests of the VT core, of what keys and the mouse send, of
-  what a paste becomes, of the selection and of the shell on its pty, and the kept fuzz
-  findings, under ASan and UBSan; `make fuzz` searches for new ones with libFuzzer, and `make replay` plays
-  about 290 recorded terminal files through the core.
-* `make test`, `make keys`, `make pixel`, `make mouse` and `make keyboard` drive mwt
-  under a headless sway with a simulated mouse and keyboard, and check what it sends to
-  the program and what it draws.
+* `make check` runs the unit tests of the VT core, of the mwtrc and the colors, of what
+  keys and the mouse send, of what a paste becomes, of the selection, of the shell on
+  its pty and of `-g`, and the kept fuzz findings, under ASan and UBSan, and checks
+  mwt's command line. `make fuzz` searches for new findings with libFuzzer, and `make
+  replay` plays about 290 recorded terminal files through the core.
+* `make test`, `make keys`, `make bell`, `make pixel`, `make mouse` and `make keyboard`
+  drive mwt under a headless sway with a simulated mouse and keyboard, and check what it
+  sends to the program and what it draws.
 * `make evil` runs all of it in a container, with sanitizers, leak checks and
   adversarial cases such as floods, stalled pipes and running out of memory.
 * `make terminfo` checks that `mwt.info` promises only what mwt does.
