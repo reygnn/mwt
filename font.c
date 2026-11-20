@@ -35,6 +35,7 @@ struct face {
 	bool embolden;
 	char *path;
 	int index;
+	double weight; /* fontconfig's, to tell a bold face from one to embolden */
 	unsigned long used; /* fallback faces: font.tick when last found */
 };
 
@@ -74,6 +75,8 @@ static bool load_face(struct font *f, FcPattern *match, struct face *out)
 		return false;
 	FcPatternGetInteger(match, FC_INDEX, 0, &index);
 	FcPatternGetBool(match, FC_EMBOLDEN, 0, &emb);
+	out->weight = FC_WEIGHT_REGULAR;
+	FcPatternGetDouble(match, FC_WEIGHT, 0, &out->weight);
 	if (FT_New_Face(f->lib, (const char *)file, index, &out->ft))
 		return false;
 	if (!FT_IS_SCALABLE(out->ft)) {
@@ -135,34 +138,45 @@ struct font *font_open(const char *spec, double size_pt, int scale)
 	FcPatternDel(f->base, FC_PIXEL_SIZE);
 	FcPatternAddDouble(f->base, FC_PIXEL_SIZE, f->size_px);
 
-	static const struct { int weight, slant; } st[4] = {
-		{ FC_WEIGHT_REGULAR, FC_SLANT_ROMAN },
-		{ FC_WEIGHT_BOLD, FC_SLANT_ROMAN },
-		{ FC_WEIGHT_REGULAR, FC_SLANT_ITALIC },
-		{ FC_WEIGHT_BOLD, FC_SLANT_ITALIC },
-	};
+	/* Bold, italic and bold italic are regular's face with only what they are
+	 * for changed: its weight and width otherwise, so a light or condensed
+	 * regular gets a light italic and a condensed bold. Not its style name,
+	 * which outranks weight and slant in fontconfig: style=Book would give all
+	 * four the same face. */
+	double rweight = FC_WEIGHT_REGULAR, rwidth = 0;
+	int rslant = FC_SLANT_ROMAN;
 	for (int i = 0; i < 4; i++) {
 		FcPattern *p = FcPatternDuplicate(f->base);
 		if (!p) /* FcPatternDel and FcPatternAdd* do not take NULL */
 			goto fail;
 		FcValue v;
-		/* A style name in the spec (style=Book) outranks weight and slant
-		 * in fontconfig and would give all four the same face. */
-		if (i)
+		if (i) {
 			FcPatternDel(p, FC_STYLE);
-		/* regular keeps a weight/slant given in the spec */
-		if (i || FcPatternGet(p, FC_WEIGHT, 0, &v) != FcResultMatch) {
 			FcPatternDel(p, FC_WEIGHT);
-			FcPatternAddInteger(p, FC_WEIGHT, st[i].weight);
-		}
-		if (i || FcPatternGet(p, FC_SLANT, 0, &v) != FcResultMatch) {
+			FcPatternAddDouble(p, FC_WEIGHT, i & STYLE_BOLD && rweight < FC_WEIGHT_BOLD ?
+						  FC_WEIGHT_BOLD : rweight);
 			FcPatternDel(p, FC_SLANT);
-			FcPatternAddInteger(p, FC_SLANT, st[i].slant);
+			FcPatternAddInteger(p, FC_SLANT, i & STYLE_ITALIC ? FC_SLANT_ITALIC : rslant);
+			if (rwidth > 0) {
+				FcPatternDel(p, FC_WIDTH);
+				FcPatternAddDouble(p, FC_WIDTH, rwidth);
+			}
+		} else {
+			/* regular keeps a weight and slant given in the spec */
+			if (FcPatternGet(p, FC_WEIGHT, 0, &v) != FcResultMatch)
+				FcPatternAddInteger(p, FC_WEIGHT, FC_WEIGHT_REGULAR);
+			if (FcPatternGet(p, FC_SLANT, 0, &v) != FcResultMatch)
+				FcPatternAddInteger(p, FC_SLANT, FC_SLANT_ROMAN);
 		}
 		FcPatternAddBool(p, FC_SCALABLE, FcTrue);
 		FcPattern *m = match_pattern(p);
 		FcPatternDestroy(p);
 		bool ok = m && load_face(f, m, &f->style[i]);
+		if (ok && i == 0) {
+			rweight = f->style[0].weight;
+			FcPatternGetDouble(m, FC_WIDTH, 0, &rwidth);
+			FcPatternGetInteger(m, FC_SLANT, 0, &rslant);
+		}
 		if (m)
 			FcPatternDestroy(m);
 		if (!ok) {
@@ -175,7 +189,10 @@ struct font *font_open(const char *spec, double size_pt, int scale)
 					&f->style[i].ft))
 				goto fail;
 			FT_Set_Char_Size(f->style[i].ft, 0, (FT_F26Dot6)lround(f->size_px * 64), 72, 72);
-			f->style[i].embolden = st[i].weight == FC_WEIGHT_BOLD;
+			f->style[i].embolden = f->style[0].embolden ||
+					       (i & STYLE_BOLD && rweight < FC_WEIGHT_DEMIBOLD);
+			f->style[i].weight = rweight;
+			f->style[i].index = f->style[0].index; /* find_fallback compares it */
 			f->style[i].path = strdup(f->style[0].path);
 			if (!f->style[i].path)
 				goto fail; /* font_close closes the face */
@@ -264,6 +281,11 @@ static bool sorted_fonts(struct font *f)
 	f->sort_pat = FcPatternDuplicate(f->base);
 	if (!f->sort_pat) /* FcPatternAdd* and FcConfigSubstitute do not take NULL */
 		return false;
+	/* the fallback faces in regular: a style=Bold or :bold in the spec put
+	 * bold files first, emboldened once more in bold */
+	FcPatternDel(f->sort_pat, FC_STYLE);
+	FcPatternDel(f->sort_pat, FC_WEIGHT);
+	FcPatternDel(f->sort_pat, FC_SLANT);
 	FcPatternAddBool(f->sort_pat, FC_SCALABLE, FcTrue);
 	FcConfigSubstitute(NULL, f->sort_pat, FcMatchPattern);
 	FcDefaultSubstitute(f->sort_pat);
@@ -273,16 +295,16 @@ static bool sorted_fonts(struct font *f)
 	return f->sorted && f->cover;
 }
 
-/* Whether the style face i may stand in for style: it adds nothing that was not
- * asked for. Bold Italic takes Bold; Regular takes none of the others. */
-static bool style_fits(int i, int style)
+/* How close the style face i is to style, for one that does not fit: what they
+ * share first, then the less it adds. */
+static int style_near(int i, int style)
 {
-	return (i & ~style) == 0;
+	return 4 * __builtin_popcount((unsigned)(i & style)) - __builtin_popcount((unsigned)(i & ~style));
 }
 
-/* find or load a face that has cp; NULL if none on the system. Another style
- * face of the font comes last: U+27BF, only in DejaVu's bold file, would be
- * bold in regular text. */
+/* find or load a face that has cp; NULL if none on the system. The style faces
+ * that fit were tried before; one that does not comes last, from the font's
+ * own file: U+27BF, only in DejaVu's bold file, would be bold in regular. */
 static struct face *find_fallback(struct font *f, uint32_t cp, int style)
 {
 	struct face *other = NULL;
@@ -310,26 +332,18 @@ static struct face *find_fallback(struct font *f, uint32_t cp, int style)
 		/* Open already: a fallback face was tried above and lacks cp, but
 		 * bold or italic may have what regular lacks. */
 		bool open = false;
-		struct face *fits = NULL;
 		for (int i = 0; i < 4; i++)
 			if (!strcmp(f->style[i].path, (const char *)file) && f->style[i].index == index) {
 				open = true;
-				if (!FT_Get_Char_Index(f->style[i].ft, cp))
-					continue;
-				if (style_fits(i, style)) {
-					if (!fits)
-						fits = &f->style[i];
-				} else if (!other) {
+				if (FT_Get_Char_Index(f->style[i].ft, cp) &&
+				    (!other || style_near(i, style) > style_near((int)(other - f->style), style)))
 					other = &f->style[i];
-				}
 			}
 		for (int i = 0; i < f->nfallback; i++)
 			open |= !strcmp(f->fallback[i].path, (const char *)file) &&
 				f->fallback[i].index == index;
 		if (open) {
 			FcPatternDestroy(m);
-			if (fits)
-				return fits;
 			continue;
 		}
 		struct face nf = { 0 };
@@ -363,20 +377,28 @@ static struct face *find_fallback(struct font *f, uint32_t cp, int style)
  * whether to make it bold. */
 static struct face *face_for(struct font *f, uint32_t cp, int style, bool *embolden)
 {
-	struct face *fc = &f->style[style];
 	/* Bold and italic faces often cover less than regular (DejaVu Sans Mono
-	 * Oblique lacks hundreds): regular first, before the system's fonts. */
-	if (!FT_Get_Char_Index(fc->ft, cp) && style != STYLE_REGULAR)
-		fc = &f->style[STYLE_REGULAR];
-	if (!FT_Get_Char_Index(fc->ft, cp))
+	 * Oblique lacks hundreds): the font's own faces that fit, before the
+	 * system's fonts, whatever was drawn before. For bold italic the bold face
+	 * first, then the italic one, then regular: real bold outlines rather than
+	 * synthesized ones, the slant lost either way. */
+	static const int order[4][4] = {
+		{ STYLE_REGULAR, -1 },
+		{ STYLE_BOLD, STYLE_REGULAR, -1 },
+		{ STYLE_ITALIC, STYLE_REGULAR, -1 },
+		{ STYLE_BOLD_ITALIC, STYLE_BOLD, STYLE_ITALIC, STYLE_REGULAR },
+	};
+	struct face *fc = NULL;
+	for (int k = 0; k < 4 && order[style][k] >= 0 && !fc; k++)
+		if (FT_Get_Char_Index(f->style[order[style][k]].ft, cp))
+			fc = &f->style[order[style][k]];
+	if (!fc)
 		fc = find_fallback(f, cp, style);
 	if (!fc)
 		return NULL;
-	/* bold synthesized for a face not bold itself; the bold style faces are,
-	 * or carry embolden when they are regular's file again */
-	bool bold = style == STYLE_BOLD || style == STYLE_BOLD_ITALIC;
-	*embolden = fc->embolden ||
-		    (bold && fc != &f->style[STYLE_BOLD] && fc != &f->style[STYLE_BOLD_ITALIC]);
+	/* bold synthesized for a face that is not bold itself */
+	bool bold = style & STYLE_BOLD;
+	*embolden = fc->embolden || (bold && fc->weight < FC_WEIGHT_DEMIBOLD);
 	return fc;
 }
 

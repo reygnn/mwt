@@ -1,42 +1,148 @@
-/* tests/font_style.c - a character the regular face has is drawn in every
- * style, also where the bold or italic face lacks it; one only a style face has
- * is taken from it only where nothing else fits; a style name in the spec keeps
- * the four faces. font.c is built in so that this file can ask the faces what
- * they cover. Needs a font whose style faces cover less than its regular one
- * and have some it lacks, as DejaVu Sans Mono does; make fonts runs it. */
+/* tests/font_style.c - which face each style draws a character from. One the
+ * regular face has is drawn in every style, also where the bold or italic face
+ * lacks it; one only a style face has comes from a style face that fits before
+ * any other font, from one that does not only where no font has it, the same
+ * whatever was drawn before; a bold face is not made bolder; a style name in
+ * the spec keeps the four faces. font.c is built in so that this file can ask
+ * the faces what they cover. Needs a font whose style faces cover less than
+ * its regular one and have some it lacks, as DejaVu Sans Mono does; make fonts
+ * runs it. */
 #include "../font.c"
 
 #include <stdio.h>
 
 static const char *name[4] = { "regular", "bold", "italic", "bold italic" };
+static int fails;
 
-/* a font of the system's list, not one of the style faces, that has cp */
-static bool other_font_has(struct font *f, uint32_t cp)
+/* Whether the style face i may stand in for style: it adds nothing that was not
+ * asked for. Bold Italic takes Bold; Regular takes none of the others. */
+static bool style_fits(int i, int style)
 {
-	for (int k = 0; k < f->sorted->nfont; k++) {
-		FcCharSet *cs;
-		FcChar8 *file;
-		int index = 0;
-		if (FcPatternGetCharSet(f->sorted->fonts[k], FC_CHARSET, 0, &cs) != FcResultMatch ||
-		    !FcCharSetHasChar(cs, cp) ||
-		    FcPatternGetString(f->sorted->fonts[k], FC_FILE, 0, &file) != FcResultMatch)
-			continue;
-		FcPatternGetInteger(f->sorted->fonts[k], FC_INDEX, 0, &index);
-		bool style = false;
-		for (int i = 0; i < 4; i++)
-			style |= !strcmp(f->style[i].path, (const char *)file) && f->style[i].index == index;
-		if (!style)
+	return (i & ~style) == 0;
+}
+
+#define FAIL(...) do { if (fails++ < 10) printf("FAIL: " __VA_ARGS__); } while (0)
+
+static bool is_style_face(struct font *f, const char *file, int index)
+{
+	for (int i = 0; i < 4; i++)
+		if (!strcmp(f->style[i].path, file) && f->style[i].index == index)
 			return true;
-	}
 	return false;
 }
 
-/* What regular lacks and a style face has: a style face only where it adds
- * nothing not asked for, or where no other font has it; a bold face not made
- * bolder. Returns the number of failures, *tested what was looked at. */
-static int style_only(struct font *f, int *tested)
+/* a font on the system, not one of the style faces, that has cp: asked of
+ * fontconfig's list, not of the sorted one font.c walks */
+static bool other_font_has(struct font *f, uint32_t cp)
 {
-	int fails = 0;
+	FcPattern *p = FcPatternCreate();
+	FcCharSet *cs = FcCharSetCreate();
+	FcObjectSet *os = FcObjectSetBuild(FC_FILE, FC_INDEX, FC_SCALABLE, (char *)NULL);
+	FcCharSetAddChar(cs, cp);
+	FcPatternAddCharSet(p, FC_CHARSET, cs);
+	FcPatternAddBool(p, FC_SCALABLE, FcTrue);
+	FcFontSet *set = FcFontList(NULL, p, os);
+	bool found = false;
+	for (int k = 0; set && k < set->nfont && !found; k++) {
+		FcChar8 *file;
+		int index = 0;
+		if (FcPatternGetString(set->fonts[k], FC_FILE, 0, &file) != FcResultMatch)
+			continue;
+		FcPatternGetInteger(set->fonts[k], FC_INDEX, 0, &index);
+		found = !is_style_face(f, (const char *)file, index);
+	}
+	if (set)
+		FcFontSetDestroy(set);
+	FcObjectSetDestroy(os);
+	FcCharSetDestroy(cs);
+	FcPatternDestroy(p);
+	return found;
+}
+
+/* a font on the system of regular weight that has cp */
+static bool regular_font_has(uint32_t cp)
+{
+	FcPattern *p = FcPatternCreate();
+	FcCharSet *cs = FcCharSetCreate();
+	FcObjectSet *os = FcObjectSetBuild(FC_FILE, (char *)NULL);
+	FcCharSetAddChar(cs, cp);
+	FcPatternAddCharSet(p, FC_CHARSET, cs);
+	FcPatternAddBool(p, FC_SCALABLE, FcTrue);
+	FcPatternAddInteger(p, FC_WEIGHT, FC_WEIGHT_REGULAR);
+	FcFontSet *set = FcFontList(NULL, p, os);
+	bool found = set && set->nfont > 0;
+	if (set)
+		FcFontSetDestroy(set);
+	FcObjectSetDestroy(os);
+	FcCharSetDestroy(cs);
+	FcPatternDestroy(p);
+	return found;
+}
+
+/* The fallback faces are regular ones, whatever weight the spec gives: bold
+ * ones would be emboldened again in bold. The first 200 characters none of the
+ * style faces has. */
+static void fallback_weight(const char *spec, struct font *f)
+{
+	int n = 0;
+	for (uint32_t cp = 0x21; cp < 0x10000 && n < 200; cp++) {
+		bool style = false;
+		for (int i = 0; i < 4; i++)
+			style |= FT_Get_Char_Index(f->style[i].ft, cp) != 0;
+		if (style)
+			continue;
+		bool emb;
+		struct face *fc = face_for(f, cp, STYLE_REGULAR, &emb);
+		if (!fc)
+			continue;
+		n++;
+		if (fc->weight >= FC_WEIGHT_DEMIBOLD && regular_font_has(cp))
+			FAIL("'%s': U+%04X from the bold %s, a regular font has it\n", spec,
+			     (unsigned)cp, fc->path);
+	}
+	if (!n)
+		FAIL("'%s': no character from a fallback face, nothing was tested\n", spec);
+}
+
+static int style_index(struct font *f, struct face *fc)
+{
+	return fc >= f->style && fc < f->style + 4 ? (int)(fc - f->style) : -1;
+}
+
+/* A face that is bold already is not emboldened. */
+static void check_bold(uint32_t cp, int s, struct face *fc, bool emb)
+{
+	if (fc && emb && !fc->embolden && fc->weight >= FC_WEIGHT_DEMIBOLD)
+		FAIL("U+%04X in %s: a bold face (%s) made bolder\n", (unsigned)cp, name[s], fc->path);
+}
+
+/* What regular has: drawn in every style, and not made bolder than bold. */
+static int from_regular(struct font *f)
+{
+	int gaps = 0;
+	for (uint32_t cp = 0x21; cp < 0x10000; cp++) {
+		if (!FT_Get_Char_Index(f->style[STYLE_REGULAR].ft, cp))
+			continue;
+		if (!font_glyph(f, cp, STYLE_REGULAR)->w)
+			continue; /* blank in regular too */
+		for (int s = 1; s < 4; s++) {
+			bool emb = false;
+			check_bold(cp, s, face_for(f, cp, s, &emb), emb);
+			if (FT_Get_Char_Index(f->style[s].ft, cp))
+				continue;
+			gaps++;
+			if (!font_glyph(f, cp, s)->w)
+				FAIL("U+%04X is drawn in regular but not in %s\n", (unsigned)cp, name[s]);
+		}
+	}
+	return gaps;
+}
+
+/* What regular lacks and a style face has, in each style on a fresh font, and
+ * again after the other styles drew it. */
+static int style_only(const char *spec, struct font *f)
+{
+	int tested = 0;
 	for (uint32_t cp = 0x21; cp < 0x10000; cp++) {
 		if (FT_Get_Char_Index(f->style[STYLE_REGULAR].ft, cp))
 			continue;
@@ -45,102 +151,126 @@ static int style_only(struct font *f, int *tested)
 			some |= FT_Get_Char_Index(f->style[i].ft, cp) != 0;
 		if (!some)
 			continue;
-		++*tested;
+		tested++;
+		bool other = other_font_has(f, cp);
 		for (int s = 0; s < 4; s++) {
-			bool emb = false;
-			struct face *fc = face_for(f, cp, s, &emb);
-			int i = fc ? (int)(fc - f->style) : -1;
-			if (i < 0 || i > 3)
-				continue; /* a fallback face */
-			if (!style_fits(i, s) && other_font_has(f, cp) && fails++ < 5)
-				printf("FAIL: U+%04X in %s comes from the %s face, another font has it\n",
-				       (unsigned)cp, name[s], name[i]);
-			if ((i & STYLE_BOLD) && !fc->embolden && emb && fails++ < 5)
-				printf("FAIL: U+%04X in %s: the %s face made bolder\n",
-				       (unsigned)cp, name[s], name[i]);
+			struct font *a = font_open(spec, 0, 1), *b = font_open(spec, 0, 1);
+			if (!a || !b) {
+				FAIL("no font for '%s'\n", spec);
+				font_close(a);
+				font_close(b);
+				return tested;
+			}
+			bool emb = false, embb = false;
+			struct face *fc = face_for(a, cp, s, &emb);
+			for (int o = 0; o < 4; o++)
+				if (o != s)
+					face_for(b, cp, o, &embb);
+			struct face *fb = face_for(b, cp, s, &embb);
+			int i = style_index(a, fc);
+			bool fits = false;
+			for (int j = 0; j < 4; j++)
+				fits |= style_fits(j, s) && FT_Get_Char_Index(a->style[j].ft, cp);
+			if (!fc)
+				FAIL("U+%04X is not drawn in %s\n", (unsigned)cp, name[s]);
+			else if (fits && (i < 0 || !style_fits(i, s)))
+				FAIL("U+%04X in %s from %s, though a style face fits\n", (unsigned)cp,
+				     name[s], fc->path);
+			else if (!fits && i >= 0 && other)
+				FAIL("U+%04X in %s from the %s face, another font has it\n",
+				     (unsigned)cp, name[s], name[i]);
+			if (fc && fb && (strcmp(fc->path, fb->path) || fc->index != fb->index ||
+					 emb != embb))
+				FAIL("U+%04X in %s from %s, after the other styles from %s\n",
+				     (unsigned)cp, name[s], fc->path, fb->path);
+			check_bold(cp, s, fc, emb);
+			font_close(a);
+			font_close(b);
 		}
 	}
-	return fails;
+	return tested;
 }
 
-/* name:style=<regular's style> must give the faces name alone gives */
-static int spec_style(const char *spec, struct font *plain)
+/* spec:style=<regular's style, as fontconfig names it> gives the faces the
+ * spec alone gives */
+static void spec_style(const char *spec, struct font *plain)
 {
+	int count;
+	FcPattern *q = FcFreeTypeQuery((const FcChar8 *)plain->style[STYLE_REGULAR].path,
+				       plain->style[STYLE_REGULAR].index, NULL, &count);
+	FcChar8 *style;
+	if (!q || FcPatternGetString(q, FC_STYLE, 0, &style) != FcResultMatch) {
+		FAIL("no style name for %s\n", plain->style[STYLE_REGULAR].path);
+		if (q)
+			FcPatternDestroy(q);
+		return;
+	}
 	char buf[512];
-	snprintf(buf, sizeof buf, "%s:style=%s", spec, plain->style[STYLE_REGULAR].ft->style_name);
+	snprintf(buf, sizeof buf, "%s:style=%s", spec, (const char *)style);
+	FcPatternDestroy(q);
 	struct font *f = font_open(buf, 0, 1);
 	if (!f) {
-		printf("FAIL: no font for '%s'\n", buf);
-		return 1;
+		FAIL("no font for '%s'\n", buf);
+		return;
 	}
-	int fails = 0;
 	for (int i = 0; i < 4; i++)
 		if (strcmp(f->style[i].path, plain->style[i].path) ||
-		    f->style[i].embolden != plain->style[i].embolden) {
-			printf("FAIL: '%s' gives %s from %s, without the style %s\n", buf, name[i],
-			       f->style[i].path, plain->style[i].path);
-			fails++;
-		}
+		    f->style[i].index != plain->style[i].index ||
+		    f->style[i].embolden != plain->style[i].embolden)
+			FAIL("'%s' gives %s from %s, without the style from %s\n", buf, name[i],
+			     f->style[i].path, plain->style[i].path);
 	font_close(f);
-	return fails;
+}
+
+/* The other faces keep regular's weight, bold at least bold: with a bold
+ * regular italic is not lighter. A face synthesized from regular's file is. */
+static void follow_weight(const char *spec, struct font *f)
+{
+	double r = f->style[STYLE_REGULAR].weight;
+	for (int i = 1; i < 4; i++) {
+		double want = i & STYLE_BOLD && r < FC_WEIGHT_BOLD ? FC_WEIGHT_BOLD : r;
+		if (f->style[i].weight < want && !f->style[i].embolden)
+			FAIL("'%s': %s has weight %g, regular %g\n", spec, name[i],
+			     f->style[i].weight, r);
+	}
 }
 
 int main(int argc, char **argv)
 {
 	const char *spec = argc > 1 ? argv[1] : "monospace:size=11";
-	struct font *f = font_open(spec, 0, 1);
-	if (!f) {
-		fprintf(stderr, "font_style: no font for '%s'\n", spec);
-		return 1;
-	}
-	int gaps = 0, fails = 0;
-	for (uint32_t cp = 0x21; cp < 0x10000; cp++) {
-		if (!FT_Get_Char_Index(f->style[STYLE_REGULAR].ft, cp))
-			continue;
-		if (!font_glyph(f, cp, STYLE_REGULAR)->w)
-			continue; /* blank in regular too */
-		for (int s = 1; s < 4; s++) {
-			if (FT_Get_Char_Index(f->style[s].ft, cp))
-				continue;
-			gaps++;
-			if (!font_glyph(f, cp, s)->w) {
-				if (fails++ < 5)
-					printf("FAIL: U+%04X is drawn in regular but not in %s\n",
-					       (unsigned)cp, name[s]);
-			}
+	/* and with a bold regular: no face made bolder that is bold */
+	char bold[512];
+	snprintf(bold, sizeof bold, "%s:weight=bold", spec);
+	const char *specs[2] = { spec, bold };
+	int gaps = 0, only = 0;
+	for (int n = 0; n < 2; n++) {
+		struct font *f = font_open(specs[n], 0, 1);
+		if (!f) {
+			fprintf(stderr, "font_style: no font for '%s'\n", specs[n]);
+			return 1;
 		}
+		follow_weight(specs[n], f);
+		fallback_weight(specs[n], f);
+		int g = from_regular(f);
+		int o = style_only(specs[n], f);
+		if (n == 0) {
+			gaps = g;
+			only = o;
+			spec_style(spec, f);
+		}
+		font_close(f);
 	}
-	int only = 0, ofails = 0, sfails = 0;
-	if (!sorted_fonts(f)) {
-		printf("FAIL: no list of the system's fonts\n");
-		ofails++;
-	} else {
-		ofails = style_only(f, &only);
-	}
-	sfails = spec_style(spec, f);
-	font_close(f);
-	if (!only) {
-		printf("FAIL: no style face of '%s' has a character regular lacks, "
-		       "nothing was tested\n", spec);
-		return 1;
-	}
-	if (ofails || sfails) {
-		printf("FAIL: %d failures over %d characters only a style face has, %d faces "
-		       "wrong with a style in the spec\n", ofails, only, sfails);
-		return 1;
-	}
-	printf("font_style: %d characters only a style face has, each from the right face; "
-	       "a style in the spec keeps the faces\n", only);
-	if (!gaps) {
-		printf("FAIL: no style face of '%s' lacks a character of regular, "
-		       "nothing was tested\n", spec);
-		return 1;
-	}
+	if (!gaps)
+		FAIL("no style face of '%s' lacks a character of regular, nothing was tested\n", spec);
+	if (!only)
+		FAIL("no style face of '%s' has a character regular lacks, nothing was tested\n",
+		     spec);
 	if (fails) {
-		printf("FAIL: %d of %d characters missing from a style face are not drawn\n",
-		       fails, gaps);
+		printf("FAIL: %d failures\n", fails);
 		return 1;
 	}
-	printf("font_style: %d characters missing from a style face, all drawn\n", gaps);
+	printf("font_style: %d characters missing from a style face, all drawn; %d only a "
+	       "style face has, each from the right face; also with weight=bold and a style "
+	       "in the spec\n", gaps, only);
 	return 0;
 }
