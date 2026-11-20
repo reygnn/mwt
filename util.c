@@ -71,11 +71,11 @@ size_t utf8_clip(const char *s, size_t max)
 void fit_bounds(int *cols, int *rows, int bw, int bh, int scale, int pad, int cw, int ch)
 {
 	if (bw > 0) {
-		int n = ((long long)bw * scale - 2 * pad) / cw;
-		*cols = *cols < n ? *cols : n < 1 ? 1 : n;
+		long long n = ((long long)bw * scale - 2 * pad) / cw;
+		*cols = *cols < n ? *cols : n < 1 ? 1 : (int)n;
 	}
 	if (bh > 0) {
-		int n = ((long long)bh * scale - 2 * pad) / ch;
-		*rows = *rows < n ? *rows : n < 1 ? 1 : n;
+		long long n = ((long long)bh * scale - 2 * pad) / ch;
+		*rows = *rows < n ? *rows : n < 1 ? 1 : (int)n;
 	}
 }

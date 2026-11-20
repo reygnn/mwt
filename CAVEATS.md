@@ -149,7 +149,8 @@ SUB is dropped where xterm prints ␦.
 
 mwt binds the first seat the compositor announces. Should that seat go away, another one
 it announced already is not taken up; only a seat announced later is. Other globals
-that go away (clipboard, primary selection, decorations, activation) are kept; what mwt
+that go away (clipboard, primary selection, decorations, activation, the viewporter
+for the mouse pointer) are kept; what mwt
 asks of them then does nothing.
 
 A mouse that goes off the seat with its button down on an item of the context menu runs

@@ -18,13 +18,18 @@ def requests(log):
         return [line for line in f if " -> " in line]
 
 
-def committed_after_ack(log):
-    """Whether the surface was committed after the last ack_configure."""
+def acks(log):
+    return sum(".ack_configure(" in line for line in requests(log))
+
+
+def committed_after_ack(log, before):
+    """Whether a configure after the first before was acked, and the surface
+    committed after the last ack."""
     lines = requests(log)
-    acks = [i for i, line in enumerate(lines) if ".ack_configure(" in line]
-    if not acks:
+    at = [i for i, line in enumerate(lines) if ".ack_configure(" in line]
+    if len(at) <= before:
         return False
-    return any(re.search(r"wl_surface#\d+\.commit\(", line) for line in lines[acks[-1]:])
+    return any(re.search(r"wl_surface#\d+\.commit\(", line) for line in lines[at[-1]:])
 
 
 def test_hidden(log):
@@ -34,11 +39,13 @@ def test_hidden(log):
     time.sleep(0.3)
     win.feed(b"text\r\n")
     time.sleep(0.3)
+    before = acks(log)
     swaymsg('[app_id="mwt"]', "resize", "set", "500", "300")
     end = time.time() + 2
-    while time.time() < end and not committed_after_ack(log):
+    while time.time() < end and not committed_after_ack(log, before):
         time.sleep(0.05)
-    check(committed_after_ack(log), "hidden: a configure is acked and committed")
+    check(committed_after_ack(log, before), "hidden: a configure is acked and committed",
+          f"{acks(log) - before} new acks")
     win.close()
     swaymsg("workspace", "1")
 

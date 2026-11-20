@@ -1875,9 +1875,10 @@ static void ptr_axis_stop(void *d, struct wl_pointer *p, uint32_t tm, uint32_t a
 	(void)d; (void)p; (void)tm;
 	input_axis_stop(&t.axis, a);
 }
-/* A wheel's notches, 15 pixels each in the axis event of the same frame, which
- * touchpad_step's 10 would make 1.5 steps: where a frame has notches, they count
- * and the pixels do not (input_axis_frame). */
+/* A wheel's notches, 10 or 15 pixels each in the axis event of the same frame
+ * (mutter, wlroots and KWin), which touchpad_step's 10 would make one or 1.5
+ * steps: where a frame has notches, they count and the pixels do not
+ * (input_axis_frame). */
 static void ptr_axis_discrete(void *d, struct wl_pointer *p, uint32_t a, int32_t n)
 {
 	(void)d; (void)p;
@@ -2327,7 +2328,8 @@ done:;
 	wl_surface_commit(t.surface);
 	wl_display_roundtrip(t.display);
 
-	spawn(cmd);
+	if (t.running) /* closed already: no command to start and hang up */
+		spawn(cmd);
 	int wlfd = wl_display_get_fd(t.display);
 
 	while (t.running) {

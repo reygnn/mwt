@@ -376,30 +376,28 @@ void input_axis_discrete(struct input_axis *ax, unsigned axis, int n)
 void input_axis_stop(struct input_axis *ax, unsigned axis)
 {
 	if (axis < 2)
-		ax->acc[axis] = 0;
+		ax->stopped[axis] = true;
 }
 
 void input_axis_frame(struct input_axis *ax, double step, int steps[2])
 {
 	for (int a = 0; a < 2; a++) {
-		int n = 0;
+		double n;
 		if (ax->notched[a]) {
 			n = ax->discrete[a];
 		} else {
-			/* a few steps at most, whatever a compositor sends */
-			ax->acc[a] = fmax(-10 * step, fmin(10 * step, ax->acc[a] + ax->value[a]));
-			while (ax->acc[a] >= step) {
-				ax->acc[a] -= step;
-				n++;
-			}
-			while (ax->acc[a] <= -step) {
-				ax->acc[a] += step;
-				n--;
-			}
+			/* whole steps of what built up; past 10 the rest goes too */
+			double total = ax->acc[a] + ax->value[a];
+			n = trunc(total / step);
+			ax->acc[a] = fabs(n) > 10 ? 0 : total - n * step;
 		}
-		steps[a] = n < -10 ? -10 : n > 10 ? 10 : n;
+		/* the stop of this frame comes after its own motion */
+		if (ax->stopped[a])
+			ax->acc[a] = 0;
+		steps[a] = n < -10 ? -10 : n > 10 ? 10 : (int)n;
 		ax->value[a] = 0;
 		ax->discrete[a] = 0;
 		ax->notched[a] = false;
+		ax->stopped[a] = false;
 	}
 }

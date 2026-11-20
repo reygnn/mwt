@@ -106,19 +106,20 @@ enum wheel_do input_wheel(unsigned vt_mode, unsigned mods, bool sideways);
 int input_wheel_code(bool sideways, bool positive);
 
 /* The wheel and the touchpad within one wl_pointer.frame. A wheel's notches
- * (axis_discrete) and the same move in pixels (axis) may come in either order:
- * mutter and KWin send part of the pixels first. So the frame is decided at its
- * end: notches where there are any, else the distance, which builds up over
- * frames to a step every step pixels. Vertical 0, horizontal 1. */
+ * (axis_discrete) and the same move in pixels (axis) may come in either order
+ * by the spec; wlroots, mutter and KWin send the notch first. So the frame is
+ * decided at its end: notches where there are any, else the distance, which
+ * builds up over frames to a step every step pixels. Vertical 0, horizontal 1. */
 struct input_axis {
 	double value[2];   /* this frame's pixels */
 	int discrete[2];   /* this frame's notches */
 	bool notched[2];   /* a notch came in this frame */
+	bool stopped[2];   /* axis_stop came in this frame */
 	double acc[2];     /* distance over frames, not yet a step */
 };
 void input_axis_value(struct input_axis *ax, unsigned axis, double v);
 void input_axis_discrete(struct input_axis *ax, unsigned axis, int n);
-/* the finger left the touchpad: what built up goes */
+/* the finger left the touchpad: what built up goes, once this frame is done */
 void input_axis_stop(struct input_axis *ax, unsigned axis);
 /* The frame's steps per axis, positive down or right, at most 10 either way;
  * the frame starts afresh. */

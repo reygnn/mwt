@@ -733,6 +733,13 @@ static void test_leave(void)
 	CHECK(input_mods(k.st) == 0);
 	CHECK(xkb_state_mod_name_is_active(k.st, XKB_MOD_NAME_CAPS, XKB_STATE_MODS_EFFECTIVE) > 0);
 	CHECK(xkb_state_serialize_layout(k.st, XKB_STATE_LAYOUT_LOCKED) == 1);
+	/* a latched Shift (sticky keys) goes too */
+	xkb_state_update_mask(k.st, 0, xkb_state_serialize_mods(k.st, XKB_STATE_MODS_LOCKED) |
+			      1u << xkb_keymap_mod_get_index(k.km, XKB_MOD_NAME_SHIFT),
+			      xkb_state_serialize_mods(k.st, XKB_STATE_MODS_LOCKED), 0, 0, 1);
+	CHECK(input_mods(k.st) == S);
+	input_leave(k.st);
+	CHECK(input_mods(k.st) == 0);
 	input_leave(NULL);
 	kb_free(&k);
 }
@@ -746,7 +753,7 @@ static void test_axis(void)
 	input_axis_value(&ax, 0, 15);
 	input_axis_frame(&ax, 10, st);
 	CHECK(st[0] == 1 && st[1] == 0);
-	/* mutter, KWin: pixels before the notch in the same frame: still one */
+	/* pixels before the notch in the same frame, as the spec allows: still one */
 	input_axis_value(&ax, 0, 10);
 	input_axis_discrete(&ax, 0, 1);
 	input_axis_value(&ax, 0, 5);
@@ -768,23 +775,51 @@ static void test_axis(void)
 	}
 	CHECK(sum == -2);
 	/* the finger lifted: what was not a step goes */
+	input_axis_value(&ax, 0, -14);
+	input_axis_frame(&ax, 10, st);
+	CHECK(st[0] == -1);
 	input_axis_stop(&ax, 0);
+	input_axis_frame(&ax, 10, st);
 	input_axis_value(&ax, 0, -8);
 	input_axis_frame(&ax, 10, st);
 	CHECK(st[0] == 0);
 	input_axis_stop(&ax, 0);
+	input_axis_frame(&ax, 10, st);
+	/* the last motion and the stop in one frame: the stop comes after it */
+	input_axis_value(&ax, 0, -8);
+	input_axis_value(&ax, 0, -6);
+	input_axis_stop(&ax, 0);
+	input_axis_frame(&ax, 10, st);
+	CHECK(st[0] == -1);
+	input_axis_value(&ax, 0, -8);
+	input_axis_frame(&ax, 10, st);
+	CHECK(st[0] == 0);
+	input_axis_stop(&ax, 0);
+	input_axis_frame(&ax, 10, st);
 	/* two notches back, sideways, in one frame */
 	input_axis_discrete(&ax, 1, -1);
 	input_axis_discrete(&ax, 1, -1);
 	input_axis_value(&ax, 1, -30);
 	input_axis_frame(&ax, 10, st);
 	CHECK(st[0] == 0 && st[1] == -2);
-	/* at most 10 either way */
+	/* at most 10 either way, and what was past them does not come later */
 	input_axis_discrete(&ax, 0, 500);
 	input_axis_value(&ax, 1, 1e9);
 	input_axis_frame(&ax, 10, st);
 	CHECK(st[0] == 10 && st[1] == 10);
+	input_axis_value(&ax, 1, 5);
+	input_axis_frame(&ax, 10, st);
+	CHECK(st[1] == 0);
 	input_axis_stop(&ax, 1);
+	input_axis_frame(&ax, 10, st);
+	input_axis_value(&ax, 1, -125);
+	input_axis_frame(&ax, 10, st);
+	CHECK(st[1] == -10);
+	input_axis_value(&ax, 1, -5);
+	input_axis_frame(&ax, 10, st);
+	CHECK(st[1] == 0);
+	input_axis_stop(&ax, 1);
+	input_axis_frame(&ax, 10, st);
 	/* an axis past the two is left out */
 	input_axis_value(&ax, 2, 50);
 	input_axis_discrete(&ax, 2, 3);

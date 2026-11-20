@@ -109,8 +109,6 @@ static bool devnull(int fd)
 	       S_ISCHR(a.st_mode);
 }
 
-/* in a child, with some of 0 to 2 closed: those come back on /dev/null, the
- * rest stays, and what is opened next is 3 */
 static void test_clip(void)
 {
 	CHECK(utf8_clip("", 4) == 0);
@@ -156,12 +154,18 @@ static void test_bounds(void)
 	c = 400, r = 200;
 	fit_bounds(&c, &r, 1000, 0, 1, 2, 9, 18);
 	CHECK(c == 110 && r == 200);
+	/* bounds a compositor should not send: no overflow */
+	c = 80, r = 24;
+	fit_bounds(&c, &r, 2147483647, 2147483647, 4, 2, 1, 1);
+	CHECK(c == 80 && r == 24);
 	/* smaller than a cell: one */
 	c = 80, r = 24;
 	fit_bounds(&c, &r, 3, 3, 1, 2, 9, 18);
 	CHECK(c == 1 && r == 1);
 }
 
+/* in a child, with some of 0 to 2 closed: those come back on /dev/null, the
+ * rest stays, and what is opened next is 3 */
 static void test_stdio(void)
 {
 	static const int closed[] = { 1, 2, 4, 5, 7 }; /* bit i: fd i is closed */
