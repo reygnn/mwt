@@ -8,6 +8,11 @@
 #include <stdbool.h>
 #include <stdint.h>
 
+/* The light stroke for a font whose underline is underline pixels thick (0 or
+ * less for none: a tenth of the cell width cw), at least a pixel a scale, as
+ * mwt draws its underline. */
+int box_thin(double underline, int cw, int scale);
+
 /* Whether cp is drawn here. */
 bool box_covers(uint32_t cp);
 

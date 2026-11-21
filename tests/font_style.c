@@ -274,6 +274,10 @@ static void box_cells(const char *spec)
 			g = font_glyph(f, 0x2500, STYLE_BOLD, false);
 			for (int y = 0; y < g->h; y++)
 				heavy += g->alpha[y * g->w] == 255;
+			/* italic draws the same, from one entry of the cache */
+			if (font_glyph(f, 0x2500, STYLE_ITALIC, false) !=
+			    font_glyph(f, 0x2500, STYLE_REGULAR, false))
+				FAIL("'%s' at %g pt: ─ in italic is a glyph of its own\n", spec, pt);
 			if (light < scale || heavy != 2 * light)
 				FAIL("'%s' at %g pt, scale %d: ─ %d px, bold %d px\n", spec, pt, scale,
 				     light, heavy);

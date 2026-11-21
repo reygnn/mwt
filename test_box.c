@@ -16,7 +16,7 @@ enum { MAXW = 64, MAXH = 128 };
 static uint8_t a[MAXW * MAXH];
 
 static const int sizes[][2] = {
-	{ 5, 9 }, { 7, 15 }, { 8, 16 }, { 9, 17 }, { 10, 21 }, { 11, 22 }, { 16, 32 }, { 18, 35 },
+	{ 5, 9 }, { 6, 12 }, { 7, 15 }, { 8, 16 }, { 9, 17 }, { 10, 21 }, { 11, 22 }, { 16, 32 }, { 18, 35 },
 };
 
 /* the weights of up, right, down and left, from the Unicode names: 0 none,
@@ -79,6 +79,39 @@ static int band(const uint8_t *px, int n, int stride, int t)
 	return -1;
 }
 
+/* The ink of a line without double arms is one piece: arms that meet leave no
+ * gap at the crossing, however their weights differ. */
+static bool connected(int w, int h)
+{
+	static int stack[MAXW * MAXH];
+	static bool seen[MAXW * MAXH];
+	memset(seen, 0, sizeof seen);
+	int start = -1, total = 0, n = 0, reached = 0;
+	for (int i = 0; i < w * h; i++)
+		if (a[i] == 255) {
+			total++;
+			if (start < 0)
+				start = i;
+		}
+	if (start < 0)
+		return false;
+	stack[n++] = start;
+	seen[start] = true;
+	while (n) {
+		int i = stack[--n], x = i % w, y = i / w;
+		reached++;
+		const int nx[4] = { x - 1, x + 1, x, x }, ny[4] = { y, y, y - 1, y + 1 };
+		for (int k = 0; k < 4; k++) {
+			int j = ny[k] * w + nx[k];
+			if (nx[k] >= 0 && nx[k] < w && ny[k] >= 0 && ny[k] < h && !seen[j] && a[j] == 255) {
+				seen[j] = true;
+				stack[n++] = j;
+			}
+		}
+	}
+	return reached == total;
+}
+
 /* Every line character at every size, light strokes of 1 to 3 pixels: its
  * four edges carry the bands its name says, so that any two that meet join */
 static void test_edges(void)
@@ -98,6 +131,11 @@ static void test_edges(void)
 					e[1] = band(a + w - 1, h, w, t);           /* right column */
 					e[2] = band(a + (h - 1) * w, w, 1, t);     /* bottom row */
 					e[3] = band(a, h, w, t);                   /* left column */
+					if (!strchr(lines[i].arms, '3') && !connected(w, h)) {
+						if (bad++ < 10)
+							fprintf(stderr, "  U+%04X %dx%d t %d bold %d: "
+								"in pieces\n", lines[i].cp, w, h, t, bold);
+					}
 					for (int k = 0; k < 4; k++) {
 						int want = lines[i].arms[k] - '0';
 						if (bold && want == 1)
@@ -386,9 +424,16 @@ static void test_dashes(void)
 	};
 	for (size_t s = 0; s < sizeof sizes / sizeof *sizes; s++) {
 		int w = sizes[s][0], h = sizes[s][1];
-		if (w < 8)
-			continue; /* four dashes need room for their gaps */
 		for (size_t i = 0; i < sizeof d / sizeof *d; i++) {
+			if (!d[i].down && w < 2 * d[i].n) {
+				/* no room for a gap after each: still no dash lost */
+				box_draw(d[i].cp, w, h, 1, false, a);
+				int ink = 0, t = d[i].heavy ? 2 : 1;
+				for (int x = 0; x < w; x++)
+					ink += a[((h - t) / 2) * w + x] == 255;
+				CHECK(ink >= d[i].n);
+				continue;
+			}
 			int t = d[i].heavy ? 2 : 1, thick;
 			box_draw(d[i].cp, w, h, 1, false, a);
 			int n = runs(w, h, d[i].down, t, &thick);
@@ -419,10 +464,10 @@ static void test_arcs(void)
 			for (int y = 0; y < h; y++)
 				ok &= a[y * w + ocol] == 0;
 			/* as round as the cell allows: the quarter circle as large as
-			 * fits between the middle lines and the edges, ink where it
-			 * crosses the diagonal */
+			 * fits between the middle lines and every edge, the same for
+			 * all four, ink where it crosses the diagonal */
 			double cx = (w - 1) / 2 + 0.5, cy = (h - 1) / 2 + 0.5;
-			double r = arc[i].right ? w - cx : cx, ry = arc[i].down ? h - cy : cy;
+			double r = w - cx < cx ? w - cx : cx, ry = h - cy < cy ? h - cy : cy;
 			r = r < ry ? r : ry;
 			double k = r * (1 - 0.70710678);
 			int px = (int)(cx + (arc[i].right ? k : -k)), py = (int)(cy + (arc[i].down ? k : -k));
@@ -465,8 +510,19 @@ static void test_range(void)
 	CHECK(a[((MAXH - 1) / 2) * MAXW] == 255 && a[((MAXH - 1) / 2) * MAXW + MAXW - 1] == 255);
 }
 
+/* the light stroke: the underline's, rounded, a tenth of the cell without one,
+ * never thinner than a pixel a scale */
+static void test_thin(void)
+{
+	CHECK(box_thin(0.31, 9, 1) == 1 && box_thin(1.6, 9, 1) == 2 && box_thin(2.4, 9, 1) == 2);
+	CHECK(box_thin(0, 20, 1) == 2 && box_thin(-1, 30, 1) == 3 && box_thin(0, 4, 1) == 1);
+	CHECK(box_thin(0.5, 9, 2) == 2 && box_thin(5, 9, 3) == 5 && box_thin(0, 9, 3) == 3);
+	CHECK(box_thin(0.2, 9, 0) == 1);
+}
+
 int main(void)
 {
+	test_thin();
 	test_range();
 	test_edges();
 	test_pictures();

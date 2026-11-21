@@ -160,8 +160,9 @@ static void dashes(const struct canvas *c, int n, int t, bool down)
 	int gap = MAX(1, len / (4 * n));
 	int p = mid(down ? c->w : c->h, t);
 	for (int i = 0; i < n; i++) {
-		int a = (i * len + n / 2) / n + gap / 2;
-		int b = ((i + 1) * len + n / 2) / n - (gap - gap / 2);
+		int s0 = (i * len + n / 2) / n, s1 = ((i + 1) * len + n / 2) / n;
+		int g = MAX(0, MIN(gap, s1 - s0 - 1)); /* a dash keeps a pixel */
+		int a = s0 + g / 2, b = s1 - (g - g / 2);
 		if (down)
 			fill(c, p, a, p + t, b, 255);
 		else
@@ -186,11 +187,12 @@ static double seg(double px, double py, double ax, double ay, double bx, double 
 
 /* A rounded corner with its arms toward dx and dy (1 right or down, -1 left or
  * up): the centre lines of the straight ones, joined by a quarter circle as
- * large as the cell allows, so it leaves the cell where they do. */
+ * large as the cell allows on every side, so it leaves the cell where they do. */
 static void arc(const struct canvas *c, int t, int dx, int dy)
 {
 	double cx = mid(c->w, t) + t / 2.0, cy = mid(c->h, t) + t / 2.0;
-	double r = MIN(dx > 0 ? c->w - cx : cx, dy > 0 ? c->h - cy : cy);
+	/* the same for all four corners: on an even width ╭ and ╮ differed */
+	double r = MIN(MIN(c->w - cx, cx), MIN(c->h - cy, cy));
 	double ox = cx + dx * r, oy = cy + dy * r; /* the circle's centre */
 	double ex = dx > 0 ? c->w : 0, ey = dy > 0 ? c->h : 0;
 	for (int y = 0; y < c->h; y++)
@@ -262,6 +264,12 @@ static void block(const struct canvas *c, uint32_t cp)
 		if (q & 8)
 			fill(c, xm, ym, w, h, 255);
 	}
+}
+
+int box_thin(double underline, int cw, int scale)
+{
+	int t = (int)lround(underline > 0 ? underline : cw / 10.0);
+	return MAX(t, MAX(scale, 1));
 }
 
 bool box_covers(uint32_t cp)

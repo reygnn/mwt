@@ -260,12 +260,9 @@ struct font *font_open(const char *spec, double size_pt, int scale)
 		f->cw = (int)lround(r->glyph->advance.x / 64.0);
 	if (f->cw < 1)
 		f->cw = 1;
-	/* Box drawing as thick as the font's underline, so it matches its strokes,
-	 * but not thinner than mwt draws one (a pixel at each scale); a font
-	 * without one gets a tenth of the cell. */
-	double ul = FT_MulFix(r->underline_thickness, r->size->metrics.y_scale) / 64.0;
-	int thin = (int)lround(ul > 0 ? ul : f->cw / 10.0), least = scale > 0 ? scale : 1;
-	f->box_thin = thin > least ? thin : least;
+	/* box drawing as thick as the font's underline, so it matches its strokes */
+	f->box_thin = box_thin(FT_MulFix(r->underline_thickness, r->size->metrics.y_scale) / 64.0,
+			       f->cw, scale);
 	if (f->ch < 1 || f->ascent < 1) { /* FreeType refused the size */
 		fprintf(stderr, "mwt: font size %g is out of range\n", pt);
 		goto fail;
@@ -681,6 +678,8 @@ static void cache_empty(struct font *f)
 
 const struct glyph *font_glyph(struct font *f, uint32_t cp, int style, bool wide)
 {
+	if (box_covers(cp)) /* italic draws the same: one entry, not two */
+		style &= STYLE_BOLD;
 	uint32_t key = (cp & 0x1fffff) << 3 | (uint32_t)wide << 2 | (style & 3);
 	struct entry *e = slot(f->cache, f->cache_cap, key, f->hash_seed);
 	if (e->used)
