@@ -9,6 +9,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <wchar.h>
 
 static int failures, checks;
 
@@ -1263,14 +1264,72 @@ static void test_ascii_runs(void)
 	w(vt, "\033[?7l\033[1;1Hvwxyz123");
 	CHECK_STR(row(vt, 0), "vwxy3");
 	w(vt, "\033[?7h");
-	/* insert mode and DEC graphics go through put() */
+	/* insert mode goes through put() */
 	w(vt, "\033[2J\033[1;1Habc\033[1;1H\033[4hXY\033[4l");
 	CHECK_STR(row(vt, 0), "XYabc");
 	w(vt, "\033(0q\033(B");
 	CHECK(vt->pri[0][2].cp == 0x2500 && (vt->pri[0][2].attr & ATTR_DECGFX));
+	/* DEC graphics in a run: from 0x5f mapped and marked, below as they are,
+	 * with the template's attributes; REP repeats the byte, mapped again */
+	w(vt, "\033[2J\033[1;1H\033[1m\033(0Aqx_\033(B\033[0m");
+	CHECK(vt->pri[0][0].cp == 'A' && !(vt->pri[0][0].attr & ATTR_DECGFX) &&
+	      (vt->pri[0][0].attr & ATTR_BOLD));
+	CHECK(vt->pri[0][1].cp == 0x2500 && vt->pri[0][2].cp == 0x2502 && vt->pri[0][3].cp == 0xa0);
+	CHECK((vt->pri[0][1].attr & (ATTR_DECGFX | ATTR_BOLD)) == (ATTR_DECGFX | ATTR_BOLD));
+	w(vt, "\033[1;1H\033(0q\033[b\033(B");
+	CHECK(vt->pri[0][1].cp == 0x2500 && (vt->pri[0][1].attr & ATTR_DECGFX));
 	/* attributes and colour from the template, on every cell of the run */
 	w(vt, "\033[2;1H\033[1;31mabc\033[0m");
 	CHECK(vt->pri[1][0].fg == 1 && vt->pri[1][2].fg == 1 && (vt->pri[1][2].attr & ATTR_BOLD));
+	vt_free(vt);
+}
+
+/* CSI parameters skip feed() in vt_write; split anywhere they must add up the same */
+static void test_csi_params(void)
+{
+	struct vt *vt = mk(20, 10, 0);
+	const char *seq = "\033[5;12H\033[38:2:1:2:3mx";
+	for (size_t cut = 0; cut <= strlen(seq); cut++) {
+		w(vt, "\033[0m\033[H");
+		vt_write(vt, seq, cut);
+		vt_write(vt, seq + cut, strlen(seq) - cut);
+		CHECK(vt->c.y == 4 && vt->c.x == 12);
+		CHECK(vt->pri[4][11].cp == 'x' && vt->pri[4][11].fg == (COL_RGB | 0x010203));
+	}
+	/* a private marker after the parameters makes the sequence ignored */
+	w(vt, "\033[?25l\033[H\033[1;?25hA");
+	CHECK((vt->mode & MODE_HIDECURSOR) && vt->pri[0][0].cp == 'A');
+	w(vt, "\033[?25h");
+	/* parameters clamp at 65535 however they come */
+	w(vt, "\033[H\033[99999999999");
+	w(vt, "99C");
+	CHECK(vt->c.x == 19);
+	vt_free(vt);
+}
+
+/* widths from the table, filled a block of 256 at a time: as wcwidth() says, for
+ * every code point of the BMP that prints (a combining mark goes nowhere) */
+static void test_width_table(void)
+{
+	struct vt *vt = mk(4, 2, 0);
+	int wrong = 0;
+	for (uint32_t cp = 0xa0; cp <= 0xffff; cp++) {
+		if (cp >= 0xd800 && cp < 0xe000)
+			continue;
+		char b[8] = "\033[H";
+		size_t n = 3;
+		if (cp < 0x800) {
+			b[n++] = (char)(0xc0 | cp >> 6);
+		} else {
+			b[n++] = (char)(0xe0 | cp >> 12);
+			b[n++] = (char)(0x80 | (cp >> 6 & 0x3f));
+		}
+		b[n++] = (char)(0x80 | (cp & 0x3f));
+		vt_write(vt, b, n);
+		int want = cp < 0x300 ? 1 : wcwidth((wchar_t)cp) < 0 ? 1 : wcwidth((wchar_t)cp);
+		wrong += vt->c.x != want;
+	}
+	CHECK(wrong == 0);
 	vt_free(vt);
 }
 
@@ -1526,6 +1585,8 @@ int main(void)
 	test_origin();
 	test_xterm_details();
 	test_ascii_runs();
+	test_csi_params();
+	test_width_table();
 	test_dirty_scrolled_back();
 	test_cursor_style_redraw();
 	test_index_and_charsets();

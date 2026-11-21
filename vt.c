@@ -41,12 +41,31 @@ static void reply(struct vt *vt, const char *fmt, ...)
 		vt->cb.write(vt->cb.ud, buf, MIN((size_t)n, sizeof buf - 1));
 }
 
+static int charwidth_libc(uint32_t cp)
+{
+	int w = wcwidth((wchar_t)cp);
+	return w < 0 ? 1 : w;
+}
+
+/* The BMP's widths, two bits a code point, a block of 256 filled from wcwidth()
+ * when first asked: wcwidth for every code point from U+0300 cost CJK text a
+ * fifth. Filled after mwt's setlocale, as wcwidth answers for the locale. */
+static uint8_t width_tab[0x10000 / 4];
+static uint8_t width_have[0x10000 / 256 / 8];
+
 static int charwidth(uint32_t cp)
 {
 	if (cp < 0x300)
 		return 1;
-	int w = wcwidth((wchar_t)cp);
-	return w < 0 ? 1 : w;
+	if (cp > 0xffff)
+		return charwidth_libc(cp);
+	unsigned blk = cp >> 8;
+	if (!(width_have[blk >> 3] & 1u << (blk & 7))) {
+		for (uint32_t c = blk << 8; c < (blk + 1) << 8; c++)
+			width_tab[c >> 2] |= (uint8_t)(charwidth_libc(c) << (c & 3) * 2);
+		width_have[blk >> 3] |= (uint8_t)(1u << (blk & 7));
+	}
+	return width_tab[cp >> 2] >> (cp & 3) * 2 & 3;
 }
 
 static struct cell blank(const struct vt *vt)
@@ -1529,16 +1548,20 @@ static void feed(struct vt *vt, uint32_t cp)
 }
 
 /* A run of printable ASCII in the ground state, as put() writes it one by one, up
- * to the end of the row; 0 where put() has more to do: a pending wrap, DEC
- * graphics, insert mode. Wide glyphs need mending only at the run's edges, what
- * lies between is overwritten. About three times faster on plain text. */
+ * to the end of the row; 0 where put() has more to do: a pending wrap, insert
+ * mode. Wide glyphs need mending only at the run's edges, what lies between is
+ * overwritten. About three times faster on plain text. DEC graphics too, which
+ * ncurses draws its borders with: they took put() at six times the cost. */
 static size_t put_ascii(struct vt *vt, const unsigned char *s, size_t n)
 {
 	struct vt_cursor *c = &vt->c;
-	if (c->wrapnext || c->charset[c->gl] || (vt->mode & MODE_INSERT))
+	if (c->wrapnext || (vt->mode & MODE_INSERT))
 		return 0;
+	bool gfx = c->charset[c->gl];
 	size_t room = (size_t)(vt->cols - c->x), k = 0;
-	while (k < n && k < room && s[k] >= 0x20 && s[k] < 0x7f)
+	/* a graphic a locale counts wide stops the run: put() knows what to do */
+	while (k < n && k < room && s[k] >= 0x20 && s[k] < 0x7f &&
+	       !(gfx && s[k] >= 0x5f && charwidth(dec_graphics[s[k] - 0x5f]) != 1))
 		k++;
 	if (!k)
 		return 0;
@@ -1547,9 +1570,19 @@ static size_t put_ascii(struct vt *vt, const unsigned char *s, size_t n)
 	fix_wide(vt, l, x0, x1);
 	struct cell tm = c->tmpl;
 	tm.attr &= ~(ATTR_WIDE | ATTR_WDUMMY | ATTR_WRAP);
-	for (size_t i = 0; i < k; i++) {
-		tm.cp = s[i];
-		l[x0 + i] = tm;
+	if (gfx) {
+		uint16_t attr = tm.attr;
+		for (size_t i = 0; i < k; i++) {
+			bool g = s[i] >= 0x5f;
+			tm.cp = g ? dec_graphics[s[i] - 0x5f] : s[i];
+			tm.attr = g ? attr | ATTR_DECGFX : attr;
+			l[x0 + i] = tm;
+		}
+	} else {
+		for (size_t i = 0; i < k; i++) {
+			tm.cp = s[i];
+			l[x0 + i] = tm;
+		}
 	}
 	touch(vt, l, x1 + 1);
 	mark_row(vt, c->y);
@@ -1569,6 +1602,17 @@ void vt_write(struct vt *vt, const char *buf, size_t len)
 				i += k - 1;
 				continue;
 			}
+		}
+		/* CSI parameters straight to param(), as feed() would take them:
+		 * byte by byte through feed() cost cup and sgr a third */
+		if (!vt->utf8_need && (vt->state == ST_CSI_ENTRY || vt->state == ST_CSI_PARAM) &&
+		    ((b >= '0' && b <= '9') || b == ';' || b == ':')) {
+			do
+				param(vt, s[i]);
+			while (++i < len && ((s[i] >= '0' && s[i] <= '9') || s[i] == ';' || s[i] == ':'));
+			vt->state = ST_CSI_PARAM;
+			i--;
+			continue;
 		}
 		if (vt->utf8_need) {
 			if ((b & 0xc0) == 0x80) {
