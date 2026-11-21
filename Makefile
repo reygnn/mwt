@@ -25,7 +25,7 @@ primary-selection-unstable-v1_XML = $(WP)/unstable/primary-selection/primary-sel
 
 PROTO_H = $(PROTOS:=-client-protocol.h)
 PROTO_C = $(PROTOS:=-protocol.c)
-OBJ = mwt.o vt.o font.o rc.o input.o paste.o sel.o shell.o util.o $(PROTO_C:.c=.o)
+OBJ = mwt.o vt.o font.o box.o rc.o input.o paste.o sel.o shell.o util.o $(PROTO_C:.c=.o)
 
 # version.h and the commit it appends to the version
 VERSION_H = version.h build/gitversion.h
@@ -54,7 +54,8 @@ mwt-esctest: mwt.c config.h $(VERSION_H) vt.h font.h rc.h input.h paste.h sel.h 
 
 mwt.o: mwt.c config.h $(VERSION_H) vt.h font.h rc.h input.h paste.h sel.h shell.h util.h $(PROTO_H)
 vt.o: vt.c vt.h $(VERSION_H)
-font.o: font.c font.h
+font.o: font.c font.h box.h
+box.o: box.c box.h
 rc.o: rc.c rc.h
 input.o: input.c input.h vt.h
 paste.o: paste.c paste.h
@@ -101,11 +102,16 @@ test_shell: test_shell.c shell.c shell.h paste.c paste.h
 test_util: test_util.c util.c util.h
 	$(CC) $(TEST_CFLAGS) -o $@ test_util.c util.c
 
+# Box drawing and block elements at many cell sizes: where lines meet the edges,
+# how thick they are, how blocks tile; no font.
+test_box: test_box.c box.c box.h
+	$(CC) $(TEST_CFLAGS) -o $@ test_box.c box.c -lm
+
 # The unit tests (test_vt, test_rc, test_input, test_paste, test_sel,
-# test_shell, test_util), mwt's command line without a compositor (tests/args.sh), then
+# test_shell, test_util, test_box), mwt's command line without a compositor (tests/args.sh), then
 # every input kept in tests/fuzz-regress through the checks of tests/fuzz_vt.c;
 # no clang needed.
-check: test_vt test_rc test_input test_paste test_sel test_shell test_util fuzz_regress mwt
+check: test_vt test_rc test_input test_paste test_sel test_shell test_util test_box fuzz_regress mwt
 	./test_vt
 	./test_rc
 	./test_input
@@ -113,6 +119,7 @@ check: test_vt test_rc test_input test_paste test_sel test_shell test_util fuzz_
 	./test_sel
 	./test_shell
 	./test_util
+	./test_box
 	tests/args.sh
 	@./fuzz_regress tests/fuzz-regress/* 2>fuzz_regress.log || { cat fuzz_regress.log; exit 1; }
 	@rm -f fuzz_regress.log
@@ -120,37 +127,37 @@ check: test_vt test_rc test_input test_paste test_sel test_shell test_util fuzz_
 # font.c with each strdup and FcPatternDuplicate failing once in turn, under
 # sanitizers; needs fallback fonts to mean anything, so make fonts runs it
 # (tests/fonts-run.sh).
-font_oom: tests/font_oom.c font.c font.h
+font_oom: tests/font_oom.c font.c font.h box.c box.h
 	$(CC) $(FONT_CFLAGS) -Wl,--wrap=strdup -Wl,--wrap=FcPatternDuplicate -o $@ tests/font_oom.c font.c \
-		$(FONT_LIBS)
+		box.c $(FONT_LIBS)
 
 # The glyph cache emptied at small limits, font.c built into the test; under
 # sanitizers, with a font that has Latin glyphs. make fonts runs it.
-font_cache: tests/font_cache.c font.c font.h
-	$(CC) $(FONT_CFLAGS) -o $@ tests/font_cache.c $(FONT_LIBS)
+font_cache: tests/font_cache.c font.c font.h box.c box.h
+	$(CC) $(FONT_CFLAGS) -o $@ tests/font_cache.c box.c $(FONT_LIBS)
 
 # Glyphs no open face has: one FcFontSort for all, counted through --wrap; under
 # sanitizers, with the fonts of make fonts.
-font_lookup: tests/font_lookup.c font.c font.h
+font_lookup: tests/font_lookup.c font.c font.h box.c box.h
 	$(CC) $(FONT_CFLAGS) -Wl,--wrap=FcFontMatch -Wl,--wrap=FcFontSort -Wl,--wrap=malloc -o $@ tests/font_lookup.c \
-		$(FONT_LIBS)
+		box.c $(FONT_LIBS)
 
 # Each style draws what regular has, where its own face lacks it; under
 # sanitizers, with DejaVu Sans Mono. make fonts runs it.
-font_style: tests/font_style.c font.c font.h
-	$(CC) $(FONT_CFLAGS) -o $@ tests/font_style.c $(FONT_LIBS)
+font_style: tests/font_style.c font.c font.h box.c box.h
+	$(CC) $(FONT_CFLAGS) -o $@ tests/font_style.c box.c $(FONT_LIBS)
 
 # Two faces of one .ttc, by index; one fails to load through --wrap. Under
 # sanitizers, with mwt-test.ttc of make fonts.
-font_ttc: tests/font_ttc.c font.c font.h
+font_ttc: tests/font_ttc.c font.c font.h box.c box.h
 	$(CC) $(FONT_CFLAGS) -Wl,--wrap=FT_New_Face -o $@ tests/font_ttc.c \
-		$(FONT_LIBS)
+		box.c $(FONT_LIBS)
 
 # Fallback glyphs fitted to their cells, monospaced faces first; FT_New_Face
 # counted and a strdup failed through --wrap; under sanitizers, with the fonts of make fonts.
-font_fallback: tests/font_fallback.c font.c font.h
+font_fallback: tests/font_fallback.c font.c font.h box.c box.h
 	$(CC) $(FONT_CFLAGS) -Wl,--wrap=FT_New_Face -Wl,--wrap=strdup -o $@ tests/font_fallback.c \
-		$(FONT_LIBS)
+		box.c $(FONT_LIBS)
 
 fuzz_regress: tests/fuzz_vt.c vt.c vt.h $(VERSION_H)
 	$(CC) $(TEST_CFLAGS) -O1 -I. -DFUZZ_STANDALONE -o $@ tests/fuzz_vt.c vt.c
@@ -251,7 +258,7 @@ uninstall:
 	rm -f $(DESTDIR)$(PREFIX)/share/terminfo/m/mwt $(DESTDIR)$(PREFIX)/share/terminfo/6d/mwt
 
 clean:
-	rm -f mwt mwt-esctest test_vt test_rc test_input test_paste test_sel test_shell test_util vtdump test_replay fuzz_vt fuzz_regress fuzz_regress.log font_oom font_cache font_style font_lookup font_ttc font_fallback *.o $(PROTO_H) $(PROTO_C)
+	rm -f mwt mwt-esctest test_vt test_rc test_input test_paste test_sel test_shell test_util test_box vtdump test_replay fuzz_vt fuzz_regress fuzz_regress.log font_oom font_cache font_style font_lookup font_ttc font_fallback *.o $(PROTO_H) $(PROTO_C)
 	rm -f build/gitversion.h
 	rmdir build 2>/dev/null || true
 

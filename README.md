@@ -109,6 +109,8 @@ them with `mwt -a indigo3`.
   configured in `config.h` and the mwtrc
 * DECRQCRA only with `allow_checksum` in `config.h`, off by default as in xterm
 * Wide characters, and emoji as outlines if a fallback font has them
+* Box drawing and block elements (U+2500 to U+259F) drawn to fill the cell, so lines
+  join between rows whatever the font
 * HiDPI through `wl_surface.preferred_buffer_scale`, integer scales only
 
 COMPAT.md goes through the VT100's sequences, and those after it, one by one.

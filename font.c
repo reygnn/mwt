@@ -1,6 +1,7 @@
 /* font.c - one monospace font in four styles plus fallback faces for
  * missing glyphs, rendered as 8-bit coverage maps (grayscale AA only) */
 #define _POSIX_C_SOURCE 200809L
+#include "box.h"
 #include "font.h"
 
 #include <fontconfig/fontconfig.h>
@@ -86,6 +87,7 @@ struct font {
 	double size_pt, size_px;
 	int slant; /* regular's, for the fallback faces */
 	int cw, ch, ascent;
+	int box_thin; /* box.c's light stroke */
 	struct entry *cache;
 	size_t cache_cap, cache_used;
 	uint32_t hash_seed; /* random: output cannot pick keys that collide */
@@ -258,6 +260,12 @@ struct font *font_open(const char *spec, double size_pt, int scale)
 		f->cw = (int)lround(r->glyph->advance.x / 64.0);
 	if (f->cw < 1)
 		f->cw = 1;
+	/* Box drawing as thick as the font's underline, so it matches its strokes,
+	 * but not thinner than mwt draws one (a pixel at each scale); a font
+	 * without one gets a tenth of the cell. */
+	double ul = FT_MulFix(r->underline_thickness, r->size->metrics.y_scale) / 64.0;
+	int thin = (int)lround(ul > 0 ? ul : f->cw / 10.0), least = scale > 0 ? scale : 1;
+	f->box_thin = thin > least ? thin : least;
 	if (f->ch < 1 || f->ascent < 1) { /* FreeType refused the size */
 		fprintf(stderr, "mwt: font size %g is out of range\n", pt);
 		goto fail;
@@ -589,6 +597,17 @@ static FT_GlyphSlot fit(struct font *f, struct face *fc, FT_UInt gi, bool embold
 static bool render(struct font *f, uint32_t cp, int style, bool wide, struct glyph *g)
 {
 	memset(g, 0, sizeof *g);
+	if (box_covers(cp)) { /* the cell whole, from the top of the row */
+		int w = (wide ? 2 : 1) * f->cw;
+		g->alpha = malloc((size_t)w * f->ch);
+		if (!g->alpha)
+			return false;
+		box_draw(cp, w, f->ch, f->box_thin, style & STYLE_BOLD, g->alpha);
+		g->w = w;
+		g->h = f->ch;
+		g->top = f->ascent;
+		return true;
+	}
 	bool embolden;
 	struct face *fc = face_for(f, cp, style, &embolden);
 	FT_UInt gi = fc ? FT_Get_Char_Index(fc->ft, cp) : 0;

@@ -249,6 +249,38 @@ static void follow_weight(const char *spec, struct font *f)
 	}
 }
 
+/* Box drawing fills the cell from box.c, not the face: │ inks every row of the
+ * cell, which Noto Sans Mono's left short; at least a pixel a scale thick, and
+ * bold is heavier. */
+static void box_cells(const char *spec)
+{
+	for (int scale = 1; scale <= 3; scale++)
+		for (double pt = 6; pt <= 20; pt += 1.5) {
+			struct font *f = font_open(spec, pt, scale);
+			if (!f)
+				continue;
+			const struct glyph *g = font_glyph(f, 0x2502, STYLE_REGULAR, false);
+			bool whole = g->w == f->cw && g->h == f->ch && g->top == f->ascent && !g->left;
+			int x = (g->w - f->box_thin) / 2;
+			for (int y = 0; whole && y < g->h; y++)
+				whole = g->alpha[y * g->w + x] == 255;
+			if (!whole)
+				FAIL("'%s' at %g pt, scale %d: │ does not fill its %dx%d cell\n", spec, pt,
+				     scale, f->cw, f->ch);
+			int light = 0, heavy = 0;
+			g = font_glyph(f, 0x2500, STYLE_REGULAR, false);
+			for (int y = 0; y < g->h; y++)
+				light += g->alpha[y * g->w] == 255;
+			g = font_glyph(f, 0x2500, STYLE_BOLD, false);
+			for (int y = 0; y < g->h; y++)
+				heavy += g->alpha[y * g->w] == 255;
+			if (light < scale || heavy != 2 * light)
+				FAIL("'%s' at %g pt, scale %d: ─ %d px, bold %d px\n", spec, pt, scale,
+				     light, heavy);
+			font_close(f);
+		}
+}
+
 /* The cell is as wide as the printable ASCII characters are, loaded as the
  * glyphs are drawn (LOAD_FLAGS). */
 static void cell_width(const char *spec)
@@ -302,6 +334,7 @@ int main(int argc, char **argv)
 		font_close(f);
 	}
 	cell_width(spec);
+	box_cells(spec);
 	if (!gaps)
 		FAIL("no style face of '%s' lacks a character of regular, nothing was tested\n", spec);
 	if (!only)
@@ -313,6 +346,6 @@ int main(int argc, char **argv)
 	}
 	printf("font_style: %d characters missing from a style face, all drawn; %d only a "
 	       "style face has, each from the right face; also with weight=bold and a style "
-	       "in the spec; cells as wide as the ASCII characters\n", gaps, only);
+	       "in the spec; cells as wide as the ASCII characters; box drawing fills its cells\n", gaps, only);
 	return 0;
 }

@@ -145,6 +145,31 @@ def test_attributes(win):
     check(not g.ink(33, 0), "invisible hides underline and strike")
 
 
+def test_box(win):
+    """Box drawing and blocks fill their cells, so lines join from row to row and
+    cell to cell; box.c draws them, not the font, which left gaps."""
+    win.feed(RESET + "┌──┐ █ ═╦═\r\n│  │ █  ║\r\n└──┘ ▀ ━╋━".encode())
+    img = settle()
+    g = Grid(img, 80, 24)
+    vert = g.full_cols(0, 1, FG)
+    check(len(vert) == 1, "│ is a line down its whole cell", str(vert))
+    check(vert and vert == g.full_cols(3, 1, FG), "both sides of the frame alike")
+    horiz = g.full_rows(1, 0, FG)
+    check(len(horiz) == 1 and horiz == g.full_rows(2, 2, FG), "─ is a line across its whole cell",
+          f"{horiz} {g.full_rows(2, 2, FG)}")
+    # the corner's arms where the lines are: no step where they meet
+    x0, y0, x1, y1 = g.box(0, 0)
+    corner = [y - y0 for y in range(y0, y1) if img.px(x1 - 1, y) == FG]
+    check(corner == horiz, "┌ meets ─ at its row", f"{corner} {horiz}")
+    down = [x - x0 for x in range(x0, x1) if img.px(x, y1 - 1) == FG]
+    check(down == vert, "┌ meets │ at its column", f"{down} {vert}")
+    check(g.colors(5, 0) == {FG} and g.colors(5, 1) == {FG}, "█ fills its cell")
+    check(len(g.full_rows(5, 2, FG)) == g.ch - g.ch // 2, "▀ the upper half", str(g.full_rows(5, 2, FG)))
+    check(len(g.full_cols(8, 1, FG)) == 2, "║ two lines down its cell", str(g.full_cols(8, 1, FG)))
+    heavy = g.full_rows(7, 2, FG)
+    check(len(heavy) == 2 * len(horiz), "━ twice as thick as ─", f"{heavy} {horiz}")
+
+
 def test_cursor(win):
     win.feed(b"\033c\033[3;11H")
     g = Grid(settle(), 80, 24)
@@ -747,6 +772,7 @@ def main():
     with Window() as win:
         test_colors(win)
         test_attributes(win)
+        test_box(win)
         test_cursor(win)
         test_selection(win, mouse)
         test_scrollback(win)

@@ -25,4 +25,5 @@
 /test_sel
 /test_shell
 /test_util
+/test_box
 __pycache__/
