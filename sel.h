@@ -43,6 +43,11 @@ char *sel_text(const struct vt *vt, const struct sel *s);
 /* The rows shown of absolute lines a to b get drawn anew. */
 void sel_mark_lines(struct vt *vt, int64_t a, int64_t b);
 
+/* The rows a selection is shown on get drawn anew; nothing when it is not
+ * active. Before it changes or goes, and after: marking all redrew the window at
+ * every click. */
+void sel_mark(struct vt *vt, const struct sel *s);
+
 /* A press of the left button at line abs, column col, at time ms: a click on the
  * cell of the last one within double_ms counts on, up to three, then from one.
  * Starts a drag; a double or triple click selects at once. */

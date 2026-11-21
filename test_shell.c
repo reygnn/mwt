@@ -415,6 +415,25 @@ static void raw_pty(int *m, int *s)
 	fcntl(*s, F_SETFL, O_NONBLOCK);
 }
 
+/* Ctrl+C drops only what waits; with nothing, the terminal is not asked */
+static void test_signal_drops(void)
+{
+	int m, s;
+	if (openpty(&m, &s, NULL, NULL, NULL) < 0) {
+		perror("openpty");
+		exit(1);
+	}
+	struct out o = { 0 };
+	CHECK(!shell_signal_drops(&o, false, m, 0x03));
+	CHECK(shell_signal_drops(&o, true, m, 0x03));
+	CHECK(!shell_signal_drops(&o, true, m, 'c'));
+	o.len = 1;
+	CHECK(shell_signal_drops(&o, false, m, 0x03));
+	CHECK(!shell_signal_drops(&o, false, m, 'c'));
+	close(s);
+	close(m);
+}
+
 static void test_signal_char(void)
 {
 	int m, s;
@@ -448,6 +467,7 @@ static void test_signal_char(void)
 	CHECK(!shell_signal_char(p[1], 0x03));
 	close(p[0]);
 	close(p[1]);
+	test_signal_drops();
 }
 
 static void test_drop(void)

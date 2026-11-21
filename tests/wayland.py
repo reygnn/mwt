@@ -62,6 +62,69 @@ def test_min_size(log):
     win.close()
 
 
+def main_surface(lines):
+    for line in lines:
+        if m := re.search(r"get_xdg_surface\(new id xdg_surface#\d+, wl_surface#(\d+)\)", line):
+            return m.group(1)
+    return None
+
+
+def surface_requests(log, since, what):
+    lines = requests(log)
+    sid = main_surface(lines)
+    return [line for line in lines[since:] if f"wl_surface#{sid}.{what}(" in line]
+
+
+def damages(log, since):
+    return [tuple(map(int, m.groups())) for line in surface_requests(log, since, "damage_buffer")
+            if (m := re.search(r"damage_buffer\((-?\d+), (-?\d+), (\d+), (\d+)\)", line))]
+
+
+def test_click(log, mouse):
+    """A double click and a click away from it draw the word's row anew, not the
+    window: a click marked every row."""
+    win = Window(env={"WAYLAND_DEBUG": "client"}, stderr=log)
+    win.feed(b"word " * 15 + b"\r\n" * 2 + (b"text " * 15 + b"\r\n") * 20)
+    time.sleep(0.5)
+    x, y, w, h = rect()
+    ch = (h - 2 * mwtlib.PAD) // 24
+    cw = (w - 2 * mwtlib.PAD) // 80
+    since = len(requests(log))
+    mouse.send("move", x + mwtlib.PAD + 2 * cw, y + mwtlib.PAD + ch // 2)
+    time.sleep(0.05)
+    mouse.send("click", "left")
+    mouse.send("click", "left")
+    time.sleep(0.3)
+    double = damages(log, since)
+    since = len(requests(log))
+    time.sleep(0.6) # past double_click_ms
+    mouse.send("move", x + mwtlib.PAD + 10 * cw, y + mwtlib.PAD + 10 * ch + ch // 2)
+    time.sleep(0.05)
+    mouse.send("click", "left")
+    time.sleep(0.3)
+    away = damages(log, since)
+    check(double and all(d[3] <= ch for d in double), "a double click damages its row",
+          f"{double}, a row {ch}")
+    check(away and all(d[3] <= ch for d in away), "a click away clears it, damaging that row",
+          f"{away}, a row {ch}")
+    win.close()
+
+
+def test_title(log):
+    """Titles alone change nothing in the window: no commit."""
+    win = Window(env={"WAYLAND_DEBUG": "client"}, stderr=log)
+    win.feed(b"text\r\n")
+    time.sleep(0.3)
+    since = len(requests(log))
+    for i in range(30):
+        win.feed(b"\033]2;title %d\a" % i)
+        time.sleep(0.03)
+    time.sleep(0.3)
+    commits = surface_requests(log, since, "commit")
+    check(len(commits) == 0, "30 titles: no commit", f"{len(commits)} commits")
+    win.close()
+
+
 def test_long_names():
     title = "t" * 70000
     app_id = "a" * 70000
@@ -78,6 +141,8 @@ def main():
     mouse = Mouse()
     test_hidden(os.path.join(mwtlib.DIR, "hidden.log"))
     test_min_size(os.path.join(mwtlib.DIR, "minsize.log"))
+    test_click(os.path.join(mwtlib.DIR, "click.log"), mouse)
+    test_title(os.path.join(mwtlib.DIR, "title.log"))
     test_long_names()
     mouse.close()
     return finish()

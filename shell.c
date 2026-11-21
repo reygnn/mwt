@@ -101,6 +101,11 @@ bool shell_signal_char(int fd, unsigned char c)
 	       (c == tm.c_cc[VINTR] || c == tm.c_cc[VQUIT] || c == tm.c_cc[VSUSP]);
 }
 
+bool shell_signal_drops(const struct out *o, bool pasting, int fd, unsigned char c)
+{
+	return (o->len || pasting) && shell_signal_char(fd, c);
+}
+
 /*
  * A key that raises a signal must not wait behind a paste the program does not
  * read, here or in the kernel, whose line buffer takes no more once it is full.

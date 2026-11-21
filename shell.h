@@ -42,6 +42,11 @@ bool out_reply(struct out *o, int fd, const char *s, size_t n, size_t max);
  * or SUSP character. */
 bool shell_signal_char(int fd, unsigned char c);
 
+/* Whether c, typed, must drop what waits for the program: something does, in o
+ * or as a paste still being read (pasting), and c raises a signal. Only then is
+ * the terminal asked, not at every key. */
+bool shell_signal_drops(const struct out *o, bool pasting, int fd, unsigned char c);
+
 /* For a key that raises a signal: what waits goes, also what the kernel holds
  * for the program unread, and a paste bracket that went out open is closed. */
 void out_drop(struct out *o, int fd);

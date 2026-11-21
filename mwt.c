@@ -253,7 +253,7 @@ static void send_input(const char *s, size_t n)
  * read: the rest of the paste goes first (out_drop). */
 static void drop_paste_for_signal(unsigned char c)
 {
-	if (!shell_signal_char(t.pty, c))
+	if (!shell_signal_drops(&t.out, t.paste_fd >= 0, t.pty, c))
 		return;
 	if (t.paste_fd >= 0) {
 		close(t.paste_fd);
@@ -334,8 +334,8 @@ static char *selection_text(void)
 static void sel_clear(void)
 {
 	if (t.sel.active || t.sel.dragging) {
+		sel_mark(t.vt, &t.sel);
 		t.sel.active = t.sel.dragging = false;
-		vt_mark_all(t.vt);
 		t.need_redraw = true;
 	}
 }
@@ -483,9 +483,11 @@ static void copy_primary(void)
  * the alternate screen only that. Goes to the primary selection like a drag. */
 static void select_all(void)
 {
+	struct sel old = t.sel;
 	if (!sel_all(t.vt, &t.sel))
 		return;
-	vt_mark_all(t.vt);
+	sel_mark(t.vt, &old);
+	sel_mark(t.vt, &t.sel);
 	t.need_redraw = true;
 	copy_primary();
 }
@@ -813,6 +815,15 @@ static void draw_row(struct buffer *b, int r, bool sel, int64_t ba, int bc,
 				c = blankc;
 			int span = (c.attr & ATTR_WIDE) && col + 1 < vt->cols ? 2 : 1;
 			int x0 = t.pad + col * t.cw;
+			bool cur = cur_row && (vt->c.x == col || (span == 2 && vt->c.x == col + 1));
+			/* a blank's colors only for its background: no readable() for it,
+			 * which would evict the one entry between two words */
+			bool ink = !(c.attr & ATTR_INVISIBLE) &&
+				   (c.cp > ' ' || (c.attr & (ATTR_UNDERLINE | ATTR_STRIKE)));
+			if (pass == 1 && !ink && !cur) {
+				col += span - 1;
+				continue;
+			}
 			uint32_t fg = rgb(c.fg), bg = rgb(c.bg);
 			if (c.attr & ATTR_REVERSE) {
 				uint32_t tmp = fg; fg = bg; bg = tmp;
@@ -822,7 +833,6 @@ static void draw_row(struct buffer *b, int r, bool sel, int64_t ba, int bc,
 				fg = t.col.sel_fg;
 				bg = t.col.sel_bg;
 			}
-			bool cur = cur_row && (vt->c.x == col || (span == 2 && vt->c.x == col + 1));
 			/* one that stands out from the cell: on a reverse cell the
 			 * foreground color would vanish */
 			uint32_t cc = cur ? rc_cursor(t.col.cursor, fg, bg, &t.col) : 0;
@@ -831,7 +841,7 @@ static void draw_row(struct buffer *b, int r, bool sel, int64_t ba, int bc,
 				fg = bg;
 				bg = cc;
 			}
-			if (pass == 1) { /* pass 0 needs only bg; the selection's are kept */
+			if (pass == 1 && ink) { /* pass 0 needs only bg; the selection's are kept */
 				if (!selected || block)
 					fg = readable(fg, bg);
 				if ((c.attr & ATTR_DIM) && !selected && !block)
@@ -1064,6 +1074,14 @@ static void draw(void)
 	t.last_shown = shown;
 	t.last_cx = vt->c.x;
 	t.last_cy = vt->c.y;
+
+	/* Nothing new, as for a title alone: no commit. One a configure waits
+	 * for still goes out. */
+	if (t.last && t.last->w == W && t.last->h == H && !t.need_full && !t.acked &&
+	    !memchr(vt->dirty, true, vt->rows)) {
+		t.need_redraw = false;
+		return;
+	}
 
 	struct buffer *b = NULL;
 	if (t.last && !t.last->busy)
@@ -1807,12 +1825,14 @@ static void ptr_button(void *d, struct wl_pointer *p, uint32_t serial, uint32_t 
 	}
 	int64_t abs = (int64_t)t.vt->scrolled - t.vt->view + t.mrow;
 	if (b == 0 && press && t.sel.active && (input_mods(t.xkb_state) & VT_MOD_SHIFT)) {
+		sel_mark(t.vt, &t.sel);
 		sel_extend(&t.sel, abs, t.mcol); /* Shift extends the selection */
-		vt_mark_all(t.vt);
+		sel_mark(t.vt, &t.sel);
 		t.need_redraw = true;
 	} else if (b == 0 && press) {
+		sel_mark(t.vt, &t.sel);
 		sel_press(&t.sel, &t.clicks, time, abs, t.mcol, (uint32_t)double_click_ms);
-		vt_mark_all(t.vt);
+		sel_mark(t.vt, &t.sel);
 		t.need_redraw = true;
 	} else if (b == 0) {
 		t.sel.dragging = false;

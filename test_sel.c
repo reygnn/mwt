@@ -332,6 +332,26 @@ static void test_mark(void)
 	vt_free(vt);
 }
 
+static void test_sel_mark(void)
+{
+	struct vt *vt = mk(10, 6, 0);
+	int64_t l0 = line(vt, 0);
+	struct sel s = { .mode = SEL_CHAR, .aa = l0 + 4, .ac = 2, .ea = l0 + 2, .ec = 7 };
+	memset(vt->dirty, 0, 6);
+	sel_mark(vt, &s);
+	CHECK(!memchr(vt->dirty, 1, 6)); /* not active: nothing shown */
+	s.active = true;
+	sel_mark(vt, &s);
+	CHECK(!vt->dirty[1] && vt->dirty[2] && vt->dirty[3] && vt->dirty[4] && !vt->dirty[5]);
+	/* a line selection on one line: that row alone */
+	memset(vt->dirty, 0, 6);
+	s.mode = SEL_LINE;
+	s.aa = s.ea = l0;
+	sel_mark(vt, &s);
+	CHECK(vt->dirty[0] && !memchr(vt->dirty + 1, 1, 5));
+	vt_free(vt);
+}
+
 static void test_clicks(void)
 {
 	struct sel s = { 0 };
@@ -504,6 +524,7 @@ int main(void)
 	test_text();
 	test_text_nomem();
 	test_mark();
+	test_sel_mark();
 	test_clicks();
 	test_drag();
 	test_drag_marks();

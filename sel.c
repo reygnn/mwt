@@ -106,6 +106,12 @@ void sel_mark_lines(struct vt *vt, int64_t a, int64_t b)
 		vt->dirty[r] = true;
 }
 
+void sel_mark(struct vt *vt, const struct sel *s)
+{
+	if (s->active) /* a word or a line grows within its lines */
+		sel_mark_lines(vt, s->aa, s->ea);
+}
+
 void sel_press(struct sel *s, struct clicks *c, uint32_t time, int64_t abs, int col,
 	       uint32_t double_ms)
 {
