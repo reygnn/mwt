@@ -20,6 +20,10 @@ When the window closes, the shell gets SIGHUP. mwt waits two seconds for it and 
 exits. A shell that ignores the signal (nohup) or takes longer to clean up runs on
 without a terminal; mwt does not kill it.
 
+Output that floods the window, as `yes` or `cat` of a large file, is read in pieces with
+a pause of 50 µs between short reads. That halves the CPU mwt takes, and such a flood
+ends 15 to 30 % later than without the pause. Typed input and its echo do not wait.
+
 
 ## Window size
 

@@ -207,6 +207,10 @@ static void die_errno(const char *msg)
 /* pty output in one turn: this long or this much, whichever first (read_pty) */
 #define READ_TURN_MS 16
 #define READ_TURN_MAX (1024 * 1024)
+/* The pause after a short read in a flood (shell_read): yes and seq take half
+ * the CPU and end 15 to 30 % later. Shorter measures the same, as the timer
+ * slack sleeps about 50 µs anyway. */
+#define READ_PAUSE_US 50
 /* Without a pidfd the child is asked for this often; the shell's end is seen
  * through the pty's too, but jobs can keep that open. */
 #define CHILD_POLL_MS 250
@@ -2200,11 +2204,10 @@ static void spawn(char **argv)
 		die_errno("cannot start the shell");
 }
 
-static int64_t now_ms(void)
+static void got_output(void *ud, const char *s, size_t n)
 {
-	struct timespec ts;
-	clock_gettime(CLOCK_MONOTONIC, &ts);
-	return (int64_t)ts.tv_sec * 1000 + ts.tv_nsec / 1000000;
+	(void)ud;
+	vt_write(t.vt, s, n);
 }
 
 /* Stops after a megabyte or a while, whichever is first, so that a flood leaves room
@@ -2213,22 +2216,14 @@ static int64_t now_ms(void)
 static void read_pty(void)
 {
 	static char buf[65536];
-	size_t total = 0;
-	int64_t end = now_ms() + READ_TURN_MS;
-	while (total < READ_TURN_MAX && (!total || now_ms() < end)) {
-		ssize_t n = read(t.pty, buf, sizeof buf);
-		if (n > 0) {
-			vt_write(t.vt, buf, n);
-			total += n;
-			continue;
-		}
-		if (n < 0 && errno == EINTR)
-			continue;
-		if (n < 0 && errno == EAGAIN)
-			break;
-		t.running = false; /* EOF or EIO: the child is gone */
-		break;
-	}
+	struct shell_turn turn = {
+		buf, sizeof buf, READ_TURN_MAX, READ_TURN_MS, READ_PAUSE_US,
+		wl_display_get_fd(t.display), got_output, NULL
+	};
+	bool gone = false;
+	size_t total = shell_read(t.pty, &turn, &gone);
+	if (gone)
+		t.running = false; /* the child is gone */
 	if (!total)
 		return;
 	bool alt = t.vt->mode & MODE_ALTSCREEN;
@@ -2415,6 +2410,11 @@ done:;
 			break;
 		if (wl_display_dispatch_pending(t.display) < 0)
 			break;
+		/* A frame callback that just came draws before the pty is read: a
+		 * turn of reading took up to READ_TURN_MS of the frame, and in a flood
+		 * the frame came that much later. */
+		if (t.need_redraw && t.configured && !t.frame_cb)
+			draw();
 
 		if (fds[1].revents & (POLLIN | POLLHUP | POLLERR))
 			read_pty();

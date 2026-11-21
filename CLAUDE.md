@@ -53,7 +53,7 @@ esctest is GPL. The containers have no network, so fetch on the host first with
 | `input.c` | what keys and the mouse send: xkbcommon with Compose, shortcuts, mouse reports; no Wayland |
 | `paste.c` | what a paste becomes: UTF-8 checks, decoding, the control filter, the brackets; the clipboard's types and Latin-1 |
 | `sel.c` | the selection over the VT core's lines: words, lines, clicks, drags, its text |
-| `shell.c` | the shell on its pty: what waits to be written, the paste dropped for a signal; spawn, reap, hang up |
+| `shell.c` | the shell on its pty: what waits to be written, its output read in turns, the paste dropped for a signal; spawn, reap, hang up |
 | `util.c` | `-g`, the context menu's keys, the first size within the compositor's bounds, cutting `-T` and `-a` |
 | `rc.c` | the mwtrc, the minimum contrast and the cursor's color on a cell; no Wayland |
 | `mwt.info` | terminfo; declares only what `vt.c` really does |

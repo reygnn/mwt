@@ -125,6 +125,32 @@ def test_title(log):
     win.close()
 
 
+def test_flood_frames(log):
+    """In a flood a frame callback is drawn at once: a turn of reading the pty
+    took up to 16 ms of the frame first. From each done to the next commit."""
+    win = Window("yes", env={"WAYLAND_DEBUG": "client"}, stderr=log)
+    time.sleep(1.5)
+    win.close()
+    with open(log) as f:
+        lines = f.readlines()
+    sid = main_surface([line for line in lines if " -> " in line])
+    stamp = lambda line: float(re.match(r"\[\s*(\d+\.\d+)\]", line).group(1))
+    waits, done = [], None
+    for line in lines:
+        if not line.startswith("["):
+            continue
+        if " -> " not in line and re.search(r"wl_callback#\d+\.done\(", line):
+            done = stamp(line)
+        elif done is not None and f"wl_surface#{sid}.commit(" in line:
+            waits.append(stamp(line) - done)
+            done = None
+    waits.sort()
+    median = waits[len(waits) // 2] if waits else 99
+    check(len(waits) > 20 and median < 6,
+          f"yes: a frame callback is drawn within 6 ms, median {median:.1f}",
+          f"{len(waits)} frames")
+
+
 def test_long_names():
     title = "t" * 70000
     app_id = "a" * 70000
@@ -143,6 +169,7 @@ def main():
     test_min_size(os.path.join(mwtlib.DIR, "minsize.log"))
     test_click(os.path.join(mwtlib.DIR, "click.log"), mouse)
     test_title(os.path.join(mwtlib.DIR, "title.log"))
+    test_flood_frames(os.path.join(mwtlib.DIR, "flood.log"))
     test_long_names()
     mouse.close()
     return finish()

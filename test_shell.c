@@ -858,6 +858,95 @@ static void test_hangup(void)
 	signal(SIGCHLD, SIG_DFL);
 }
 
+static size_t got_calls, got_bytes, got_first;
+
+static void count_got(void *ud, const char *s, size_t n)
+{
+	(void)ud; (void)s;
+	if (!got_calls++)
+		got_first = n;
+	got_bytes += n;
+}
+
+static int64_t mono_us(void)
+{
+	struct timespec ts;
+	clock_gettime(CLOCK_MONOTONIC, &ts);
+	return (int64_t)ts.tv_sec * 1000000 + ts.tv_nsec / 1000;
+}
+
+static void wait_readable(int fd, int ms)
+{
+	struct pollfd p = { fd, POLLIN, 0 };
+	poll(&p, 1, ms);
+}
+
+/* A turn of reading: an echo goes at once, a flood in small pieces is read in
+ * larger ones after a pause, EOF or EIO tell the program has gone */
+static void test_read_turn(void)
+{
+	static char buf[65536];
+	struct shell_turn turn = { buf, sizeof buf, 1 << 20, 100, 500000, -1, count_got, NULL };
+	int m, s;
+	raw_pty(&m, &s);
+	/* one short read: no pause after it, though one of half a second is set */
+	CHECK(write(s, "hello", 5) == 5);
+	wait_readable(m, 5000);
+	got_calls = got_bytes = 0;
+	bool gone = false;
+	int64_t t0 = mono_us();
+	CHECK(shell_read(m, &turn, &gone) == 5 && !gone && got_calls == 1);
+	CHECK(mono_us() - t0 < 250000);
+	/* nothing there: no read is a turn's worth */
+	CHECK(shell_read(m, &turn, &gone) == 0 && !gone);
+
+	/* 16 bytes at a time, as fast as the pty takes them, as yes: after the
+	 * first read each waits 2 ms, and gets what came meanwhile */
+	pid_t pid = fork();
+	if (pid == 0) {
+		fcntl(s, F_SETFL, 0);
+		int64_t end = mono_us() + 300000;
+		while (mono_us() < end)
+			if (write(s, "0123456789abcdef", 16) != 16)
+				_exit(1);
+		_exit(0);
+	}
+	wait_readable(m, 5000);
+	turn.pause_us = 2000;
+	got_calls = got_bytes = 0;
+	shell_read(m, &turn, &gone);
+	CHECK(!gone && got_calls > 2);
+	size_t avg = got_calls > 1 ? (got_bytes - got_first) / (got_calls - 1) : 0;
+	CHECK(avg >= 256);
+	if (avg < 256)
+		fprintf(stderr, "  %zu reads, %zu bytes after the first on average\n", got_calls, avg);
+	/* the stop fd readable, as the compositor's with a frame callback: the
+	 * turn ends after one read, flood or not */
+	int p[2];
+	small_pipe(p);
+	CHECK(write(p[1], "x", 1) == 1);
+	turn.stop_fd = p[0];
+	wait_readable(m, 5000);
+	got_calls = 0;
+	shell_read(m, &turn, &gone);
+	CHECK(got_calls == 1);
+	turn.stop_fd = -1;
+	close(p[0]);
+	close(p[1]);
+	/* drain, or the writer blocks on a full pty and never ends */
+	turn.pause_us = 0;
+	while (waitpid(pid, NULL, WNOHANG) == 0) {
+		shell_read(m, &turn, &gone);
+		wait_readable(m, 50);
+	}
+	while (shell_read(m, &turn, &gone) > 0)
+		;
+	/* the slave closed: EIO, the program has gone */
+	close(s);
+	CHECK(shell_read(m, &turn, &gone) == 0 && gone);
+	close(m);
+}
+
 int main(void)
 {
 	signal(SIGPIPE, SIG_IGN); /* as mwt */
@@ -868,6 +957,7 @@ int main(void)
 	test_brackets_out();
 	test_reply();
 	test_signal_char();
+	test_read_turn();
 	test_drop();
 	test_gone();
 	test_spawn();

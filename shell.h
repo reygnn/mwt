@@ -38,6 +38,26 @@ bool out_write(struct out *o, int fd, const char *s, size_t n);
  * memory. */
 bool out_reply(struct out *o, int fd, const char *s, size_t n, size_t max);
 
+/* A turn of reading what the program wrote: into buf, cap at a time, each piece
+ * to got(); at most max bytes or ms milliseconds, whichever first, but always one
+ * read. In a flood a short read waits pause_us before the next: the pty passes
+ * output on as it comes, and yes gave 16 B a read, read() most of the CPU. */
+struct shell_turn {
+	char *buf;
+	size_t cap, max;
+	int ms, pause_us;
+	int stop_fd; /* readable, it ends the turn: frames and keys wait no longer */
+	void (*got)(void *ud, const char *s, size_t n);
+	void *ud;
+};
+
+/* A read shorter than this, after one in the same turn, is short. */
+#define SHELL_SHORT_READ 1024
+
+/* Reads a turn from fd and returns the bytes read; *gone at EOF or EIO, when the
+ * program has gone. */
+size_t shell_read(int fd, const struct shell_turn *turn, bool *gone);
+
 /* Whether c, typed on the pty fd, raises a signal: ISIG on and c the INTR, QUIT
  * or SUSP character. */
 bool shell_signal_char(int fd, unsigned char c);
