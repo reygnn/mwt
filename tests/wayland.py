@@ -126,22 +126,30 @@ def test_title(log):
 
 
 def test_flood_frames(log):
-    """In a flood a frame callback is drawn at once: a turn of reading the pty
-    took up to 16 ms of the frame first. From each done to the next commit."""
+    """In a flood a frame callback is drawn and sent at once: a turn of reading
+    the pty took up to 16 ms of the frame first. In sway's log, which has the
+    protocol (SWAY_WAYLAND_DEBUG, make wayland), from each frame's done sent to
+    mwt's next commit received; mwt's own log shows requests queued, not sent."""
+    slog = os.path.join(mwtlib.DIR, "sway.log")
+    if not os.environ.get("SWAY_WAYLAND_DEBUG"):
+        print("info: yes: frame callbacks not measured, sway logs no protocol")
+        return
+    start = os.path.getsize(slog)
     win = Window("yes", env={"WAYLAND_DEBUG": "client"}, stderr=log)
     time.sleep(1.5)
+    sid = main_surface(requests(log))
     win.close()
-    with open(log) as f:
+    with open(slog, errors="replace") as f:
+        f.seek(start)
         lines = f.readlines()
-    sid = main_surface([line for line in lines if " -> " in line])
     stamp = lambda line: float(re.match(r"\[\s*(\d+\.\d+)\]", line).group(1))
-    waits, done = [], None
+    frames, waits, done = set(), [], None
     for line in lines:
-        if not line.startswith("["):
-            continue
-        if " -> " not in line and re.search(r"wl_callback#\d+\.done\(", line):
+        if m := re.search(rf"wl_surface#{sid}\.frame\(new id wl_callback#(\d+)\)", line):
+            frames.add(m.group(1))
+        elif (m := re.search(r" -> wl_callback#(\d+)\.done\(", line)) and m.group(1) in frames:
             done = stamp(line)
-        elif done is not None and f"wl_surface#{sid}.commit(" in line:
+        elif done is not None and f"wl_surface#{sid}.commit(" in line and " -> " not in line:
             waits.append(stamp(line) - done)
             done = None
     waits.sort()

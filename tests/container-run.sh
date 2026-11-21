@@ -55,7 +55,7 @@ tests/headless.sh tests/keys.py 2>&1 | grep -E '^(FAIL|PASS|info|=== )'
 [ "${PIPESTATUS[0]}" = 0 ] || fail=1
 tests/headless.sh tests/bell.py 2>&1 | grep -E '^(FAIL|PASS|info|=== )'
 [ "${PIPESTATUS[0]}" = 0 ] || fail=1
-tests/headless.sh tests/wayland.py 2>&1 | grep -E '^(FAIL|PASS|info|=== )'
+SWAY_WAYLAND_DEBUG=1 tests/headless.sh tests/wayland.py 2>&1 | grep -E '^(FAIL|PASS|info|=== )'
 [ "${PIPESTATUS[0]}" = 0 ] || fail=1
 tests/headless.sh tests/pixel.py 2>&1 | grep -E '^(FAIL|PASS|info|=== )'
 [ "${PIPESTATUS[0]}" = 0 ] || fail=1

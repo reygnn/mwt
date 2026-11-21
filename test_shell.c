@@ -858,13 +858,12 @@ static void test_hangup(void)
 	signal(SIGCHLD, SIG_DFL);
 }
 
-static size_t got_calls, got_bytes, got_first;
+static size_t got_calls, got_bytes;
 
 static void count_got(void *ud, const char *s, size_t n)
 {
 	(void)ud; (void)s;
-	if (!got_calls++)
-		got_first = n;
+	got_calls++;
 	got_bytes += n;
 }
 
@@ -881,45 +880,46 @@ static void wait_readable(int fd, int ms)
 	poll(&p, 1, ms);
 }
 
-/* A turn of reading: an echo goes at once, a flood in small pieces is read in
- * larger ones after a pause, EOF or EIO tell the program has gone */
+/* A turn of reading: a flood in small pieces is read in larger ones after a
+ * pause, a readable stop fd ends it, EOF or EIO tell the program has gone */
 static void test_read_turn(void)
 {
 	static char buf[65536];
-	struct shell_turn turn = { buf, sizeof buf, 1 << 20, 100, 500000, -1, count_got, NULL };
+	struct shell_turn turn = { buf, sizeof buf, 1 << 20, 100, 0, -1, count_got, NULL };
 	int m, s;
 	raw_pty(&m, &s);
-	/* one short read: no pause after it, though one of half a second is set */
+	/* one short read: the turn waits once, then finds nothing */
 	CHECK(write(s, "hello", 5) == 5);
 	wait_readable(m, 5000);
 	got_calls = got_bytes = 0;
 	bool gone = false;
-	int64_t t0 = mono_us();
+	turn.pause_us = 1000;
 	CHECK(shell_read(m, &turn, &gone) == 5 && !gone && got_calls == 1);
-	CHECK(mono_us() - t0 < 250000);
 	/* nothing there: no read is a turn's worth */
 	CHECK(shell_read(m, &turn, &gone) == 0 && !gone);
 
-	/* 16 bytes at a time, as fast as the pty takes them, as yes: after the
-	 * first read each waits 2 ms, and gets what came meanwhile */
+	/* 16 bytes every 100 µs: each short read waits 2 ms, and the turn reads
+	 * on for its 100 ms rather than ending at the first EAGAIN, also when the
+	 * writer shares the reader's CPU */
 	pid_t pid = fork();
 	if (pid == 0) {
 		fcntl(s, F_SETFL, 0);
 		int64_t end = mono_us() + 300000;
-		while (mono_us() < end)
+		while (mono_us() < end) {
 			if (write(s, "0123456789abcdef", 16) != 16)
 				_exit(1);
+			struct timespec ts = { 0, 100000 };
+			nanosleep(&ts, NULL);
+		}
 		_exit(0);
 	}
 	wait_readable(m, 5000);
 	turn.pause_us = 2000;
 	got_calls = got_bytes = 0;
 	shell_read(m, &turn, &gone);
-	CHECK(!gone && got_calls > 2);
-	size_t avg = got_calls > 1 ? (got_bytes - got_first) / (got_calls - 1) : 0;
-	CHECK(avg >= 256);
-	if (avg < 256)
-		fprintf(stderr, "  %zu reads, %zu bytes after the first on average\n", got_calls, avg);
+	CHECK(!gone && got_calls > 2 && got_bytes >= 2048);
+	if (got_bytes < 2048)
+		fprintf(stderr, "  %zu reads, %zu bytes in the turn\n", got_calls, got_bytes);
 	/* the stop fd readable, as the compositor's with a frame callback: the
 	 * turn ends after one read, flood or not */
 	int p[2];

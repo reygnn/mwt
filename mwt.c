@@ -208,7 +208,7 @@ static void die_errno(const char *msg)
 #define READ_TURN_MS 16
 #define READ_TURN_MAX (1024 * 1024)
 /* The pause after a short read in a flood (shell_read): yes and seq take half
- * the CPU and end 15 to 30 % later. Shorter measures the same, as the timer
+ * the CPU and end 25 to 35 % later. Shorter measures the same, as the timer
  * slack sleeps about 50 µs anyway. */
 #define READ_PAUSE_US 50
 /* Without a pidfd the child is asked for this often; the shell's end is seen
@@ -2413,8 +2413,10 @@ done:;
 		/* A frame callback that just came draws before the pty is read: a
 		 * turn of reading took up to READ_TURN_MS of the frame, and in a flood
 		 * the frame came that much later. */
-		if (t.need_redraw && t.configured && !t.frame_cb)
+		if (t.need_redraw && t.configured && !t.frame_cb) {
 			draw();
+			wl_display_flush(t.display); /* or it waits for the turn too */
+		}
 
 		if (fds[1].revents & (POLLIN | POLLHUP | POLLERR))
 			read_pty();

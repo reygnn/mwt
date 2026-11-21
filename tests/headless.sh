@@ -19,7 +19,8 @@ HARNESS_SHELL=/bin/sh harness_dir headless
 sway_conf "seat * hide_cursor 100"
 SWAY=
 trap harness_cleanup EXIT
-sway -c "$DIR/sway.conf" >"$DIR/sway.log" 2>&1 &
+# SWAY_WAYLAND_DEBUG: sway logs the protocol too, as tests/wayland.py reads it
+env ${SWAY_WAYLAND_DEBUG:+WAYLAND_DEBUG=server} sway -c "$DIR/sway.conf" >"$DIR/sway.log" 2>&1 &
 SWAY=$!
 sway_wait || { echo "FAIL: sway did not start"; exit 1; }
 PYTHONPATH=$PWD/tests python3 "$@"

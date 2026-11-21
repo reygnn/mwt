@@ -192,7 +192,7 @@ bell: mwt
 	tests/headless.sh tests/bell.py
 
 wayland: mwt
-	tests/headless.sh tests/wayland.py
+	SWAY_WAYLAND_DEBUG=1 tests/headless.sh tests/wayland.py
 
 pixel: mwt
 	tests/headless.sh tests/pixel.py

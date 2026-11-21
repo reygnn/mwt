@@ -245,19 +245,18 @@ static int64_t now_ms(void)
 size_t shell_read(int fd, const struct shell_turn *turn, bool *gone)
 {
 	size_t total = 0;
-	bool flood = false; /* a read in this turn had something already */
 	int64_t end = now_ms() + turn->ms;
 	while (total < turn->max && (!total || now_ms() < end)) {
 		ssize_t n = read(fd, turn->buf, turn->cap);
 		if (n > 0) {
 			turn->got(turn->ud, turn->buf, (size_t)n);
 			total += (size_t)n;
-			/* not after the first: an echo would wait for nothing */
-			if (flood && (size_t)n < SHELL_SHORT_READ && turn->pause_us > 0) {
+			/* After the first read too: the writer may share the CPU, and
+			 * the next read would find nothing yet. An echo waits once. */
+			if ((size_t)n < SHELL_SHORT_READ && turn->pause_us > 0) {
 				struct timespec ts = { 0, (long)turn->pause_us * 1000 };
 				nanosleep(&ts, NULL);
 			}
-			flood = true;
 			struct pollfd p = { turn->stop_fd, POLLIN, 0 };
 			if (turn->stop_fd >= 0 && poll(&p, 1, 0) > 0)
 				break;
