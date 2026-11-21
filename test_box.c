@@ -497,7 +497,7 @@ static void test_range(void)
 	for (int w = 1; w <= 12; w++)
 		for (int h = 1; h <= 24; h++)
 			for (int t = 1; t <= 8; t += 3)
-				for (unsigned cp = 0x2500; cp <= 0x259f; cp++) {
+				for (unsigned cp = 0x23ba; cp <= 0x259f; cp = cp == 0x23bd ? 0x2500 : cp + 1) {
 					box_draw(cp, w, h, t, cp & 1, a);
 					bool ink = false;
 					for (int i = 0; i < w * h; i++)
@@ -508,6 +508,40 @@ static void test_range(void)
 	box_draw(0x2500, 0, 5, 1, false, a); /* nothing to draw into */
 	box_draw(0x2500, MAXW, MAXH, 1, false, a);
 	CHECK(a[((MAXH - 1) / 2) * MAXW] == 255 && a[((MAXH - 1) / 2) * MAXW + MAXW - 1] == 255);
+}
+
+/* The DEC scan lines 1, 3, 7 and 9 of nine, one light stroke across the cell
+ * each, top to bottom; 5 would be ─. The blocks are what keeps its colors. */
+static void test_scan(void)
+{
+	for (size_t s = 0; s < sizeof sizes / sizeof *sizes; s++)
+		for (int t = 1; t <= 2; t++)
+			for (int bold = 0; bold < 2; bold++) {
+				int w = sizes[s][0], h = sizes[s][1], tt = bold ? 2 * t : t;
+				int at[4], last = -1;
+				bool ok = true;
+				for (unsigned cp = 0x23ba; cp <= 0x23bd; cp++) {
+					box_draw(cp, w, h, t, bold, a);
+					int first = -1, rows = 0;
+					for (int y = 0; y < h; y++)
+						if (a[y * w] == 255 && a[y * w + w - 1] == 255) {
+							first = first < 0 ? y : first;
+							rows++;
+						}
+					at[cp - 0x23ba] = first;
+					ok &= rows == tt && first > last && ink_rows(w, h, w / 2) == tt;
+					last = first;
+				}
+				ok &= at[0] == 0 && at[3] == h - tt;
+				ok &= at[1] < (h - tt) / 2 && at[2] > (h - tt) / 2;
+				CHECK(ok);
+				if (!ok)
+					fprintf(stderr, "  scan lines at %dx%d t %d bold %d: %d %d %d %d\n", w,
+						h, t, bold, at[0], at[1], at[2], at[3]);
+			}
+	CHECK(box_covers(0x23ba) && box_covers(0x23bd) && !box_covers(0x23b9) && !box_covers(0x23be));
+	CHECK(box_block(0x2580) && box_block(0x2591) && box_block(0x259f));
+	CHECK(!box_block(0x257f) && !box_block(0x25a0) && !box_block(0x23ba));
 }
 
 /* the light stroke: the underline's, rounded, a tenth of the cell without one,
@@ -523,6 +557,7 @@ static void test_thin(void)
 int main(void)
 {
 	test_thin();
+	test_scan();
 	test_range();
 	test_edges();
 	test_pictures();

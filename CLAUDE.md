@@ -49,7 +49,7 @@ esctest is GPL. The containers have no network, so fetch on the host first with
 |---|---|
 | `vt.c`, `vt.h` | parser after Paul Williams' DEC state machine, grid, scrollback; no Wayland, so testable headless |
 | `font.c` | fontconfig and FreeType, four styles, fallback faces, glyph cache |
-| `box.c` | box drawing and block elements (U+2500 to U+259F) drawn to fill the cell; no FreeType |
+| `box.c` | box drawing and block elements (U+2500 to U+259F) and the DEC scan lines (U+23BA to U+23BD) drawn to fill the cell; no FreeType |
 | `mwt.c` | Wayland (xdg-shell, xdg-decoration, viewporter, xdg-activation, wl_shm, data device, primary selection), keyboard and pointer events, pty, event loop |
 | `input.c` | what keys and the mouse send: xkbcommon with Compose, shortcuts, mouse reports; no Wayland |
 | `paste.c` | what a paste becomes: UTF-8 checks, decoding, the control filter, the brackets; the clipboard's types and Latin-1 |

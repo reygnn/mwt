@@ -148,7 +148,7 @@ def test_attributes(win):
 def test_box(win):
     """Box drawing and blocks fill their cells, so lines join from row to row and
     cell to cell; box.c draws them, not the font, which left gaps."""
-    win.feed(RESET + "┌──┐ █ ═╦═\r\n│  │ █  ║\r\n└──┘ ▀ ━╋━".encode())
+    win.feed(RESET + "┌──┐ █ ═╦═ \033(0opqrs\033(B\r\n│  │ █  ║\r\n└──┘ ▀ ━╋━".encode())
     img = settle()
     g = Grid(img, 80, 24)
     vert = g.full_cols(0, 1, FG)
@@ -166,6 +166,11 @@ def test_box(win):
     check(g.colors(5, 0) == {FG} and g.colors(5, 1) == {FG}, "█ fills its cell")
     check(len(g.full_rows(5, 2, FG)) == g.ch - g.ch // 2, "▀ the upper half", str(g.full_rows(5, 2, FG)))
     check(len(g.full_cols(8, 1, FG)) == 2, "║ two lines down its cell", str(g.full_cols(8, 1, FG)))
+    # DEC graphics: the scan lines 1, 3, 5 (─), 7 and 9, the first and last at the edges
+    scans = [g.full_rows(c, 0, FG) for c in range(11, 16)]
+    check(scans[0] == [0] and scans[4] == [g.ch - 1] and scans[2] == horiz
+          and all(len(r) == 1 for r in scans) and scans == sorted(scans),
+          "DEC scan lines top to bottom", str(scans))
     heavy = g.full_rows(7, 2, FG)
     check(len(heavy) == 2 * len(horiz), "━ twice as thick as ─", f"{heavy} {horiz}")
 
@@ -755,6 +760,13 @@ def test_contrast():
             c = g.colors(0, 0)
             check(g.corner(0, 0) == green and bg in c and fg not in c,
                   "minimumContrast: black on green drawn in cream", " ".join(map(hex6, sorted(c))))
+            # pixel art: ▀ is two pixels, both colors kept
+            win.feed("\033[30;42m▀\033[m".encode())
+            g = Grid(settle(), 80, 24)
+            x0, y0, x1, y1 = g.box(2, 0)
+            top, bottom = g.img.px(x0, y0), g.img.px(x0, y1 - 1)
+            check(top == fg and bottom == green, "minimumContrast: ▀ keeps its colors",
+                  f"{hex6(top)} {hex6(bottom)}")
         with Window(app_id="off") as win:
             win.feed(draw)
             g = Grid(settle("off"), 80, 24)

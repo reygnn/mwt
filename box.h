@@ -1,5 +1,5 @@
-/* box.h - box drawing and block elements, U+2500 to U+259F, drawn to fill the
- * cell rather than taken from the font: Noto Sans Mono's │ and █ stop 1 to 3 px
+/* box.h - box drawing and block elements, U+2500 to U+259F, and the DEC scan
+ * lines U+23BA to U+23BD, drawn to fill the cell rather than taken from the font: Noto Sans Mono's │ and █ stop 1 to 3 px
  * short, and tmux borders and htop meters came out dashed. No FreeType, no
  * Wayland: font.c asks it first, test_box checks the shapes headless. */
 #ifndef BOX_H
@@ -15,6 +15,10 @@ int box_thin(double underline, int cw, int scale);
 
 /* Whether cp is drawn here. */
 bool box_covers(uint32_t cp);
+
+/* Whether cp is a block or a shade, U+2580 to U+259F: drawn in its colors as they
+ * are, as pixel art from ▀ and ▄ means them, and not made readable. */
+bool box_block(uint32_t cp);
 
 /* cp's coverage into alpha, w * h bytes row by row, which it clears first. thin
  * is a light stroke in pixels, a heavy one twice that, a double line two thin

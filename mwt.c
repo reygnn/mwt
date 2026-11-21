@@ -39,6 +39,7 @@
 #include "config.h"
 #include "rc.h"
 #include "version.h"
+#include "box.h"
 #include "font.h"
 #include "input.h"
 #include "paste.h"
@@ -846,7 +847,9 @@ static void draw_row(struct buffer *b, int r, bool sel, int64_t ba, int bc,
 				bg = cc;
 			}
 			if (pass == 1 && ink) { /* pass 0 needs only bg; the selection's are kept */
-				if (!selected || block)
+				/* blocks as they are: in pixel art from ▀ and ▄ both colors
+				 * are pixels, and a readable one would be a wrong one */
+				if ((!selected && !box_block(c.cp)) || block)
 					fg = readable(fg, bg);
 				if ((c.attr & ATTR_DIM) && !selected && !block)
 					fg = blend(bg, fg, DIM_ALPHA) & 0xffffff;

@@ -25,6 +25,10 @@ Performance, aus der Review vom 2026-11-17 (docs/history/Review-2026-11-17.md):
 * blit ist 73 bis 76 % der Zeichenzeit, Pixel für Pixel gemischt. Ein Cache
   fertig gemischter Glyphen je Vorder- und Hintergrund, oder SIMD. Ohne
   Verzweigung war es 20 % langsamer.
+* Unverändert neu geschriebener Inhalt wird neu gezeichnet: derselbe Schirm mit
+  60 Hz kostet so viel wie neuer (2,72 gegen 2,92 ms pro Frame). Eine Kopie je
+  Zeile und ein memcmp, bevor sie als geändert gilt. Aus der Review vom
+  2026-11-18, 3.3.
 * push_hist ruft realloc für jede Zeile, die hinausscrollt; eine Kapazität je
   Platz sparte bei seq 17 %.
 * Synchronized Output (Mode 2026), damit ein Programm, das ein Bild in

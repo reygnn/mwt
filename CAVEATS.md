@@ -204,12 +204,13 @@ Arabic, about 12 cells wide, at 6 pt. Characters a monospaced font has come from
 rather than from a proportional one, but only as fontconfig tells them apart: Noto Sans
 Mono sets no spacing and counts as proportional.
 
-Box drawing and block elements, U+2500 to U+259F, come from mwt and not from the font:
-lines in the middle of the cell, as thick as the font's underline and at least a pixel a
-scale, heavy lines and light ones in bold twice that, double lines two light strokes also
-in bold. A font's own design of them is not used, nor its italic. Arcs and diagonals are
-thinner to the eye than straight lines, being smoothed. A cell narrower than two pixels a
-dash runs some of the dashes of ┄ and ┈ together.
+Box drawing and block elements, U+2500 to U+259F, and the DEC scan lines U+23BA to
+U+23BD come from mwt and not from the font: lines in the middle of the cell, as thick as
+the font's underline and at least a pixel a scale, heavy lines and light ones in bold
+twice that, double lines two light strokes also in bold. A font's own design of them is
+not used, nor its italic. Arcs and diagonals are thinner to the eye than straight lines,
+being smoothed. A cell narrower than two pixels a dash runs some of the dashes of ┄ and ┈
+together.
 
 Out of memory a glyph may be blank. Left so by its bitmap or by the list of the system's
 fonts, tried again at most once a second, it shows once its row is drawn again; where

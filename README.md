@@ -66,7 +66,8 @@ rebuild. The colors can also be set in the mwtrc.
 Text whose contrast to its background is below `minimumContrast` is drawn in the
 foreground or the background, whichever stands out more. That keeps htop's header
 readable in a light theme and mc's panels in a dark one. The palette itself stays as
-set, and text in the color of its background stays hidden.
+set, and text in the color of its background stays hidden. Blocks and shades
+(U+2580 to U+259F) keep their colors: in pictures drawn with ▀ and ▄ both are pixels.
 
 Colors are `#rrggbb`, `#rgb` or `rgb:rr/gg/bb`, without names. A line with an app_id
 wins over a global one, and later lines win over earlier ones; names and app_ids
@@ -109,8 +110,8 @@ them with `mwt -a indigo3`.
   configured in `config.h` and the mwtrc
 * DECRQCRA only with `allow_checksum` in `config.h`, off by default as in xterm
 * Wide characters, and emoji as outlines if a fallback font has them
-* Box drawing and block elements (U+2500 to U+259F) drawn to fill the cell, so lines
-  join between rows whatever the font
+* Box drawing and block elements (U+2500 to U+259F) and the DEC scan lines (U+23BA to
+  U+23BD) drawn to fill the cell, so lines join between rows whatever the font
 * HiDPI through `wl_surface.preferred_buffer_scale`, integer scales only
 
 COMPAT.md goes through the VT100's sequences, and those after it, one by one.

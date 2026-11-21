@@ -49,10 +49,10 @@ mwt: $(OBJ)
 	$(CC) $(LDFLAGS) -o $@ $(OBJ) $(LDLIBS)
 
 # mwt that answers DECRQCRA, which esctest reads the screen with; see allow_checksum.
-mwt-esctest: mwt.c config.h $(VERSION_H) vt.h font.h rc.h input.h paste.h sel.h shell.h util.h $(PROTO_H) $(filter-out mwt.o,$(OBJ))
+mwt-esctest: mwt.c config.h $(VERSION_H) vt.h box.h font.h rc.h input.h paste.h sel.h shell.h util.h $(PROTO_H) $(filter-out mwt.o,$(OBJ))
 	$(CC) $(CFLAGS) -DMWT_ALLOW_CHECKSUM $(LDFLAGS) -o $@ mwt.c $(filter-out mwt.o,$(OBJ)) $(LDLIBS)
 
-mwt.o: mwt.c config.h $(VERSION_H) vt.h font.h rc.h input.h paste.h sel.h shell.h util.h $(PROTO_H)
+mwt.o: mwt.c config.h $(VERSION_H) vt.h box.h font.h rc.h input.h paste.h sel.h shell.h util.h $(PROTO_H)
 vt.o: vt.c vt.h $(VERSION_H)
 font.o: font.c font.h box.h
 box.o: box.c box.h

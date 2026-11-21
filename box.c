@@ -274,7 +274,12 @@ int box_thin(double underline, int cw, int scale)
 
 bool box_covers(uint32_t cp)
 {
-	return cp >= 0x2500 && cp <= 0x259f;
+	return (cp >= 0x2500 && cp <= 0x259f) || (cp >= 0x23ba && cp <= 0x23bd);
+}
+
+bool box_block(uint32_t cp)
+{
+	return cp >= 0x2580 && cp <= 0x259f;
 }
 
 void box_draw(uint32_t cp, int w, int h, int thin, bool bold, uint8_t *alpha)
@@ -285,7 +290,7 @@ void box_draw(uint32_t cp, int w, int h, int thin, bool bold, uint8_t *alpha)
 	if (!box_covers(cp))
 		return;
 	struct canvas c = { alpha, w, h };
-	if (cp >= 0x2580) {
+	if (box_block(cp)) {
 		block(&c, cp);
 		return;
 	}
@@ -296,6 +301,13 @@ void box_draw(uint32_t cp, int w, int h, int thin, bool bold, uint8_t *alpha)
 	int light = bold ? heavy : thin;
 	int td = MAX(1, MIN(thin, small / 3));
 	switch (cp) {
+	case 0x23ba: case 0x23bb: case 0x23bc: case 0x23bd: {
+		/* the VT100's scan lines 1, 3, 7 and 9 of nine; 5 is ─, in the middle */
+		static const int scan[] = { 1, 3, 7, 9 };
+		int y = (h - light) * (scan[cp - 0x23ba] - 1) / 8;
+		fill(&c, 0, y, w, y + light, 255);
+		return;
+	}
 	case 0x2504: case 0x2505: dashes(&c, 3, cp & 1 ? heavy : light, false); return;
 	case 0x2506: case 0x2507: dashes(&c, 3, cp & 1 ? heavy : light, true); return;
 	case 0x2508: case 0x2509: dashes(&c, 4, cp & 1 ? heavy : light, false); return;

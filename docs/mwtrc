@@ -6,7 +6,8 @@
 ! the foreground or background instead, whichever stands out more. 3 is the
 ! default of config.h; 0 turns it off, also per app_id (Mwt*paper*...).
 ! It matters where programs use the palette as a background: htop's black on
-! green and cyan in paper, mc's white on blue in indigo3 and dracula.
+! green and cyan in paper, mc's white on blue in indigo3 and dracula. Blocks
+! and shades (U+2580 to U+259F) keep their colors, for pictures drawn with them.
 Mwt*minimumContrast:               3
 
 ! indigo3, after the SGI IRIS Indigo winterm: its blue a little lifted (12:1
