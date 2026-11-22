@@ -21,10 +21,17 @@ static bool url_char(uint32_t cp)
 	/* box drawing: a URL in tmux or mc ends at the frame next to it */
 	if (cp >= 0x2500 && cp <= 0x259f)
 		return false;
-	/* other spaces, the angle brackets of math, CJK punctuation (。、「」) and
-	 * the fullwidth forms of ASCII's (，）) */
-	return !(cp >= 0x2000 && cp <= 0x200b) && !(cp >= 0x3000 && cp <= 0x303f) &&
-	       !(cp >= 0xff01 && cp <= 0xff65) && cp != 0x27e8 && cp != 0x27e9;
+	/* other spaces and the angle brackets of math */
+	if ((cp >= 0x2000 && cp <= 0x200b) || cp == 0x27e8 || cp == 0x27e9)
+		return false;
+	/* CJK punctuation (。、「」), not the letters among it (々〆〇, the
+	 * Hangzhou numerals, the kana repeat marks) */
+	if ((cp >= 0x3000 && cp <= 0x3004) || (cp >= 0x3008 && cp <= 0x3020) ||
+	    (cp >= 0x302a && cp <= 0x3030) || (cp >= 0x303d && cp <= 0x303f))
+		return false;
+	/* fullwidth punctuation (，）), not the digits and letters */
+	return !((cp >= 0xff01 && cp <= 0xff0f) || (cp >= 0xff1a && cp <= 0xff20) ||
+		 (cp >= 0xff3b && cp <= 0xff40) || (cp >= 0xff5b && cp <= 0xff65));
 }
 
 /* The cells of line a that count: up to its wrap, when it goes on in the next. */

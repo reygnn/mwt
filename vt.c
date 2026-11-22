@@ -200,6 +200,11 @@ static void clear_line(struct vt *vt, int y, int x0, int x1)
 		return;
 	fix_wide(vt, vt->line[y], x0, x1);
 	fill_row(vt, vt->line[y], x0, x1 + 1, blank(vt));
+	/* erased to the end, the line ends: also a wrap left in its middle by a
+	 * window grown wider, which vt_abs_wraps would still find */
+	if (x1 == vt->cols - 1)
+		for (int x = 0; x < x0; x++)
+			vt->line[y][x].attr &= ~ATTR_WRAP;
 	mark_row(vt, y);
 }
 
@@ -1239,6 +1244,9 @@ static void csi_dispatch(struct vt *vt, uint32_t f)
 	case 'P': /* DCH */
 		n = MIN(n, vt->cols - c->x);
 		fix_wide(vt, l, c->x, c->x + n - 1);
+		/* the last column is emptied: the line no longer goes on, and its
+		 * wrap moved left would look like one of a window grown wider */
+		l[vt->cols - 1].attr &= ~ATTR_WRAP;
 		memmove(&l[c->x], &l[c->x + n], (vt->cols - c->x - n) * sizeof *l);
 		fill_row(vt, l, vt->cols - n, vt->cols, blank(vt));
 		mark_row(vt, c->y);

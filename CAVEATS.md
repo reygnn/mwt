@@ -186,8 +186,9 @@ for the mouse pointer) are kept; what mwt
 asks of them then does nothing.
 
 A mouse that goes off the seat with its button down on an item of the context menu runs
-the item. sway sends the release itself, which mwt cannot tell from one let go; where a
-compositor does not, mwt makes one up for each button held, and it runs the item too.
+the item where the compositor sends the release itself, as sway does: mwt cannot tell
+it from one let go. Where a compositor does not, the menu closes first and the releases
+mwt makes up run nothing.
 
 With Ctrl, a letter of a layout that is not Latin is taken as the Latin letter in its
 place, so Ctrl+C interrupts on a Russian layout. Keys outside the three rows of letters

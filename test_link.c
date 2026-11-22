@@ -118,6 +118,14 @@ static void test_schemes(void)
 	AT(vt, 4, 2, "http://a.b/?u=https://c.d/e");
 	AT(vt, 4, 20, "http://a.b/?u=https://c.d/e");
 	vt_free(vt);
+
+	/* CJK letters among the punctuation do not end it: 々, 〇, a fullwidth 1 */
+	vt = mk(80, 2, 10);
+	w(vt, "https://ja.wikipedia.org/wiki/\xe4\xbd\x90\xe3\x80\x85\xe6\x9c\xa8 "
+	      "http://z.cn/\xe3\x80\x87\xef\xbc\x91");
+	AT(vt, 0, 3, "https://ja.wikipedia.org/wiki/\xe4\xbd\x90\xe3\x80\x85\xe6\x9c\xa8");
+	AT(vt, 0, 40, "http://z.cn/\xe3\x80\x87\xef\xbc\x91");
+	vt_free(vt);
 }
 
 static void test_ends(void)

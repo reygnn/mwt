@@ -240,6 +240,48 @@ static void test_text_wider(void)
 	TEXT(vt, sel_of(SEL_LINE, h, 0, h + 2, 0), "0123456789abcdefghijklmno");
 	vt_free(vt);
 
+	/* a wrap no longer at the end only after a wider window: DCH empties the
+	 * last column, as bash does for Delete in a line that filled the row;
+	 * erased to the end, a wrap in the middle goes too; colored blanks after
+	 * it are text, the line does not go on */
+	static const char *const ends[] = {
+		"\033[1;3H\033[P",                     /* 10 columns, DCH */
+		"\033[1;3H\033[3P",
+		"*\033[1;15H\033[K",                   /* wider, then EL */
+		"*\033[1;12H\033[3X\033[1;18H\033[X\033[1;20H\033[X", /* ECH to the end */
+		"*\033[41m\033[1;13H\033[3@\033[m",    /* ICH of colored blanks */
+	};
+	for (size_t i = 0; i < sizeof ends / sizeof *ends; i++) {
+		vt = mk(10, 4, 10);
+		w(vt, "0123456789abcdefghij");
+		const char *e = ends[i];
+		if (*e == '*') {
+			CHECK(vt_resize(vt, 20, 4));
+			e++;
+		}
+		w(vt, e);
+		w(vt, "\033[2;1H\033[2Kfoo");
+		l0 = line(vt, 0);
+		char *got = sel_text(vt, &(struct sel){ .active = true, .mode = SEL_LINE,
+							 .aa = l0, .ea = l0 + 1 });
+		checks++;
+		if (!got || !strchr(got, '\n')) {
+			failures++;
+			fprintf(stderr, "%s:%d: FAIL: case %zu joined: \"%s\"\n", __FILE__, __LINE__,
+				i, got ? got : "(null)");
+		}
+		free(got);
+		vt_free(vt);
+	}
+	/* ECH that stops before the end leaves it going on */
+	vt = mk(10, 4, 10);
+	w(vt, "0123456789abcdefghij");
+	CHECK(vt_resize(vt, 20, 4));
+	w(vt, "\033[1;12H\033[2X\033[2;1H\033[2Kfoo");
+	l0 = line(vt, 0);
+	TEXT(vt, sel_of(SEL_LINE, l0, 0, l0 + 1, 0), "0123456789foo");
+	vt_free(vt);
+
 	vt = mk(10, 3, 10);
 	w(vt, "0123456789abcdefghijklmnopqrstuvwxyz");
 	w(vt, "\033[2J\033[Hxyz");

@@ -188,7 +188,6 @@ static struct {
 		bool configured, dirty;
 	} menu;
 	struct wl_surface *ptr_surface; /* the surface the pointer is on */
-	struct wl_surface *kb_surface;  /* the one the keyboard is on */
 } t = { .pty = -1, .repeat_fd = -1, .paste_fd = -1, .child = { 0, -1 }, .scale = 1 };
 
 static void link_hover(void);
@@ -1232,8 +1231,6 @@ static void menu_close(void)
 		return;
 	if (t.ptr_surface == t.menu.surface)
 		t.ptr_surface = NULL;
-	if (t.kb_surface == t.menu.surface)
-		t.kb_surface = NULL;
 	xdg_popup_destroy(t.menu.popup);
 	xdg_surface_destroy(t.menu.xsurface);
 	wl_surface_destroy(t.menu.surface);
@@ -1318,14 +1315,8 @@ static void menu_pointer(double y)
 static void menu_run(int i)
 {
 	void (*run)(void) = menu_items[i].run;
-	/* Open link asks for its token while the menu is still there: the
-	 * compositor checks that the surface has the keyboard or the pointer, and
-	 * mutter and KWin give the menu both */
-	if (run == open_menu_link)
-		run();
 	menu_close();
-	if (run != open_menu_link)
-		run();
+	run();
 }
 
 static void menu_button(bool press)
@@ -1722,7 +1713,6 @@ static void kb_enter(void *d, struct wl_keyboard *kb, uint32_t serial,
 {
 	(void)d; (void)kb; (void)keys;
 	t.serial = serial;
-	t.kb_surface = s;
 	if (s && s == t.menu.surface)
 		return;
 	t.focused = true;
@@ -1736,8 +1726,6 @@ static void kb_enter(void *d, struct wl_keyboard *kb, uint32_t serial,
 static void kb_leave(void *d, struct wl_keyboard *kb, uint32_t serial, struct wl_surface *s)
 {
 	(void)d; (void)kb; (void)serial;
-	if (!s || s == t.kb_surface) /* without one: the menu gone, or the keyboard */
-		t.kb_surface = NULL;
 	stop_repeat();
 	if (t.compose)
 		xkb_compose_state_reset(t.compose);
@@ -1879,9 +1867,10 @@ static void link_open(char *url, uint32_t serial)
 	}
 	xdg_activation_token_v1_add_listener(tok, &link_token_listener, url);
 	xdg_activation_token_v1_set_serial(tok, serial, t.seat);
-	/* the menu's, while it has the keyboard; it goes after the commit */
-	bool menu = t.menu.surface && t.kb_surface == t.menu.surface;
-	xdg_activation_token_v1_set_surface(tok, menu ? t.menu.surface : t.surface);
+	/* the window's, also for Open link: the menu is gone by now, and
+	 * mutter checks the surface when the browser activates, KWin the
+	 * active window or the serial, wlroots the focus at the commit */
+	xdg_activation_token_v1_set_surface(tok, t.surface);
 	xdg_activation_token_v1_commit(tok);
 }
 
