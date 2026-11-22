@@ -182,8 +182,9 @@ BEL makes no sound and does not flash. Without the focus the window asks for att
 through xdg-activation, once until it gets the focus back: sway marks it urgent, GNOME
 shows it is ready. KWin gives it the focus instead when no window is active, or when its
 focus stealing prevention is off. With the focus nothing happens, nor before the window
-first shows or while mwt's menu is open. Compositors without xdg-activation, mwc among
-them, show nothing.
+first shows or while mwt's menu is open. mwc marks the desktop of a window on another
+desktop urgent (ext-workspace-v1) and shows nothing on the current one. Compositors
+without xdg-activation show nothing.
 
 
 ## Fonts
