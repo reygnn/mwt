@@ -24,6 +24,15 @@ TODO
   der Links betrifft es nicht (shell.c, opener_spawn). Dazu ein Test unter
   sway mit focus_on_window_activation focus.
 
+* Ein Opener, der nicht da ist, meldet sich nur auf stderr: mwt aus einem
+  Launcher oder aus mwc gestartet hat das auf einem tty oder nirgends, und
+  Ctrl+Klick tut scheinbar nichts (so geschehen ohne xdg-utils). Zu entscheiden:
+  ohne urlLauncher auf $BROWSER und dann firefox zurückfallen, wenn xdg-open
+  fehlt, und/oder den Fehler sichtbar machen (die Glocke, ein Hinweis im
+  Fenster). opener_spawn sieht einen fehlenden Befehl erst im Enkel; ein
+  CLOEXEC-Pipe vom Enkel zurück sagte es mwt. Dazu Tests in test_shell und
+  tests/links.py.
+
 Performance, aus der Review vom 2026-11-17 (docs/history/Review-2026-11-17.md):
 
 * Scrollen um eine Zeile zeichnet alle Zeilen neu, bei 200x55 und 1080p etwa
