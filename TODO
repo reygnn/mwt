@@ -16,6 +16,14 @@ TODO
   des REP-Fixes auch wie xterm). ncurses nutzt es, um Zeichenfolgen kürzer zu
   schicken. Dazu ein Check in tests/terminfo.py.
 
+* Das Aktivierungstoken, mit dem mwt selbst gestartet wird
+  (XDG_ACTIVATION_TOKEN, DESKTOP_STARTUP_ID), nutzt mwt nicht und gibt es an
+  die Shell weiter: ein xdg-open in der Shell reicht dann ein altes Token
+  weiter. Besser: mwt aktiviert sein Fenster damit nach dem ersten Frame und
+  nimmt beide Variablen aus der Umgebung, bevor die Shell startet. Den Opener
+  der Links betrifft es nicht (shell.c, opener_spawn). Dazu ein Test unter
+  sway mit focus_on_window_activation focus.
+
 Performance, aus der Review vom 2026-11-17 (docs/history/Review-2026-11-17.md):
 
 * Scrollen um eine Zeile zeichnet alle Zeilen neu, bei 200x55 und 1080p etwa
