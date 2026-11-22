@@ -15,7 +15,7 @@ static int fails;
 
 static const struct rc_colors defaults = { 0xdcdccc, 0x1e1e1e, 0xdcdccc, 0x1e1e1e, 0xa0a0a0, {
 	0x1e1e1e, 0xcc6666, 0x8fa86a, 0xd8b45e, 0x6c8fb8, 0xa87cb0, 0x6aa8a0, 0xc8c8c8,
-	0x5a5a5a, 0xe08080, 0xa8c88a, 0xf0d080, 0x90b0d8, 0xc89ad0, 0x8ac8c0, 0xf4f4f4 }, 3 };
+	0x5a5a5a, 0xe08080, 0xa8c88a, 0xf0d080, 0x90b0d8, 0xc89ad0, 0x8ac8c0, 0xf4f4f4 }, 3, "" };
 
 /* text as an mwtrc, for app_id; what stderr got lands in err */
 static struct rc_colors run(const char *text, const char *app_id, char *err, size_t errsize)
@@ -254,6 +254,40 @@ static void test_path(void)
 	CHECK(!rc_path(buf, sizeof(buf)));
 }
 
+static void test_launcher(void)
+{
+	char err[1024], longer[400];
+	struct rc_colors c;
+
+	/* not set: as it was */
+	c = run("Mwt*foreground: #e5e5e5\n", "mwt", err, sizeof(err));
+	CHECK(!*c.launcher && !*err);
+	/* words and blanks inside stay, the blanks around go */
+	c = run("Mwt*urlLauncher:   firefox  --new-tab  \n", "mwt", err, sizeof(err));
+	CHECK(!strcmp(c.launcher, "firefox  --new-tab") && !*err);
+	/* the app_id's wins, before or after; later lines win */
+	const char *two = "Mwt*web*urlLauncher: chromium\nMwt*URLLAUNCHER: a\nMwt*urlLauncher: b\n";
+	c = run(two, "web", err, sizeof(err));
+	CHECK(!strcmp(c.launcher, "chromium") && !*err);
+	c = run(two, "mwt", err, sizeof(err));
+	CHECK(!strcmp(c.launcher, "b"));
+	/* empty or too long: skipped with a message, the one before stays */
+	c = run("Mwt*urlLauncher: a\nMwt*urlLauncher:\n", "mwt", err, sizeof(err));
+	CHECK(!strcmp(c.launcher, "a") && strstr(err, "mwtrc:2: urlLauncher: empty"));
+	memset(longer, 'x', sizeof longer - 1);
+	longer[sizeof longer - 1] = '\0';
+	char text[512];
+	snprintf(text, sizeof text, "Mwt*urlLauncher: a\nMwt*urlLauncher: %.*s\n",
+		 (int)sizeof c.launcher, longer);
+	c = run(text, "mwt", err, sizeof(err));
+	CHECK(!strcmp(c.launcher, "a") && strstr(err, "mwtrc:2: urlLauncher: too long"));
+	snprintf(text, sizeof text, "Mwt*urlLauncher: %.*s\n", (int)sizeof c.launcher - 1, longer);
+	c = run(text, "mwt", err, sizeof(err));
+	CHECK(strlen(c.launcher) == sizeof c.launcher - 1 && !*err);
+	/* a launcher is no color, and colors are not touched by it */
+	CHECK(c.fg == defaults.fg && c.cursor == defaults.cursor);
+}
+
 int main(void)
 {
 	test_color();
@@ -261,6 +295,7 @@ int main(void)
 	test_contrast();
 	test_cursor();
 	test_path();
+	test_launcher();
 	if (fails) {
 		fprintf(stderr, "test_rc: %d failed\n", fails);
 		return 1;

@@ -1,5 +1,5 @@
-/* rc.h - ~/.config/mwt/mwtrc: colors at startup, over those of config.h, and
- * the minimum contrast between text and its background */
+/* rc.h - ~/.config/mwt/mwtrc: colors at startup, over those of config.h, the
+ * minimum contrast between text and its background, and what opens a URL */
 #ifndef MWT_RC_H
 #define MWT_RC_H
 
@@ -11,6 +11,7 @@ struct rc_colors {
 	uint32_t fg, bg, cursor, sel_fg, sel_bg; /* 0xrrggbb */
 	uint32_t palette[16];                    /* color0 to color15 */
 	float min_contrast;                      /* minimumContrast, <= 1: off */
+	char launcher[256];                      /* urlLauncher */
 };
 
 /* #rgb, #rrggbb or rgb:r/g/b with 1 to 4 hex digits per channel. */

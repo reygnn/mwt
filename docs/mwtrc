@@ -10,6 +10,9 @@
 ! and shades (U+2580 to U+259F) keep their colors, for pictures drawn with them.
 Mwt*minimumContrast:               3
 
+! What Ctrl+click on a URL starts, the URL after its words; xdg-open by default.
+! Mwt*urlLauncher:                 firefox --new-tab
+
 ! indigo3, after the SGI IRIS Indigo winterm: its blue a little lifted (12:1
 ! instead of 15.5:1), off-white text, a palette with even lightness in OKLCH;
 ! every text color at least 5:1 on the background, red and green apart in

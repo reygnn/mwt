@@ -12,8 +12,8 @@ cd ~/w/mwc && rm -rf build mwc .git
 grep -q 'WIDTH HEIGHT \[LAYOUTS\]' tests/vinput.c ||
 	{ echo "FAIL: mwc's vinput takes no layouts (mwc 584f35d or later)"; exit 1; }
 grep -q '<stdlib.h>' tests/vinput.c || sed -i '1i #include <stdlib.h>' tests/vinput.c
-make -j"$(nproc)" mwc build/vinput >/dev/null 2>&1 || { echo "mwc did not build"; exit 1; }
-export MWC=$HOME/w/mwc/mwc VINPUT=$HOME/w/mwc/build/vinput VIN_LAYOUTS=1
+make -j"$(nproc)" mwc build/vinput build/xdgc >/dev/null 2>&1 || { echo "mwc did not build"; exit 1; }
+export MWC=$HOME/w/mwc/mwc VINPUT=$HOME/w/mwc/build/vinput XDGC=$HOME/w/mwc/build/xdgc VIN_LAYOUTS=1
 cd ~/w/mwt || exit 1
 SAN="-O1 -g -fsanitize=address,undefined"
 build() {
@@ -48,12 +48,14 @@ echo "=== evil under sway, sanitizers ==="
 tests/evil.sh || fail=1
 echo "=== evil under mwc, sanitizers ==="
 tests/evil-mwc.sh || fail=1
-echo "=== terminfo, keys, bell, wayland, pixel, mouse, keyboard, leaks, sanitizers ==="
+echo "=== terminfo, keys, bell, links, wayland, pixel, mouse, keyboard, leaks, sanitizers ==="
 make terminfo 2>&1 | grep -E '^(FAIL|PASS|=== )'
 [ "${PIPESTATUS[0]}" = 0 ] || fail=1
 tests/headless.sh tests/keys.py 2>&1 | grep -E '^(FAIL|PASS|info|=== )'
 [ "${PIPESTATUS[0]}" = 0 ] || fail=1
 tests/headless.sh tests/bell.py 2>&1 | grep -E '^(FAIL|PASS|info|=== )'
+[ "${PIPESTATUS[0]}" = 0 ] || fail=1
+tests/headless.sh tests/links.py 2>&1 | grep -E '^(FAIL|PASS|info|=== )'
 [ "${PIPESTATUS[0]}" = 0 ] || fail=1
 SWAY_WAYLAND_DEBUG=1 tests/headless.sh tests/wayland.py 2>&1 | grep -E '^(FAIL|PASS|info|=== )'
 [ "${PIPESTATUS[0]}" = 0 ] || fail=1

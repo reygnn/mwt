@@ -57,6 +57,28 @@ With Ctrl+Shift+letter on non-Latin layouts without a Latin second layout, the k
 QWERTY position counts.
 
 
+## Links
+
+URLs are found by their scheme in the text shown: http, https, ftp, file and mailto.
+OSC 8 hyperlinks are not supported; their text is shown, the target is dropped. A URL
+without a scheme (`www.example.org`) is no link. Where it ends is a guess: at a blank,
+a control, box drawing or one of ``<>"`{}|\^``, without punctuation at its end or a
+closing bracket it did not open. Lines that wrap are joined, lines a program broke
+itself (vim, a table) are not. A URL is looked for at most 4096 cells either way.
+
+While a program has the mouse, Ctrl+click is the program's; Shift+Ctrl+click opens.
+The underline shows only while the pointer is over the window: a compositor that hides
+the pointer after a while (sway's `hide_cursor`) takes it away.
+
+The opener gets an xdg-activation token in `XDG_ACTIVATION_TOKEN`, made for the
+Ctrl+click or for the click or key that chose Open link. Whether the browser comes to
+the front is the compositor's choice: sway only marks it urgent unless
+`focus_on_window_activation` says otherwise, mwc gives the focus while mwt still has
+the keyboard. Without xdg-activation the opener gets no token. A token mwt was itself
+started with is not passed on. mwt does not wait for the opener; a program that is not
+there says so on stderr.
+
+
 ## Replies and the line discipline
 
 Programs can ask the terminal for replies (DA, DSR). If the program exits first, the

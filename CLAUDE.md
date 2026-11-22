@@ -13,12 +13,13 @@ use mwc's `vinput` need `MWC_DIR`, which defaults to `../../mwc`:
 | Target | |
 |---|---|
 | `make` | mwt |
-| `make check` | `test_vt`, `test_rc`, `test_input`, `test_paste`, `test_sel`, `test_shell`, `test_util`, `test_box` and the kept fuzz findings in `tests/fuzz-regress`, under ASan and UBSan, and mwt's command line (`tests/args.sh`), headless |
+| `make check` | `test_vt`, `test_rc`, `test_input`, `test_paste`, `test_sel`, `test_link`, `test_shell`, `test_util`, `test_box` and the kept fuzz findings in `tests/fuzz-regress`, under ASan and UBSan, and mwt's command line (`tests/args.sh`), headless |
 | `make replay` | about 290 recorded VT100 animations and ANSI files through the VT core; `REPORT=1` lists what mwt lacks |
 | `make fuzz` | libFuzzer on the VT core, `FUZZ_TIME` seconds (600); clang on the host or the `make evil` container |
 | `make terminfo` | each capability of `mwt.info` against the VT core; python3 and ncurses |
 | `make keys` | what mwt sends for keys and the mouse, against `mwt.info`, under headless sway |
 | `make bell` | BEL marks the window urgent without the focus, once, under headless sway |
+| `make links` | Ctrl+click, the menu's Open link and the underline on URLs, with a fake opener; the token's focus with mwc's `xdgc` (`XDGC`), under headless sway |
 | `make wayland` | a hidden window's configure, the min size, long `-T` and `-a`, from mwt's Wayland log, under headless sway |
 | `make pixel` | what mwt draws, by screenshot, under headless sway |
 | `make mouse` | the mouse modes, under headless sway |
@@ -50,16 +51,17 @@ esctest is GPL. The containers have no network, so fetch on the host first with
 | `vt.c`, `vt.h` | parser after Paul Williams' DEC state machine, grid, scrollback; no Wayland, so testable headless |
 | `font.c` | fontconfig and FreeType, four styles, fallback faces, glyph cache |
 | `box.c` | box drawing and block elements (U+2500 to U+259F) and the DEC scan lines (U+23BA to U+23BD) drawn to fill the cell; no FreeType |
-| `mwt.c` | Wayland (xdg-shell, xdg-decoration, viewporter, xdg-activation, wl_shm, data device, primary selection), keyboard and pointer events, pty, event loop |
+| `mwt.c` | Wayland (xdg-shell, xdg-decoration, viewporter, xdg-activation, wl_shm, data device, primary selection), keyboard and pointer events, the hover over a URL, pty, event loop |
 | `input.c` | what keys and the mouse send: xkbcommon with Compose, shortcuts, mouse reports; no Wayland |
 | `paste.c` | what a paste becomes: UTF-8 checks, decoding, the control filter, the brackets; the clipboard's types and Latin-1 |
 | `sel.c` | the selection over the VT core's lines: words, lines, clicks, drags, its text |
-| `shell.c` | the shell on its pty: what waits to be written, its output read in turns, the paste dropped for a signal; spawn, reap, hang up |
+| `link.c` | URLs in the VT core's lines, over lines that wrap; the opener's words |
+| `shell.c` | the shell on its pty: what waits to be written, its output read in turns, the paste dropped for a signal; spawn, reap, hang up; the opener of a link |
 | `util.c` | `-g`, the context menu's keys, the first size within the compositor's bounds, cutting `-T` and `-a` |
-| `rc.c` | the mwtrc, the minimum contrast and the cursor's color on a cell; no Wayland |
+| `rc.c` | the mwtrc, the minimum contrast, the cursor's color on a cell, the URL launcher; no Wayland |
 | `mwt.info` | terminfo; declares only what `vt.c` really does |
 | `config.h`, `version.h` | defaults; the version for `-v` and XTVERSION, with the commit from `build/gitversion.h` (the Makefile) |
-| `test_vt.c`, `test_rc.c`, `test_input.c`, `test_paste.c`, `test_sel.c`, `test_shell.c`, `test_util.c`, `test_box.c` | unit tests; `test_vt`, `test_paste` and `test_sel` fail each allocation once through `--wrap`, `test_input` compiles keymaps from layout names, `test_shell` runs real ptys, pipes and processes |
+| `test_vt.c`, `test_rc.c`, `test_input.c`, `test_paste.c`, `test_sel.c`, `test_link.c`, `test_shell.c`, `test_util.c`, `test_box.c` | unit tests; `test_vt`, `test_paste`, `test_sel` and `test_link` fail each allocation once through `--wrap`, `test_input` compiles keymaps from layout names, `test_shell` runs real ptys, pipes and processes |
 | `tests/replay.c` | plays recordings whole, byte by byte, in chunks and with resizes; the first three must end the same |
 | `tests/fuzz_vt.c` | libFuzzer harness; built with `-DFUZZ_STANDALONE` it is `fuzz_regress`. How to keep a finding: its head |
 | `tests/` | black-box and adversarial tests, from the mt project; `tests/lib.sh` for the shell ones (directory, sway, its config, the screen read back), `tests/mwtlib.py` for the Python ones, `tests/swaytree.py` for both |

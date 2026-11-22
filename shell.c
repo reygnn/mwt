@@ -301,3 +301,37 @@ void child_hangup(struct child *c, int *pty, int ms)
 	kill(c->pid, SIGHUP);
 	child_wait(c, ms);
 }
+
+bool opener_spawn(char *const argv[], const char *token)
+{
+	pid_t pid = fork();
+	if (pid < 0)
+		return false;
+	if (pid == 0) {
+		setsid(); /* a hangup of mwt's session is not the browser's */
+		if (fork() != 0)
+			_exit(0);
+		for (int sig = 1; sig < NSIG; sig++)
+			signal(sig, SIG_DFL);
+		sigset_t none;
+		sigemptyset(&none);
+		sigprocmask(SIG_SETMASK, &none, NULL);
+		int null = open("/dev/null", O_RDONLY);
+		if (null >= 0 && null != 0) {
+			dup2(null, 0);
+			close(null);
+		}
+		close_from_3();
+		/* one mwt was started with is not for the link */
+		if (token)
+			setenv("XDG_ACTIVATION_TOKEN", token, 1);
+		else
+			unsetenv("XDG_ACTIVATION_TOKEN");
+		execvp(argv[0], argv);
+		fprintf(stderr, "mwt: %s: %s\n", argv[0], strerror(errno));
+		_exit(127);
+	}
+	while (waitpid(pid, NULL, 0) < 0 && errno == EINTR)
+		;
+	return true;
+}

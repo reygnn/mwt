@@ -10,6 +10,9 @@
  *   Mwt*minimumContrast:       3           text below that contrast to its
  *                                          background is drawn in the
  *                                          foreground or background; 0: off
+ *   Mwt*urlLauncher:           firefox --new-tab   what Ctrl+click opens a URL
+ *                                          with, the URL after its words;
+ *                                          default xdg-open
  *
  * Names and the app_id are compared ignoring case. Lines starting with ! are
  * comments; there are no comments after a value. */
@@ -23,14 +26,15 @@
 
 #include "rc.h"
 
-enum { FG, BG, CURSOR, SEL_FG, SEL_BG, COLOR0, MIN_CONTRAST = COLOR0 + 16, N_RES };
+enum { FG, BG, CURSOR, SEL_FG, SEL_BG, COLOR0, MIN_CONTRAST = COLOR0 + 16, URL_LAUNCHER,
+	N_RES };
 
 static const char *const names[N_RES] = {
 	"foreground", "background", "cursorColor", "selectionForeground",
 	"selectionBackground",
 	"color0", "color1", "color2", "color3", "color4", "color5", "color6",
 	"color7", "color8", "color9", "color10", "color11", "color12", "color13",
-	"color14", "color15", "minimumContrast",
+	"color14", "color15", "minimumContrast", "urlLauncher",
 };
 
 static char *trim(char *s)
@@ -89,6 +93,7 @@ void rc_read(FILE *f, const char *path, const char *app_id, struct rc_colors *c)
 	/* [0] from global lines, [1] from lines for app_id */
 	uint32_t val[2][N_RES];
 	float num[2]; /* minimumContrast */
+	char str[2][sizeof c->launcher]; /* urlLauncher */
 	bool set[2][N_RES] = { { false } };
 	char *line = NULL;
 	size_t cap = 0;
@@ -131,7 +136,15 @@ void rc_read(FILE *f, const char *path, const char *app_id, struct rc_colors *c)
 			fprintf(stderr, "mwt: %s:%d: unknown resource %s\n", path, no, res);
 			continue;
 		}
-		if (r == MIN_CONTRAST) {
+		if (r == URL_LAUNCHER) {
+			size_t n = strlen(value);
+			if (!n || n >= sizeof str[lvl]) {
+				fprintf(stderr, "mwt: %s:%d: urlLauncher: %s\n", path, no,
+					n ? "too long" : "empty");
+				continue;
+			}
+			memcpy(str[lvl], value, n + 1);
+		} else if (r == MIN_CONTRAST) {
 			char *end;
 			double v = strtod(value, &end);
 			if (end == value || *end || !(v >= 0 && v <= 21)) {
@@ -156,6 +169,9 @@ void rc_read(FILE *f, const char *path, const char *app_id, struct rc_colors *c)
 	for (int lvl = 0; lvl < 2; lvl++)
 		if (set[lvl][MIN_CONTRAST])
 			c->min_contrast = num[lvl];
+	for (int lvl = 0; lvl < 2; lvl++)
+		if (set[lvl][URL_LAUNCHER])
+			memcpy(c->launcher, str[lvl], sizeof c->launcher);
 	for (int r = 0; r < MIN_CONTRAST; r++) {
 		for (int lvl = 0; lvl < 2; lvl++)
 			if (set[lvl][r])

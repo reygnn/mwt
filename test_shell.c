@@ -947,6 +947,127 @@ static void test_read_turn(void)
 	close(m);
 }
 
+/* What the opener got, from the file its script wrote and renamed to path once
+ * whole; NULL when nothing came within 5 s. Polled, the opener is no child. */
+static char *opener_output(const char *path)
+{
+	static char buf[4096];
+	for (int64_t end = now_ms() + 5000; now_ms() < end;) {
+		FILE *f = fopen(path, "r");
+		if (f) {
+			size_t n = fread(buf, 1, sizeof buf - 1, f);
+			buf[n] = '\0';
+			fclose(f);
+			unlink(path);
+			return buf;
+		}
+		poll(NULL, 0, 10);
+	}
+	return NULL;
+}
+
+static void test_opener(void)
+{
+	char dir[] = "/tmp/test_shell.XXXXXX";
+	if (!mkdtemp(dir)) {
+		perror("mkdtemp");
+		exit(1);
+	}
+	char out[256], tmp[256], script[2048];
+	snprintf(out, sizeof out, "%s/out", dir);
+	snprintf(tmp, sizeof tmp, "%s/tmp", dir);
+	/* stdout on the file for good: a redirection of each command would keep
+	 * the old one on an fd of the shell's while ls looks */
+	snprintf(script, sizeof script,
+		 "exec >%s; echo \"T=${XDG_ACTIVATION_TOKEN-unset} U=$1 N=$#\"; "
+		 "echo \"S=$(cut -d' ' -f6 /proc/$$/stat) P=$(cut -d' ' -f4 /proc/$$/stat)\"; "
+		 "ls -m /proc/$$/fd; readlink /proc/$$/fd/0; "
+		 "grep '^Sig\\(Ign\\|Blk\\)' /proc/$$/status; mv %s %s",
+		 tmp, tmp, out);
+	char *argv[] = { "sh", "-c", script, "opener", "http://a.b/c?d=e&f", NULL };
+
+	/* what mwt has open, ignores and blocks is not for the opener */
+	int fd = open("/dev/null", O_RDONLY);
+	CHECK(dup2(fd, 3) == 3 && dup2(fd, 50) == 50);
+	if (fd != 3)
+		close(fd);
+	signal(SIGINT, SIG_IGN);
+	sigset_t block, old;
+	sigemptyset(&block);
+	sigaddset(&block, SIGTERM);
+	sigprocmask(SIG_BLOCK, &block, &old);
+	CHECK(opener_spawn(argv, "tok-123"));
+	sigprocmask(SIG_SETMASK, &old, NULL);
+	signal(SIGINT, SIG_DFL);
+	close(50);
+	close(3);
+	/* the child between was reaped, the opener is not one */
+	errno = 0;
+	CHECK(waitpid(-1, NULL, WNOHANG) < 0 && errno == ECHILD);
+
+	char *got = opener_output(out);
+	CHECK(got);
+	if (got) {
+		CHECK(strstr(got, "T=tok-123 U=http://a.b/c?d=e&f N=1\n"));
+		/* a session of its own, and another parent than mwt */
+		int sid = -1, ppid = -1;
+		char *sp = strstr(got, "S=");
+		CHECK(sp && sscanf(sp, "S=%d P=%d", &sid, &ppid) == 2);
+		CHECK(sid > 0 && sid != getsid(0) && ppid != getpid());
+		CHECK(strstr(got, "\n0, 1, 2\n/dev/null\n"));
+		CHECK(strstr(got, "SigBlk:\t0000000000000000"));
+		CHECK(strstr(got, "SigIgn:\t0000000000000000"));
+	}
+
+	/* without a token, one mwt was started with does not reach it */
+	setenv("XDG_ACTIVATION_TOKEN", "stale", 1);
+	CHECK(opener_spawn(argv, NULL));
+	got = opener_output(out);
+	CHECK(got && strstr(got, "T=unset U=http://a.b/c?d=e&f"));
+	unsetenv("XDG_ACTIVATION_TOKEN");
+
+	/* the mask straight, without a shell between: dash clears it itself */
+	snprintf(tmp, sizeof tmp, "%s/mask", dir);
+	int file = open(tmp, O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0600);
+	int saved1 = dup(1), saved2 = dup(2), null2 = open("/dev/null", O_WRONLY);
+	char *mask[] = { "grep", "-h", "^SigBlk", "/proc/self/status", "nofile", NULL };
+	sigprocmask(SIG_BLOCK, &block, &old);
+	dup2(file, 1);
+	dup2(null2, 2); /* grep on "nofile" */
+	CHECK(opener_spawn(mask, "t"));
+	dup2(saved1, 1);
+	dup2(saved2, 2);
+	sigprocmask(SIG_SETMASK, &old, NULL);
+	close(saved1);
+	close(saved2);
+	close(null2);
+	close(file);
+	char line[128] = "";
+	for (int64_t end = now_ms() + 5000; now_ms() < end && !strchr(line, '\n');) {
+		FILE *f = fopen(tmp, "r");
+		if (f) {
+			size_t n = fread(line, 1, sizeof line - 1, f);
+			line[n] = '\0';
+			fclose(f);
+		}
+		poll(NULL, 0, 10);
+	}
+	CHECK(!strcmp(line, "SigBlk:\t0000000000000000\n"));
+	unlink(tmp);
+
+	/* a program that is not there: started all the same, and reaped */
+	char *none[] = { "/nonexistent/opener", "u", NULL };
+	int saved = dup(2), null = open("/dev/null", O_WRONLY);
+	dup2(null, 2); /* its message */
+	CHECK(opener_spawn(none, "t"));
+	dup2(saved, 2);
+	close(saved);
+	close(null);
+	errno = 0;
+	CHECK(waitpid(-1, NULL, WNOHANG) < 0 && errno == ECHILD);
+	rmdir(dir);
+}
+
 int main(void)
 {
 	signal(SIGPIPE, SIG_IGN); /* as mwt */
@@ -962,6 +1083,7 @@ int main(void)
 	test_gone();
 	test_spawn();
 	test_hangup();
+	test_opener();
 	printf("test_shell: %d/%d checks passed\n", checks - failures, checks);
 	return failures != 0;
 }

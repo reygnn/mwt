@@ -42,6 +42,7 @@
 #include "box.h"
 #include "font.h"
 #include "input.h"
+#include "link.h"
 #include "paste.h"
 #include "sel.h"
 #include "shell.h"
@@ -51,6 +52,14 @@
 #define MIN(a, b) ((a) < (b) ? (a) : (b))
 #define MAX(a, b) ((a) > (b) ? (a) : (b))
 #define LEN(a) (sizeof(a) / sizeof((a)[0]))
+
+/* a mouse pointer image on a surface of its own */
+struct pcursor {
+	struct wl_cursor_image *image;
+	struct wl_surface *surface;
+	struct wp_viewport *viewport;
+	int hx, hy; /* hotspot, logical */
+};
 
 struct buffer {
 	struct wl_buffer *wb;
@@ -139,10 +148,8 @@ static struct {
 
 	/* pointer */
 	struct wl_cursor_theme *cursor_theme;
-	struct wl_cursor_image *cursor_image;
-	struct wl_surface *cursor_surface;
-	struct wp_viewport *cursor_viewport;
-	int cursor_hx, cursor_hy; /* hotspot, logical */
+	struct pcursor text, hand; /* the hand over a link, if the theme has one */
+	struct pcursor *shown;     /* the one set since the last enter, or NULL */
 	bool cursor_retry;        /* the last load failed: try again on the next enter */
 	uint32_t enter_serial;
 	double px, py;
@@ -150,6 +157,10 @@ static struct {
 	struct buttons buttons;
 	struct input_axis axis; /* the wheel and touchpad, a wl_pointer.frame at a time */
 	struct clicks clicks;
+	struct link link;   /* the URL under the pointer, shown while Ctrl is held */
+	bool link_on;
+	bool link_pressed;  /* button 1 opened a link: its release selects nothing */
+	char *menu_link;    /* the URL the menu was opened on, for Open link */
 
 	struct sel sel;
 	char *clip_text, *prim_text;
@@ -173,10 +184,13 @@ static struct {
 		int w, h; /* logical */
 		int row_h; /* buffer pixels */
 		int hover, pressed; /* item, or -1 */
+		int first; /* the first item shown: Open link only on a link */
 		bool configured, dirty;
 	} menu;
 	struct wl_surface *ptr_surface; /* the surface the pointer is on */
 } t = { .pty = -1, .repeat_fd = -1, .paste_fd = -1, .child = { 0, -1 }, .scale = 1 };
+
+static void link_hover(void);
 
 static void die(const char *msg)
 {
@@ -681,6 +695,7 @@ static void load_colors(const char *app_id)
 		.cursor = color_cursor, .sel_fg = color_sel_fg, .sel_bg = color_sel_bg,
 		.min_contrast = min_contrast };
 	memcpy(t.col.palette, colors16, sizeof(t.col.palette));
+	snprintf(t.col.launcher, sizeof t.col.launcher, "%s", url_launcher);
 	char path[4096];
 	if (!rc_path(path, sizeof(path)))
 		return;
@@ -823,6 +838,10 @@ static void draw_row(struct buffer *b, int r, bool sel, int64_t ba, int bc,
 			bool cur = cur_row && (vt->c.x == col || (span == 2 && vt->c.x == col + 1));
 			/* a blank's colors only for its background: no readable() for it,
 			 * which would evict the one entry between two words */
+			bool linked = t.link_on && sel_covers(t.link.ba, t.link.bc, t.link.ea,
+							       t.link.ec, abs, col, span);
+			if (linked)
+				c.attr |= ATTR_UNDERLINE;
 			bool ink = !(c.attr & ATTR_INVISIBLE) &&
 				   (c.cp > ' ' || (c.attr & (ATTR_UNDERLINE | ATTR_STRIKE)));
 			if (pass == 1 && !ink && !cur) {
@@ -1070,6 +1089,8 @@ static void draw(void)
 	struct vt *vt = t.vt;
 	int W = t.width * t.scale, H = t.height * t.scale;
 
+	/* the text under the pointer may have changed, or the view */
+	link_hover();
 	/* first, so that buffer_catch_up knows the rows of the cursor are drawn anew */
 	bool shown = cursor_shown();
 	if (shown != t.last_shown || vt->c.x != t.last_cx || vt->c.y != t.last_cy) {
@@ -1170,10 +1191,21 @@ static void paste_clipboard(void)
 	paste(false);
 }
 
+static void link_open(char *url, uint32_t serial);
+
+static void open_menu_link(void)
+{
+	char *url = t.menu_link;
+	t.menu_link = NULL;
+	if (url) /* t.serial: the click or key that chose it */
+		link_open(url, t.serial);
+}
+
 static const struct {
 	const char *label, *keys;
 	void (*run)(void);
 } menu_items[] = {
+	{ "Open link", "Ctrl+click", open_menu_link },
 	{ "Copy", "Ctrl+Shift+C", copy_clipboard },
 	{ "Paste", "Ctrl+Shift+V", paste_clipboard },
 	{ "Select all", "Ctrl+Shift+A", select_all },
@@ -1187,7 +1219,8 @@ static bool in_menu(void)
 
 static bool menu_enabled(int i)
 {
-	return menu_items[i].run == copy_clipboard ? t.sel.active :
+	return menu_items[i].run == open_menu_link ? t.menu_link != NULL :
+	       menu_items[i].run == copy_clipboard ? t.sel.active :
 	       menu_items[i].run == paste_clipboard ? t.clip_offer != NULL : true;
 }
 
@@ -1208,6 +1241,7 @@ static void menu_close(void)
 		}
 	}
 	memset(&t.menu, 0, sizeof t.menu);
+	link_hover();
 }
 
 static void menu_text(struct buffer *b, const char *s, int x, int y, uint32_t fg)
@@ -1240,8 +1274,8 @@ static void menu_draw(struct buffer *b)
 	int border = t.scale;
 	fill_rect(b, 0, 0, W, H, t.col.sel_bg);
 	fill_rect(b, border, border, W - 2 * border, H - 2 * border, t.col.bg);
-	for (int i = 0; i < (int)LEN(menu_items); i++) {
-		int y = border + i * t.menu.row_h;
+	for (int i = t.menu.first; i < (int)LEN(menu_items); i++) {
+		int y = border + (i - t.menu.first) * t.menu.row_h;
 		bool on = menu_enabled(i), hover = i == t.menu.hover;
 		uint32_t fg = !on ? blend(t.col.bg, t.col.fg, MENU_DISABLED_ALPHA) & 0xffffff : t.col.fg;
 		if (hover) {
@@ -1273,7 +1307,7 @@ static void menu_set_hover(int i)
 /* the item at y (logical, within the popup) */
 static void menu_pointer(double y)
 {
-	int i = ((int)(y * t.scale) - t.scale) / t.menu.row_h;
+	int i = t.menu.first + ((int)(y * t.scale) - t.scale) / t.menu.row_h;
 	menu_set_hover(y >= 1 && i < (int)LEN(menu_items) && menu_enabled(i) ? i : -1);
 }
 
@@ -1294,7 +1328,7 @@ static void menu_button(bool press)
 
 static void menu_key(xkb_keysym_t sym)
 {
-	int n = LEN(menu_items), step = 0;
+	int first = t.menu.first, n = LEN(menu_items) - first, step = 0;
 	switch (sym) {
 	case XKB_KEY_Escape:
 		menu_close();
@@ -1314,8 +1348,9 @@ static void menu_key(xkb_keysym_t sym)
 	}
 	unsigned on = 0;
 	for (int i = 0; i < n; i++)
-		on |= menu_enabled(i) ? 1u << i : 0;
-	menu_set_hover(menu_next(t.menu.hover, n, step, on));
+		on |= menu_enabled(first + i) ? 1u << i : 0;
+	int i = menu_next(t.menu.hover >= 0 ? t.menu.hover - first : -1, n, step, on);
+	menu_set_hover(i >= 0 ? first + i : -1);
 }
 
 static void menu_configure(void *d, struct xdg_surface *xs, uint32_t serial)
@@ -1358,8 +1393,15 @@ static void menu_open(void)
 		return;
 	t.menu.row_h = t.ch + 2 * t.pad;
 	t.menu.hover = t.menu.pressed = -1;
+	/* the URL at the pointer now: the text may move before an item is chosen */
+	free(t.menu_link);
+	t.menu_link = NULL;
+	struct link l;
+	link_at(t.vt, (int64_t)t.vt->scrolled - t.vt->view + t.mrow, t.mcol, &l, &t.menu_link);
+	t.menu.first = t.menu_link ? 0 : 1;
 	t.menu.w = (MENU_COLS * t.cw + 2 * t.scale + t.scale - 1) / t.scale;
-	t.menu.h = ((int)LEN(menu_items) * t.menu.row_h + 2 * t.scale + t.scale - 1) / t.scale;
+	t.menu.h = (((int)LEN(menu_items) - t.menu.first) * t.menu.row_h + 2 * t.scale +
+		    t.scale - 1) / t.scale;
 
 	stop_repeat(); /* the menu takes the keys, the release may never come here */
 	t.menu.surface = wl_compositor_create_surface(t.compositor);
@@ -1399,6 +1441,7 @@ static void menu_open(void)
 	xdg_popup_add_listener(t.menu.popup, &popup_listener, NULL);
 	xdg_popup_grab(t.menu.popup, t.seat, t.serial);
 	wl_surface_commit(t.menu.surface);
+	link_hover();
 }
 
 /* ---- sizing ----------------------------------------------------------- */
@@ -1455,33 +1498,28 @@ static int cursor_size(void)
 	return errno == ERANGE || n > CURSOR_SIZE_MAX ? CURSOR_SIZE_MAX : (int)n;
 }
 
-/* The new theme is loaded before the old one goes, so the cursor surface never holds
- * a buffer of a destroyed theme; if it fails, the old one stays. */
-static void load_cursor_theme(void)
+/* The first image of the first of names the theme has, or NULL. */
+static struct wl_cursor_image *cursor_find(struct wl_cursor_theme *theme,
+					   const char *const *names, size_t n)
 {
-	int px = (int)MIN((long)cursor_size() * t.scale, 4096);
-	struct wl_cursor_theme *theme = wl_cursor_theme_load(getenv("XCURSOR_THEME"), px, t.shm);
-	struct wl_cursor_image *img = NULL;
-	static const char *names[] = { "text", "xterm", "left_ptr", "default" };
-	for (size_t i = 0; theme && i < LEN(names) && !img; i++) {
+	for (size_t i = 0; theme && i < n; i++) {
 		struct wl_cursor *c = wl_cursor_theme_get_cursor(theme, names[i]);
 		if (c && c->image_count)
-			img = c->images[0];
+			return c->images[0];
 	}
+	return NULL;
+}
+
+/* img on pc's surface, made if need be; false when there is none or no buffer. */
+static bool cursor_put(struct pcursor *pc, struct wl_cursor_image *img)
+{
 	struct wl_buffer *wb = img ? wl_cursor_image_get_buffer(img) : NULL;
-	t.cursor_retry = !wb;
-	if (!wb) {
-		if (theme)
-			wl_cursor_theme_destroy(theme);
-		return;
-	}
-	if (!t.cursor_surface)
-		t.cursor_surface = wl_compositor_create_surface(t.compositor);
-	if (!t.cursor_surface) { /* out of memory: the compositor's pointer, tried again */
-		wl_cursor_theme_destroy(theme);
-		t.cursor_retry = true;
-		return;
-	}
+	if (!wb)
+		return false;
+	if (!pc->surface)
+		pc->surface = wl_compositor_create_surface(t.compositor);
+	if (!pc->surface) /* out of memory: the compositor's pointer, tried again */
+		return false;
 	/* The theme may not have the size asked for: Adwaita gives 64 for 72 at scale 3.
 	 * A buffer scale must divide the buffer's size, or the surface is in error; take
 	 * the largest that does, and let a viewport shrink the image the rest. */
@@ -1490,32 +1528,63 @@ static void load_cursor_theme(void)
 	while (bscale > 1 && (w % bscale || h % bscale))
 		bscale--;
 	int dw = w / bscale, dh = h / bscale;
-	if (bscale != t.scale && t.viewporter && !t.cursor_viewport)
-		t.cursor_viewport = wp_viewporter_get_viewport(t.viewporter, t.cursor_surface);
+	if (bscale != t.scale && t.viewporter && !pc->viewport)
+		pc->viewport = wp_viewporter_get_viewport(t.viewporter, pc->surface);
 	/* without a viewport, out of memory, the largest scale that divides */
-	if (bscale != t.scale && t.cursor_viewport) {
+	if (bscale != t.scale && pc->viewport) {
 		bscale = 1;
 		dw = MAX(1, (w + t.scale / 2) / t.scale);
 		dh = MAX(1, (h + t.scale / 2) / t.scale);
-		wp_viewport_set_destination(t.cursor_viewport, dw, dh);
-	} else if (t.cursor_viewport) {
-		wp_viewport_destroy(t.cursor_viewport);
-		t.cursor_viewport = NULL;
+		wp_viewport_set_destination(pc->viewport, dw, dh);
+	} else if (pc->viewport) {
+		wp_viewport_destroy(pc->viewport);
+		pc->viewport = NULL;
 	}
-	t.cursor_hx = (int)(img->hotspot_x * dw + w / 2) / w;
-	t.cursor_hy = (int)(img->hotspot_y * dh + h / 2) / h;
-	wl_surface_set_buffer_scale(t.cursor_surface, bscale);
-	wl_surface_attach(t.cursor_surface, wb, 0, 0);
-	wl_surface_damage_buffer(t.cursor_surface, 0, 0, INT32_MAX, INT32_MAX);
-	wl_surface_commit(t.cursor_surface);
+	pc->hx = (int)(img->hotspot_x * dw + w / 2) / w;
+	pc->hy = (int)(img->hotspot_y * dh + h / 2) / h;
+	wl_surface_set_buffer_scale(pc->surface, bscale);
+	wl_surface_attach(pc->surface, wb, 0, 0);
+	wl_surface_damage_buffer(pc->surface, 0, 0, INT32_MAX, INT32_MAX);
+	wl_surface_commit(pc->surface);
+	pc->image = img;
+	return true;
+}
+
+/* The hand over a link while Ctrl is held, else the text cursor; set only when
+ * it changes, or with force after an enter or a new image. */
+static void cursor_update(bool force)
+{
+	if (!t.pointer || !t.ptr_surface)
+		return;
+	struct pcursor *pc = t.ptr_surface == t.surface && t.link_on && t.hand.image ?
+		&t.hand : &t.text;
+	if (!pc->image || (pc == t.shown && !force))
+		return;
+	wl_pointer_set_cursor(t.pointer, t.enter_serial, pc->surface, pc->hx, pc->hy);
+	t.shown = pc;
+}
+
+/* The new theme is loaded before the old one goes, so the cursor surfaces never
+ * hold a buffer of a destroyed theme; if it fails, the old one stays. */
+static void load_cursor_theme(void)
+{
+	int px = (int)MIN((long)cursor_size() * t.scale, 4096);
+	struct wl_cursor_theme *theme = wl_cursor_theme_load(getenv("XCURSOR_THEME"), px, t.shm);
+	static const char *const text[] = { "text", "xterm", "left_ptr", "default" };
+	static const char *const hand[] = { "pointer", "hand2", "hand1", "hand" };
+	t.cursor_retry = !cursor_put(&t.text, cursor_find(theme, text, LEN(text)));
+	if (t.cursor_retry) {
+		if (theme)
+			wl_cursor_theme_destroy(theme);
+		return;
+	}
+	if (!cursor_put(&t.hand, cursor_find(theme, hand, LEN(hand))))
+		t.hand.image = NULL; /* the text cursor over links too */
 	/* The hotspot changes with the image; set it now, not on the next enter. */
-	if (t.ptr_surface && t.pointer)
-		wl_pointer_set_cursor(t.pointer, t.enter_serial, t.cursor_surface,
-				      t.cursor_hx, t.cursor_hy);
+	cursor_update(true);
 	if (t.cursor_theme)
 		wl_cursor_theme_destroy(t.cursor_theme);
 	t.cursor_theme = theme;
-	t.cursor_image = img;
 }
 
 static void reload_font(double pt, int scale)
@@ -1566,6 +1635,7 @@ static void zoom(int delta)
 }
 
 /* ---- keyboard --------------------------------------------------------- */
+
 
 static void view(int delta)
 {
@@ -1656,6 +1726,7 @@ static void kb_leave(void *d, struct wl_keyboard *kb, uint32_t serial, struct wl
 		xkb_compose_state_reset(t.compose);
 	/* Shift let go elsewhere would still count, for Shift+wheel or a click */
 	input_leave(t.xkb_state);
+	link_hover();
 	/* the menu going away reports a leave too, without a surface */
 	if ((s && s == t.menu.surface) || !t.focused)
 		return;
@@ -1702,6 +1773,7 @@ static void kb_modifiers(void *d, struct wl_keyboard *kb, uint32_t serial, uint3
 	(void)d; (void)kb; (void)serial;
 	if (t.xkb_state)
 		xkb_state_update_mask(t.xkb_state, dep, lat, lock, 0, 0, group);
+	link_hover(); /* Ctrl */
 }
 
 static void kb_repeat_info(void *d, struct wl_keyboard *kb, int32_t rate, int32_t delay)
@@ -1734,23 +1806,84 @@ static void pointer_cell(int *col, int *row)
 	input_cell(t.px, t.py, t.scale, t.pad, t.cw, t.ch, t.vt->cols, t.vt->rows, col, row);
 }
 
+/* The URL under the pointer is underlined and the pointer a hand while Ctrl is
+ * held and a click would open it: not while a program has the mouse, nor in a
+ * drag, nor with the menu open. */
+static void link_hover(void)
+{
+	struct link l;
+	bool on = t.vt && t.ptr_surface && t.ptr_surface == t.surface && !t.menu.popup &&
+		  (input_mods(t.xkb_state) & VT_MOD_CTRL) && !t.sel.dragging &&
+		  !(t.buttons.held & t.buttons.program) && !mouse_mode() &&
+		  link_at(t.vt, (int64_t)t.vt->scrolled - t.vt->view + t.mrow, t.mcol, &l, NULL);
+	if (on == t.link_on && (!on || link_same(&l, &t.link)))
+		return;
+	if (t.link_on)
+		sel_mark_lines(t.vt, t.link.ba, t.link.ea);
+	if (on) {
+		t.link = l;
+		sel_mark_lines(t.vt, l.ba, l.ea);
+	}
+	t.link_on = on;
+	t.need_redraw = true;
+	cursor_update(false);
+}
+
+static void link_launch(const char *url, const char *token)
+{
+	char buf[sizeof t.col.launcher];
+	char *argv[32];
+	if (!link_argv(t.col.launcher, url, buf, sizeof buf, argv, LEN(argv)))
+		fprintf(stderr, "mwt: urlLauncher \"%s\": too many words\n", t.col.launcher);
+	else if (!opener_spawn(argv, token))
+		fprintf(stderr, "mwt: cannot start %s: %s\n", argv[0], strerror(errno));
+}
+
+static void link_token_done(void *d, struct xdg_activation_token_v1 *tok, const char *token)
+{
+	link_launch(d, token);
+	free(d);
+	xdg_activation_token_v1_destroy(tok);
+}
+static const struct xdg_activation_token_v1_listener link_token_listener = { link_token_done };
+
+/* Opens url, which it frees, with a token for the click or key of serial: the
+ * browser may take the focus with it, as the bell's token without a serial
+ * may not (CAVEATS.md). Without xdg-activation, without a token. */
+static void link_open(char *url, uint32_t serial)
+{
+	struct xdg_activation_token_v1 *tok = t.activation && t.seat ?
+		xdg_activation_v1_get_activation_token(t.activation) : NULL;
+	if (!tok) {
+		link_launch(url, NULL);
+		free(url);
+		return;
+	}
+	xdg_activation_token_v1_add_listener(tok, &link_token_listener, url);
+	xdg_activation_token_v1_set_serial(tok, serial, t.seat);
+	xdg_activation_token_v1_set_surface(tok, t.surface);
+	xdg_activation_token_v1_commit(tok);
+}
+
 static void ptr_enter(void *d, struct wl_pointer *p, uint32_t serial,
 		      struct wl_surface *s, wl_fixed_t x, wl_fixed_t y)
 {
-	(void)d;
+	(void)d; (void)p;
 	t.enter_serial = serial;
 	t.ptr_surface = s;
-	if (t.cursor_retry)
-		load_cursor_theme(); /* sets the cursor if it works now */
-	else if (t.cursor_image)
-		wl_pointer_set_cursor(p, serial, t.cursor_surface, t.cursor_hx, t.cursor_hy);
+	t.shown = NULL; /* none set for this enter yet */
 	if (in_menu()) {
 		menu_pointer(wl_fixed_to_double(y));
-		return;
+	} else {
+		t.px = wl_fixed_to_double(x);
+		t.py = wl_fixed_to_double(y);
+		pointer_cell(&t.mcol, &t.mrow);
+		link_hover(); /* first: the cursor for it is the one to set */
 	}
-	t.px = wl_fixed_to_double(x);
-	t.py = wl_fixed_to_double(y);
-	pointer_cell(&t.mcol, &t.mrow);
+	if (t.cursor_retry)
+		load_cursor_theme(); /* sets the cursor if it works now */
+	else
+		cursor_update(false);
 }
 
 static void ptr_leave(void *d, struct wl_pointer *p, uint32_t serial, struct wl_surface *s)
@@ -1759,6 +1892,7 @@ static void ptr_leave(void *d, struct wl_pointer *p, uint32_t serial, struct wl_
 	if (in_menu())
 		menu_set_hover(-1);
 	t.ptr_surface = NULL;
+	link_hover();
 }
 
 static void ptr_motion(void *d, struct wl_pointer *p, uint32_t time, wl_fixed_t x, wl_fixed_t y)
@@ -1775,6 +1909,7 @@ static void ptr_motion(void *d, struct wl_pointer *p, uint32_t time, wl_fixed_t 
 	bool moved = input_moved(t.vt->mode, col, row, t.mcol, t.mrow);
 	t.mcol = col;
 	t.mrow = row;
+	link_hover();
 	if (t.menu.popup)
 		return;
 
@@ -1831,7 +1966,15 @@ static void ptr_button(void *d, struct wl_pointer *p, uint32_t serial, uint32_t 
 		return;
 	}
 	int64_t abs = (int64_t)t.vt->scrolled - t.vt->view + t.mrow;
-	if (b == 0 && press && t.sel.active && (input_mods(t.xkb_state) & VT_MOD_SHIFT)) {
+	struct link l;
+	char *url = NULL;
+	if (b == 0 && !press && t.link_pressed) {
+		t.link_pressed = false;
+	} else if (b == 0 && press && (input_mods(t.xkb_state) & VT_MOD_CTRL) &&
+		   link_at(t.vt, abs, t.mcol, &l, &url)) {
+		t.link_pressed = true; /* Ctrl+click on a URL opens it, selects nothing */
+		link_open(url, serial);
+	} else if (b == 0 && press && t.sel.active && (input_mods(t.xkb_state) & VT_MOD_SHIFT)) {
 		sel_mark(t.vt, &t.sel);
 		sel_extend(&t.sel, abs, t.mcol); /* Shift extends the selection */
 		sel_mark(t.vt, &t.sel);
@@ -1855,6 +1998,7 @@ static void ptr_button(void *d, struct wl_pointer *p, uint32_t serial, uint32_t 
 		}
 		menu_open();
 	}
+	link_hover(); /* a drag begun or ended */
 }
 
 /* one step of the wheel on axis a, positive down or right */

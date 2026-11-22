@@ -25,7 +25,7 @@ primary-selection-unstable-v1_XML = $(WP)/unstable/primary-selection/primary-sel
 
 PROTO_H = $(PROTOS:=-client-protocol.h)
 PROTO_C = $(PROTOS:=-protocol.c)
-OBJ = mwt.o vt.o font.o box.o rc.o input.o paste.o sel.o shell.o util.o $(PROTO_C:.c=.o)
+OBJ = mwt.o vt.o font.o box.o rc.o input.o link.o paste.o sel.o shell.o util.o $(PROTO_C:.c=.o)
 
 # version.h and the commit it appends to the version
 VERSION_H = version.h build/gitversion.h
@@ -49,16 +49,17 @@ mwt: $(OBJ)
 	$(CC) $(LDFLAGS) -o $@ $(OBJ) $(LDLIBS)
 
 # mwt that answers DECRQCRA, which esctest reads the screen with; see allow_checksum.
-mwt-esctest: mwt.c config.h $(VERSION_H) vt.h box.h font.h rc.h input.h paste.h sel.h shell.h util.h $(PROTO_H) $(filter-out mwt.o,$(OBJ))
+mwt-esctest: mwt.c config.h $(VERSION_H) vt.h box.h font.h rc.h input.h link.h paste.h sel.h shell.h util.h $(PROTO_H) $(filter-out mwt.o,$(OBJ))
 	$(CC) $(CFLAGS) -DMWT_ALLOW_CHECKSUM $(LDFLAGS) -o $@ mwt.c $(filter-out mwt.o,$(OBJ)) $(LDLIBS)
 
-mwt.o: mwt.c config.h $(VERSION_H) vt.h box.h font.h rc.h input.h paste.h sel.h shell.h util.h $(PROTO_H)
+mwt.o: mwt.c config.h $(VERSION_H) vt.h box.h font.h rc.h input.h link.h paste.h sel.h shell.h util.h $(PROTO_H)
 vt.o: vt.c vt.h $(VERSION_H)
 font.o: font.c font.h box.h
 box.o: box.c box.h
 rc.o: rc.c rc.h
 input.o: input.c input.h vt.h
 paste.o: paste.c paste.h
+link.o: link.c link.h vt.h paste.h
 sel.o: sel.c sel.h vt.h paste.h
 shell.o: shell.c shell.h paste.h
 util.o: util.c util.h
@@ -93,6 +94,11 @@ test_paste: test_paste.c paste.c paste.h
 test_sel: test_sel.c sel.c sel.h paste.c paste.h vt.c vt.h $(VERSION_H)
 	$(CC) $(TEST_CFLAGS) -Wl,--wrap=malloc,--wrap=calloc,--wrap=realloc -o $@ test_sel.c sel.c paste.c vt.c
 
+# URLs over lines the VT core holds, and the opener's words; each allocation
+# fails once through --wrap.
+test_link: test_link.c link.c link.h paste.c paste.h vt.c vt.h $(VERSION_H)
+	$(CC) $(TEST_CFLAGS) -Wl,--wrap=malloc,--wrap=calloc,--wrap=realloc -o $@ test_link.c link.c paste.c vt.c
+
 # The shell and its pty with real ptys, pipes and processes, close_range refused
 # by seccomp; kill, realloc and opendir through --wrap, as small working fakes.
 test_shell: test_shell.c shell.c shell.h paste.c paste.h
@@ -108,15 +114,16 @@ test_box: test_box.c box.c box.h
 	$(CC) $(TEST_CFLAGS) -o $@ test_box.c box.c -lm
 
 # The unit tests (test_vt, test_rc, test_input, test_paste, test_sel,
-# test_shell, test_util, test_box), mwt's command line without a compositor (tests/args.sh), then
+# test_link, test_shell, test_util, test_box), mwt's command line without a compositor (tests/args.sh), then
 # every input kept in tests/fuzz-regress through the checks of tests/fuzz_vt.c;
 # no clang needed.
-check: test_vt test_rc test_input test_paste test_sel test_shell test_util test_box fuzz_regress mwt
+check: test_vt test_rc test_input test_paste test_sel test_link test_shell test_util test_box fuzz_regress mwt
 	./test_vt
 	./test_rc
 	./test_input
 	./test_paste
 	./test_sel
+	./test_link
 	./test_shell
 	./test_util
 	./test_box
@@ -198,6 +205,9 @@ keys: mwt
 bell: mwt
 	tests/headless.sh tests/bell.py
 
+links: mwt
+	tests/headless.sh tests/links.py
+
 wayland: mwt
 	SWAY_WAYLAND_DEBUG=1 tests/headless.sh tests/wayland.py
 
@@ -258,8 +268,8 @@ uninstall:
 	rm -f $(DESTDIR)$(PREFIX)/share/terminfo/m/mwt $(DESTDIR)$(PREFIX)/share/terminfo/6d/mwt
 
 clean:
-	rm -f mwt mwt-esctest test_vt test_rc test_input test_paste test_sel test_shell test_util test_box vtdump test_replay fuzz_vt fuzz_regress fuzz_regress.log font_oom font_cache font_style font_lookup font_ttc font_fallback *.o $(PROTO_H) $(PROTO_C)
+	rm -f mwt mwt-esctest test_vt test_rc test_input test_paste test_sel test_link test_shell test_util test_box vtdump test_replay fuzz_vt fuzz_regress fuzz_regress.log font_oom font_cache font_style font_lookup font_ttc font_fallback *.o $(PROTO_H) $(PROTO_C)
 	rm -f build/gitversion.h
 	rmdir build 2>/dev/null || true
 
-.PHONY: all check replay fuzz terminfo keys bell wayland pixel mouse keyboard test evil fonts oldwayland width esctest profile install uninstall clean
+.PHONY: all check replay fuzz terminfo keys bell links wayland pixel mouse keyboard test evil fonts oldwayland width esctest profile install uninstall clean

@@ -7,6 +7,8 @@ cd "$(dirname "$0")/.." || exit 1
 . tests/lib.sh
 export MWT=${MWT:-$PWD/mwt}
 export VINPUT=${VINPUT:-${MWC_DIR:-../../mwc}/build/vinput}
+# tests/links.py checks the token with it where it is built (make build/xdgc in mwc)
+[ -x "${XDGC:-${MWC_DIR:-../../mwc}/build/xdgc}" ] && export XDGC=${XDGC:-$(readlink -f "${MWC_DIR:-../../mwc}/build/xdgc")}
 export PYTHONDONTWRITEBYTECODE=1
 for t in sway wtype grim tic python3; do
 	command -v "$t" >/dev/null || { echo "FAIL: $t not installed"; exit 1; }
