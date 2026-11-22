@@ -191,6 +191,7 @@ static struct {
 } t = { .pty = -1, .repeat_fd = -1, .paste_fd = -1, .child = { 0, -1 }, .scale = 1 };
 
 static void link_hover(void);
+static void pointer_cell(int *col, int *row);
 
 static void die(const char *msg)
 {
@@ -1480,6 +1481,10 @@ static void update_grid(void)
 			ioctl(t.pty, TIOCSWINSZ, &ws);
 	}
 	send_min_size();
+	/* new cells under a pointer that did not move: a zoom is Ctrl+Shift+Plus,
+	 * and the URL under it is another one now */
+	if (t.ptr_surface && t.ptr_surface == t.surface)
+		pointer_cell(&t.mcol, &t.mrow);
 	/* No vt_mark_all: a new grid is marked by vt_resize, new cells or a new
 	 * window size draw whole (need_full, a new buffer). sway configures at
 	 * each focus change, and that redrew every row. */
@@ -1834,7 +1839,8 @@ static void link_launch(const char *url, const char *token)
 	char buf[sizeof t.col.launcher];
 	char *argv[32];
 	if (!link_argv(t.col.launcher, url, buf, sizeof buf, argv, LEN(argv)))
-		fprintf(stderr, "mwt: urlLauncher \"%s\": too many words\n", t.col.launcher);
+		fprintf(stderr, "mwt: urlLauncher \"%s\": no command, too long or more than %d "
+			"words\n", t.col.launcher, (int)LEN(argv) - 2);
 	else if (!opener_spawn(argv, token))
 		fprintf(stderr, "mwt: cannot start %s: %s\n", argv[0], strerror(errno));
 }
@@ -1882,8 +1888,7 @@ static void ptr_enter(void *d, struct wl_pointer *p, uint32_t serial,
 	}
 	if (t.cursor_retry)
 		load_cursor_theme(); /* sets the cursor if it works now */
-	else
-		cursor_update(false);
+	cursor_update(false); /* else the one there is, if any */
 }
 
 static void ptr_leave(void *d, struct wl_pointer *p, uint32_t serial, struct wl_surface *s)
@@ -1968,6 +1973,8 @@ static void ptr_button(void *d, struct wl_pointer *p, uint32_t serial, uint32_t 
 	int64_t abs = (int64_t)t.vt->scrolled - t.vt->view + t.mrow;
 	struct link l;
 	char *url = NULL;
+	if (b == 0 && press) /* one whose release went to the menu is over */
+		t.link_pressed = false;
 	if (b == 0 && !press && t.link_pressed) {
 		t.link_pressed = false;
 	} else if (b == 0 && press && (input_mods(t.xkb_state) & VT_MOD_CTRL) &&
@@ -2116,6 +2123,7 @@ static void seat_caps(void *d, struct wl_seat *s, uint32_t caps)
 			wl_pointer_destroy(t.pointer);
 		t.pointer = NULL;
 		t.ptr_surface = NULL;
+		link_hover(); /* no pointer, no underline */
 	}
 }
 

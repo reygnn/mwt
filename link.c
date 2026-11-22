@@ -58,28 +58,28 @@ static size_t scheme_at(const struct lcell *c, size_t i, size_t n)
 	return 0;
 }
 
-static size_t count(const struct lcell *c, size_t a, size_t b, uint32_t cp)
-{
-	size_t n = 0;
-	for (size_t i = a; i <= b; i++)
-		n += c[i].cp == cp;
-	return n;
-}
-
 /* The last cell of a URL from c[a] to c[b]: punctuation that ends a sentence
- * goes, and a closing bracket the URL did not open, as in "(see http://x)". */
+ * goes, and a closing bracket the URL did not open, as in "(see http://x)".
+ * The brackets counted once: a line of ))))) is trimmed in one pass. */
 static size_t trim(const struct lcell *c, size_t a, size_t b)
 {
+	size_t open[2] = { 0, 0 }, close[2] = { 0, 0 };
+	for (size_t i = a; i <= b; i++) {
+		open[0] += c[i].cp == '(';
+		close[0] += c[i].cp == ')';
+		open[1] += c[i].cp == '[';
+		close[1] += c[i].cp == ']';
+	}
 	while (b > a) {
 		uint32_t cp = c[b].cp;
-		if (cp < 0x80 && strchr(".,:;!?'*", (int)cp))
-			b--;
-		else if (cp == ')' && count(c, a, b, ')') > count(c, a, b, '('))
-			b--;
-		else if (cp == ']' && count(c, a, b, ']') > count(c, a, b, '['))
-			b--;
+		int k = cp == ')' ? 0 : cp == ']' ? 1 : -1;
+		if (k >= 0 && close[k] > open[k])
+			close[k]--;
+		else if (k < 0 && cp < 0x80 && strchr(".,:;!?'*", (int)cp))
+			;
 		else
 			break;
+		b--;
 	}
 	return b;
 }
@@ -93,14 +93,20 @@ bool link_at(const struct vt *vt, int64_t abs, int col, struct link *l, char **u
 	if (col > 0 && (row[col].attr & ATTR_WDUMMY))
 		col--; /* the right half of a wide character is its left half's */
 
-	/* the logical line around the pointer: lines that wrap into the next */
-	int64_t first = vt_abs_first(vt), a0 = abs, a1 = abs;
+	/* the logical line around the pointer: lines that wrap into the next. The
+	 * alternate screen does not go on from the history, which is the main
+	 * screen's. */
+	int64_t first = vt->mode & MODE_ALTSCREEN ? (int64_t)vt->scrolled : vt_abs_first(vt);
+	int64_t a0 = abs, a1 = abs;
 	long before = col, after = len - col;
 	while (a0 > first && before < LINK_SPAN && wraps(vt, a0 - 1)) {
 		int n;
 		vt_abs_line(vt, --a0, &n);
 		before += n;
 	}
+	/* cut off by LINK_SPAN rather than at the line's start: the first cell is
+	 * no word's beginning */
+	bool cut = a0 > first && wraps(vt, a0 - 1);
 	while (after < LINK_SPAN && wraps(vt, a1) && vt_abs_line(vt, a1 + 1, &len)) {
 		a1++;
 		after += len;
@@ -108,7 +114,7 @@ bool link_at(const struct vt *vt, int64_t abs, int col, struct link *l, char **u
 	struct lcell *c = malloc(((size_t)before + (size_t)after) * sizeof *c);
 	if (!c)
 		return false;
-	size_t n = 0, p = 0;
+	size_t n = 0, p = SIZE_MAX;
 	for (int64_t a = a0; a <= a1; a++) {
 		const struct cell *r = vt_abs_line(vt, a, &len);
 		for (int k = 0; r && k < len; k++) {
@@ -121,18 +127,19 @@ bool link_at(const struct vt *vt, int64_t abs, int col, struct link *l, char **u
 	}
 
 	bool found = false;
-	if (url_char(c[p].cp)) {
+	if (p != SIZE_MAX && url_char(c[p].cp)) {
 		/* the run of URL characters the pointer is in */
 		size_t s = p, e = p;
 		while (s > 0 && url_char(c[s - 1].cp))
 			s--;
 		while (e + 1 < n && url_char(c[e + 1].cp))
 			e++;
-		/* the last scheme at or before the pointer that begins a word */
+		/* the first scheme in the run that begins a word: one in its query
+		 * (?u=https://...) is part of it, wherever the pointer is */
 		size_t start = 0, slen = 0;
-		for (size_t i = s; i <= p; i++) {
+		for (size_t i = s; i <= p && !slen; i++) {
 			size_t k = scheme_at(c, i, e + 1);
-			if (k && (i == s || !alnum(c[i - 1].cp))) {
+			if (k && (i == s ? !(i == 0 && cut) : !alnum(c[i - 1].cp))) {
 				start = i;
 				slen = k;
 			}

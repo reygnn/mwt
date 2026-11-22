@@ -100,8 +100,10 @@ void child_hangup(struct child *c, int *pty, int ms);
  * XDG_ACTIVATION_TOKEN=token, or without one when token is NULL, stdin on
  * /dev/null, default signals, none blocked, and no file descriptor but 0 to 2.
  * Through a child that ends at once and is reaped here, so mwt has no zombie
- * and the shell's pid stays the only child it waits for. False when there is
- * no fork, with errno set; a program that is not there says so on stderr. */
+ * and the shell's pid stays the only child it waits for. Neither
+ * XDG_ACTIVATION_TOKEN nor DESKTOP_STARTUP_ID of mwt's own reach it. False when
+ * either fork fails, with errno set; a program that is not there says so on
+ * stderr. */
 bool opener_spawn(char *const argv[], const char *token);
 
 #endif

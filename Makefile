@@ -100,9 +100,9 @@ test_link: test_link.c link.c link.h paste.c paste.h vt.c vt.h $(VERSION_H)
 	$(CC) $(TEST_CFLAGS) -Wl,--wrap=malloc,--wrap=calloc,--wrap=realloc -o $@ test_link.c link.c paste.c vt.c
 
 # The shell and its pty with real ptys, pipes and processes, close_range refused
-# by seccomp; kill, realloc and opendir through --wrap, as small working fakes.
+# by seccomp; kill, realloc, opendir and fork through --wrap, as small working fakes.
 test_shell: test_shell.c shell.c shell.h paste.c paste.h
-	$(CC) $(TEST_CFLAGS) -Wl,--wrap=kill,--wrap=realloc,--wrap=opendir \
+	$(CC) $(TEST_CFLAGS) -Wl,--wrap=kill,--wrap=realloc,--wrap=opendir,--wrap=fork \
 		-o $@ test_shell.c shell.c paste.c -lutil
 
 test_util: test_util.c util.c util.h

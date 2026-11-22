@@ -309,7 +309,10 @@ bool opener_spawn(char *const argv[], const char *token)
 		return false;
 	if (pid == 0) {
 		setsid(); /* a hangup of mwt's session is not the browser's */
-		if (fork() != 0)
+		pid_t g = fork();
+		if (g < 0) /* its errno as the exit status, for mwt's message */
+			_exit(errno > 0 && errno < 256 ? errno : EAGAIN);
+		if (g > 0)
 			_exit(0);
 		for (int sig = 1; sig < NSIG; sig++)
 			signal(sig, SIG_DFL);
@@ -322,16 +325,24 @@ bool opener_spawn(char *const argv[], const char *token)
 			close(null);
 		}
 		close_from_3();
-		/* one mwt was started with is not for the link */
+		/* one mwt was started with is not for the link, nor its older
+		 * form, which GTK 3 still reads */
 		if (token)
 			setenv("XDG_ACTIVATION_TOKEN", token, 1);
 		else
 			unsetenv("XDG_ACTIVATION_TOKEN");
+		unsetenv("DESKTOP_STARTUP_ID");
 		execvp(argv[0], argv);
 		fprintf(stderr, "mwt: %s: %s\n", argv[0], strerror(errno));
 		_exit(127);
 	}
-	while (waitpid(pid, NULL, 0) < 0 && errno == EINTR)
+	int st;
+	pid_t r;
+	while ((r = waitpid(pid, &st, 0)) < 0 && errno == EINTR)
 		;
+	if (r == pid && WIFEXITED(st) && WEXITSTATUS(st)) {
+		errno = WEXITSTATUS(st); /* the second fork failed */
+		return false;
+	}
 	return true;
 }

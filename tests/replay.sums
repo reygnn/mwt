@@ -82,7 +82,7 @@ a4aed1ab1c6d2f29 grox/movglobe.vt
 dc39aa3bf7d96511 grox/newbeer.vt
 43fb37bc9b0ad99f grox/newyear.vt
 f30b9a974fa19492 grox/nifty.vt
-e7134cb34202684a grox/olimits.vt
+c46d60b32e626d9e grox/olimits.vt
 3eb1188e2d674d5a grox/paradise.vt
 b950562e82418d3e grox/peace.vt
 4246c44363c8e27c grox/prey_col.vt
@@ -93,7 +93,7 @@ c638adb3b2404404 grox/sun.vt
 6ae969690d1126a1 grox/tetris.vt
 daab0a177546e2b2 grox/turkey.vt
 44ca5d92945022ec grox/tv.vt
-e7134cb34202684a grox/twilite.vt
+c46d60b32e626d9e grox/twilite.vt
 d96b45d39274b883 grox/valentin.vt
 a32acc61de15a406 grox/vicki.vt
 677996741f5d5a64 grox/wineglas.vt
@@ -273,7 +273,7 @@ c0020dcef1689e7b textfiles/trekvid.vt
 ea8b17fe1be2b161 textfiles/turkey.vt
 44ca5d92945022ec textfiles/tv.vt
 b84e1ca47e9a2d8e textfiles/twilight.vt
-e7134cb34202684a textfiles/twilightzone.vt
+c46d60b32e626d9e textfiles/twilightzone.vt
 d96b45d39274b883 textfiles/valentin.vt
 a3bd8f5dbbd54dad textfiles/valentine.vt
 d8fefbcc252d1c1a textfiles/van_halen.vt
@@ -288,8 +288,8 @@ de69604a5942fc9c textfiles/xmas-06.vt
 564c3242222282f0 textfiles/xmas-07.vt
 b0e0ab12bd52c6f5 textfiles/xmas-08.vt
 8c3d36071568dc78 textfiles/xmas-09.vt
-956056ff97a14e1d textfiles/xmas.large
+bf7409d9ee1f1279 textfiles/xmas.large
 5da139d724d0e66c textfiles/xmas.vt
-880278a1ba93028c textfiles/xmas2.vt
+feab5dcca9706020 textfiles/xmas2.vt
 5640bc501c80f186 textfiles/xmasshort.vt
 cffde9d72cfe5b05 textfiles/zorro.vt

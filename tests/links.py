@@ -21,10 +21,15 @@ URL = "https://example.org/wiki/A_(b)?c=d"
 FG = 0xdcdccc
 
 
+mouse_xy = (0, 0)
+
+
 def at(col, row, cols=80, rows=24):
+    global mouse_xy
     x, y, w, h = rect()
     cw, ch = (w - 2 * mwtlib.PAD) // cols, (h - 2 * mwtlib.PAD) // rows
-    mouse.send("move", x + mwtlib.PAD + col * cw + cw // 2, y + mwtlib.PAD + row * ch + ch // 2)
+    mouse_xy = (x + mwtlib.PAD + col * cw + cw // 2, y + mwtlib.PAD + row * ch + ch // 2)
+    mouse.send("move", *mouse_xy)
     time.sleep(0.1)
 
 
@@ -105,6 +110,50 @@ def test_click(win):
     check([u for _, u in got] == [want], "Ctrl+click on a URL that wraps", repr(got))
 
 
+def test_lost_release(win):
+    """The release of a Ctrl+click that went to the menu: the next click's
+    release is a selection's again, which copies it to the primary selection."""
+    mouse.send("hold", "ctrl")
+    at(10, 1)
+    mouse.send("down", "left")
+    mouse.send("release", "ctrl")
+    mouse.send("down", "right")
+    time.sleep(0.3)
+    mouse.send("up", "left")
+    mouse.send("up", "right")
+    combo("Escape")
+    opened()
+    at(0, 1)
+    mouse.send("down", "left")
+    at(2, 1)
+    mouse.send("up", "left")
+    time.sleep(0.2)
+    got = subprocess.run(["wl-paste", "-p", "-n"], capture_output=True, text=True, timeout=5).stdout
+    check(got == "see", "after a Ctrl+click whose release the menu took, a drag selects", repr(got))
+
+
+def test_zoom(win):
+    """A zoom with the pointer still: the URL under it now is the one opened."""
+    win.feed(b"\033[2J\033[H" + b"".join(b"http://row%d.example/\r\n" % r for r in range(20)))
+    settle()
+    at(5, 12)
+    for _ in range(3):
+        combo("plus", "ctrl", "shift")
+    settle()
+    x, y, w, h = rect()
+    ch = (h - 2 * mwtlib.PAD) // 24
+    _, py = mouse_xy
+    row = (py - y - mwtlib.PAD) // ch
+    mouse.send("hold", "ctrl")
+    mouse.send("click", "left")
+    mouse.send("release", "ctrl")
+    got = opened()
+    check(row != 12 and [u for _, u in got] == [f"http://row{row}.example/"],
+          "after a zoom Ctrl+click opens the URL now under the pointer", f"row {row}: {got!r}")
+    combo("0", "ctrl", "shift")
+    settle()
+
+
 def underlined(g, col, row):
     return bool(g.full_rows(col, row, FG))
 
@@ -140,11 +189,9 @@ def test_hover(win, log):
     for line in open(log, errors="replace"):
         if " -> " in line and (m := re.search(r"set_cursor\(\d+, wl_surface#(\d+),", line)):
             surfaces.append(m[1])
-    hands = len(set(surfaces))
-    if hands < 2:
-        print("info: the cursor theme has no hand: the text cursor over links too")
-    else:
-        check(surfaces[-1] == surfaces[0], "the text cursor back without Ctrl", repr(surfaces))
+    # the image has no cursor theme: libwayland-cursor's own cursors have a hand
+    check(len(set(surfaces)) == 2, "a hand over the URL with Ctrl", repr(surfaces))
+    check(surfaces[-1] == surfaces[0], "the text cursor back without Ctrl", repr(surfaces))
 
 
 def sizes(log):
@@ -152,18 +199,27 @@ def sizes(log):
             if " -> " in line and (m := re.search(r"xdg_positioner#\d+\.set_size\((\d+), (\d+)\)", line))]
 
 
+def menu_up(log, before):
+    """Waits until the menu asked after before asks for its size."""
+    check(wait(lambda: len(sizes(log)) > before), "the menu opens")
+
+
 def test_menu(win, log):
     at(10, 1)
+    before = len(sizes(log))
     mouse.send("click", "right")
-    time.sleep(0.3)
+    menu_up(log, before)
+    time.sleep(0.1)  # its configure: the keys go to it once it is mapped
     combo("Down")
     combo("Return")
     got = opened()
     check([u for _, u in got] == [URL], "the menu on a URL: Open link opens it", repr(got))
     check(got and got[0][0] != "-", "with an activation token", repr(got))
     at(1, 1)
+    before = len(sizes(log))
     mouse.send("click", "right")
-    time.sleep(0.3)
+    menu_up(log, before)
+    time.sleep(0.1)
     combo("Escape")
     s = sizes(log)
     check(len(s) >= 2 and s[-1][1] < s[-2][1], "off a URL the menu has no Open link", repr(s))
@@ -171,8 +227,9 @@ def test_menu(win, log):
 
 
 def test_mouse_mode(win):
-    win.feed(b"\033[?1000;1006h")
-    time.sleep(0.2)
+    # with a mark after it, drawn once mwt has read what comes before
+    win.feed(b"\033[?1000;1006h\033[12;1HM")
+    settle()
     mouse.send("hold", "ctrl")
     at(10, 1)
     mouse.send("click", "left")
@@ -208,14 +265,26 @@ def test_activation(win):
     focus it gives the focus for a token with the serial of an input event, and
     still not for one without, which is checked first."""
     xdgc = os.environ.get("XDGC")
-    if not xdgc:
+    if not xdgc or not os.access(xdgc, os.X_OK):
         print("info: no XDGC (mwc's build/xdgc): the token's focus not checked")
         return
     fifo = os.path.join(mwtlib.DIR, "xdgc.fifo")
     os.mkfifo(fifo)
     p = subprocess.Popen([xdgc, "app=browser", "size=200x100", f"control={fifo}"],
                          stdout=subprocess.PIPE, text=True)
-    ctl = open(fifo, "w", buffering=1)
+    # it opens the fifo once it is up; one that died never would
+    fd = -1
+    end = time.time() + 5
+    while fd < 0 and p.poll() is None and time.time() < end:
+        try:
+            fd = os.open(fifo, os.O_WRONLY | os.O_NONBLOCK)
+        except OSError:
+            time.sleep(0.05)
+    if not check(fd >= 0, "the browser stand-in reads its fifo", f"exit {p.poll()}"):
+        p.kill()
+        return
+    os.set_blocking(fd, True)
+    ctl = os.fdopen(fd, "w", buffering=1)
     check(wait(lambda: rect("browser")), "the browser stand-in maps")
     at(60, 10)  # focus follows the mouse back to mwt
     mouse.send("click", "left")
@@ -258,6 +327,12 @@ def main():
     test_menu(win, log)
     screen(win)
     test_mouse_mode(win)
+    screen(win)
+    settle()
+    test_lost_release(win)
+    test_zoom(win)
+    screen(win)
+    settle()
     test_activation(win)
     win.close()
     mouse.close()

@@ -205,6 +205,19 @@ static void clear_line(struct vt *vt, int y, int x0, int x1)
 
 /* ---- scrollback ------------------------------------------------------- */
 
+/* The newest history line no longer goes on in the first row of the main
+ * screen, which was erased: a selection or a URL over the two would join text
+ * that is not one line any more. For the screen cleared (ED from its start,
+ * RIS), not for a line erased, which readline does to the line it redraws. */
+static void hist_unwrap(struct vt *vt)
+{
+	if ((vt->mode & MODE_ALTSCREEN) || vt->hist_count == 0)
+		return;
+	int slot = (vt->hist_head - 1 + vt->hist_cap) % vt->hist_cap;
+	if (vt->hist_len[slot] > 0)
+		vt->hist[slot][vt->hist_len[slot] - 1].attr &= ~ATTR_WRAP;
+}
+
 static void push_hist(struct vt *vt, const struct cell *l, int len)
 {
 	if (vt->hist_cap <= 0)
@@ -460,6 +473,7 @@ static void soft_reset(struct vt *vt)
 void vt_reset(struct vt *vt)
 {
 	set_altscreen(vt, false, false);
+	hist_unwrap(vt);
 	vt->mode = MODE_AUTOWRAP;
 	vt->cursor_style = CURSOR_BLOCK;
 	default_cursor(&vt->c);
@@ -1159,18 +1173,22 @@ static void csi_dispatch(struct vt *vt, uint32_t f)
 		switch (arg(vt, 0, 0)) {
 		/* as xterm: erasing the screen drops a pending wrap, ED 3 does not */
 		case 0:
+			if (c->y == 0 && c->x == 0)
+				hist_unwrap(vt);
 			clear_line(vt, c->y, c->x, vt->cols - 1);
 			for (int r = c->y + 1; r < vt->rows; r++)
 				clear_line(vt, r, 0, vt->cols - 1);
 			c->wrapnext = false;
 			break;
 		case 1:
+			hist_unwrap(vt);
 			for (int r = 0; r < c->y; r++)
 				clear_line(vt, r, 0, vt->cols - 1);
 			clear_line(vt, c->y, 0, c->x);
 			c->wrapnext = false;
 			break;
 		case 2:
+			hist_unwrap(vt);
 			for (int r = 0; r < vt->rows; r++)
 				clear_line(vt, r, 0, vt->cols - 1);
 			c->wrapnext = false;

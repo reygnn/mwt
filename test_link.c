@@ -113,6 +113,10 @@ static void test_schemes(void)
 	AT(vt, 3, 0, NULL);   /* "url:" is not part of it */
 	AT(vt, 3, 6, "https://a.b/c");
 	AT(vt, 3, 25, "http://d.e");
+	/* another scheme in its query is part of it, wherever the pointer is */
+	w(vt, "http://a.b/?u=https://c.d/e x\r\n");
+	AT(vt, 4, 2, "http://a.b/?u=https://c.d/e");
+	AT(vt, 4, 20, "http://a.b/?u=https://c.d/e");
 	vt_free(vt);
 }
 
@@ -143,6 +147,7 @@ static void test_ends(void)
 	AT(vt, 3, 0, "http://a.b/x.y;z?q=1:2");
 	AT(vt, 3, 23, NULL);
 	AT(vt, 3, 30, "http://a.b/'quoted");
+
 	/* a frame of box drawing next to it, as tmux draws */
 	w(vt, "\xe2\x94\x82http://a.b/c\xe2\x94\x82 x\r\n");
 	AT(vt, 4, 5, "http://a.b/c");
@@ -207,11 +212,69 @@ static void test_wrap(void)
 	vt_scroll_view(vt, 5);
 	AT(vt, 0, 0, "http://0123456789abcdefghij.org");
 	vt_free(vt);
+
+	/* a scheme cut by the wrap */
+	vt = mk(10, 3, 10);
+	w(vt, "123456 htt");
+	w(vt, "p://a.b/c");
+	AT(vt, 0, 8, "http://a.b/c");
+	AT(vt, 1, 3, "http://a.b/c");
+	vt_free(vt);
+
+	/* The history's last line wraps, the screen after it does not go on with
+	 * it: in the alternate screen, which has its own lines, and once the main
+	 * screen is cleared from its start or reset. Else the URL would take a
+	 * scheme from text no longer shown. */
+	static const char *const after[] = {
+		"\033[?1049h\033[H", "\033[2J\033[H", "\033[H\033[J", "\033[3;1H\033[1J\033[H",
+		"\033c",
+	};
+	for (size_t i = 0; i < sizeof after / sizeof *after; i++) {
+		vt = mk(10, 3, 10);
+		w(vt, "12345 http://abcdefghijklmnopqrstu");
+		CHECK(vt->hist_count > 0);
+		w(vt, after[i]);
+		w(vt, "://evil.o");
+		AT(vt, 0, 3, NULL);
+		vt_free(vt);
+	}
+	/* a line erased is not a screen cleared: readline erases the line it
+	 * redraws, which still goes on from the one above */
+	vt = mk(10, 3, 10);
+	w(vt, "12345 http://abcdefghijklmnopqrstu");
+	w(vt, "\033[H\033[2K://evil.o");
+	AT(vt, 0, 3, "http://evil.o");
+	vt_free(vt);
+	/* the alternate screen cleared leaves the main screen's lines as they are */
+	vt = mk(10, 3, 10);
+	w(vt, "12345 http://abcdefghijklmnopqrstu");
+	w(vt, "\033[?1049h\033[2J\033[?1049l");
+	AT(vt, 0, 3, "http://abcdefghijklmnopqrstu");
+	vt_free(vt);
 }
 
 /* A URL longer than LINK_SPAN either way is cut there, and never read past. */
 static void test_long(void)
 {
+	/* a scheme right where LINK_SPAN cuts the line before: it may be in the
+	 * middle of a word, so it is none; from closer by, it is in one */
+	{
+		struct vt *vt = mk(100, 4, 200);
+		char *s = malloc(4301);
+		memset(s, 'a', 100);
+		memcpy(s + 100, "http://", 7);
+		memset(s + 107, 'b', 4300 - 107);
+		s[4300] = '\0';
+		w(vt, s);
+		w(vt, "\r\n");
+		int64_t first = vt_abs_first(vt);
+		struct link l;
+		CHECK(!link_at(vt, first + 41, 99, &l, NULL));
+		CHECK(!link_at(vt, first + 40, 99, &l, NULL));
+		CHECK(!link_at(vt, first + 1, 50, &l, NULL));
+		free(s);
+		vt_free(vt);
+	}
 	struct vt *vt = mk(100, 4, 400);
 	size_t n = 3 * LINK_SPAN;
 	char *s = malloc(n + 1);
@@ -231,6 +294,21 @@ static void test_long(void)
 	free(got);
 	/* from the middle the scheme is too far back */
 	CHECK(!link_at(vt, first + 2 * LINK_SPAN / 100, 50, &l, NULL));
+	free(s);
+	vt_free(vt);
+}
+
+/* Thousands of brackets it did not open, trimmed in one pass. */
+static void test_brackets(void)
+{
+	struct vt *vt = mk(200, 60, 10);
+	char *s = malloc(10100);
+	memcpy(s, "http://a/(b)", 12);
+	memset(s + 12, ')', 10000);
+	s[10012] = '\0';
+	w(vt, s);
+	CELLS(vt, 0, 5, 0, 0, 0, 11);
+	AT(vt, 20, 5, NULL);
 	free(s);
 	vt_free(vt);
 }
@@ -303,6 +381,7 @@ int main(void)
 	test_ends();
 	test_wrap();
 	test_long();
+	test_brackets();
 	test_same();
 	test_nomem();
 	test_argv();

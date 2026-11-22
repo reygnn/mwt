@@ -10,9 +10,9 @@
  *   Mwt*minimumContrast:       3           text below that contrast to its
  *                                          background is drawn in the
  *                                          foreground or background; 0: off
- *   Mwt*urlLauncher:           firefox --new-tab   what Ctrl+click opens a URL
- *                                          with, the URL after its words;
- *                                          default xdg-open
+ *   Mwt*urlLauncher:           firefox --new-tab   what opens a URL (Ctrl+click,
+ *                                          Open link), the URL after its
+ *                                          words; default xdg-open
  *
  * Names and the app_id are compared ignoring case. Lines starting with ! are
  * comments; there are no comments after a value. */

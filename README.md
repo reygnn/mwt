@@ -70,8 +70,8 @@ readable in a light theme and mc's panels in a dark one. The palette itself stay
 set, and text in the color of its background stays hidden. Blocks and shades
 (U+2580 to U+259F) keep their colors: in pictures drawn with ▀ and ▄ both are pixels.
 
-`urlLauncher` is split at blanks, without a shell or quotes: `firefox --new-tab`
-starts `firefox --new-tab URL`.
+`urlLauncher` is split at blanks, without a shell or quotes, into at most 30 words:
+`firefox --new-tab` starts `firefox --new-tab URL`.
 
 Colors are `#rrggbb`, `#rgb` or `rgb:rr/gg/bb`, without names. A line with an app_id
 wins over a global one, and later lines win over earlier ones; names and app_ids

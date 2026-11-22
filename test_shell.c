@@ -55,6 +55,19 @@ int __wrap_kill(pid_t pid, int sig)
 	return __real_kill(pid, sig);
 }
 
+/* fork that fails at the forks-th call from now, counted on in the child: 2
+ * fails the second fork of opener_spawn, made in its child */
+pid_t __real_fork(void);
+static int forks;
+pid_t __wrap_fork(void)
+{
+	if (forks > 0 && --forks == 0) {
+		errno = EAGAIN;
+		return -1;
+	}
+	return __real_fork();
+}
+
 /* opendir as without /proc, when asked: hiding /proc for real needs a mount
  * namespace, which an unprivileged test may not get. The child inherits the
  * flag. */
@@ -966,6 +979,12 @@ static char *opener_output(const char *path)
 	return NULL;
 }
 
+static char **none_args(void)
+{
+	static char *a[] = { "/nonexistent/opener", "u", NULL };
+	return a;
+}
+
 static void test_opener(void)
 {
 	char dir[] = "/tmp/test_shell.XXXXXX";
@@ -980,6 +999,7 @@ static void test_opener(void)
 	 * the old one on an fd of the shell's while ls looks */
 	snprintf(script, sizeof script,
 		 "exec >%s; echo \"T=${XDG_ACTIVATION_TOKEN-unset} U=$1 N=$#\"; "
+		 "echo \"D=${DESKTOP_STARTUP_ID-unset}\"; "
 		 "echo \"S=$(cut -d' ' -f6 /proc/$$/stat) P=$(cut -d' ' -f4 /proc/$$/stat)\"; "
 		 "ls -m /proc/$$/fd; readlink /proc/$$/fd/0; "
 		 "grep '^Sig\\(Ign\\|Blk\\)' /proc/$$/status; mv %s %s",
@@ -996,7 +1016,15 @@ static void test_opener(void)
 	sigemptyset(&block);
 	sigaddset(&block, SIGTERM);
 	sigprocmask(SIG_BLOCK, &block, &old);
+	/* nor its stdin: /dev/zero, so that /dev/null there is the opener's own */
+	int saved0 = dup(0), zero = open("/dev/zero", O_RDONLY);
+	dup2(zero, 0);
+	close(zero);
+	setenv("DESKTOP_STARTUP_ID", "stale-id", 1);
 	CHECK(opener_spawn(argv, "tok-123"));
+	unsetenv("DESKTOP_STARTUP_ID");
+	dup2(saved0, 0);
+	close(saved0);
 	sigprocmask(SIG_SETMASK, &old, NULL);
 	signal(SIGINT, SIG_DFL);
 	close(50);
@@ -1008,7 +1036,7 @@ static void test_opener(void)
 	char *got = opener_output(out);
 	CHECK(got);
 	if (got) {
-		CHECK(strstr(got, "T=tok-123 U=http://a.b/c?d=e&f N=1\n"));
+		CHECK(strstr(got, "T=tok-123 U=http://a.b/c?d=e&f N=1\nD=unset\n"));
 		/* a session of its own, and another parent than mwt */
 		int sid = -1, ppid = -1;
 		char *sp = strstr(got, "S=");
@@ -1054,6 +1082,16 @@ static void test_opener(void)
 	}
 	CHECK(!strcmp(line, "SigBlk:\t0000000000000000\n"));
 	unlink(tmp);
+
+	/* either fork failing: false with its errno, nothing left to reap */
+	for (int k = 1; k <= 2; k++) {
+		forks = k;
+		errno = 0;
+		CHECK(!opener_spawn(none_args(), "t") && errno == EAGAIN);
+		forks = 0;
+		errno = 0;
+		CHECK(waitpid(-1, NULL, WNOHANG) < 0 && errno == ECHILD);
+	}
 
 	/* a program that is not there: started all the same, and reaped */
 	char *none[] = { "/nonexistent/opener", "u", NULL };
