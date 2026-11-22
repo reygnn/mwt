@@ -224,6 +224,30 @@ static void test_covers(void)
 	CHECK(sel_covers(7, 0, 8, INT_MAX, 8, 1000, 1));
 }
 
+/* A window grown wider keeps the wrap where the line ended, blanks after it:
+ * the lines are still one, on the screen as in the history; a cleared screen
+ * no longer goes on from the history. */
+static void test_text_wider(void)
+{
+	struct vt *vt = mk(10, 4, 10);
+	w(vt, "0123456789abcdefghijklmno");
+	CHECK(vt_resize(vt, 20, 4));
+	int64_t l0 = line(vt, 0);
+	TEXT(vt, sel_of(SEL_LINE, l0, 0, l0 + 2, 0), "0123456789abcdefghijklmno");
+	TEXT(vt, sel_of(SEL_CHAR, l0, 5, l0 + 1, 15), "56789abcdefghij");
+	w(vt, "\r\n\r\n\r\n\r\n");
+	int64_t h = vt_abs_first(vt);
+	TEXT(vt, sel_of(SEL_LINE, h, 0, h + 2, 0), "0123456789abcdefghijklmno");
+	vt_free(vt);
+
+	vt = mk(10, 3, 10);
+	w(vt, "0123456789abcdefghijklmnopqrstuvwxyz");
+	w(vt, "\033[2J\033[Hxyz");
+	h = vt_abs_first(vt);
+	TEXT(vt, sel_of(SEL_LINE, h, 0, line(vt, 0), 0), "0123456789\nxyz");
+	vt_free(vt);
+}
+
 static void test_text(void)
 {
 	struct vt *vt = mk(10, 4, 10);
@@ -522,6 +546,7 @@ int main(void)
 	test_range_wide();
 	test_covers();
 	test_text();
+	test_text_wider();
 	test_text_nomem();
 	test_mark();
 	test_sel_mark();

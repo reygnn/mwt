@@ -164,6 +164,23 @@ static void test_ends(void)
 	AT(vt, 6, 14, "http://x.y/\xe6\x97\xa5\xe6\x9c\xac/z");
 	AT(vt, 6, 15, "http://x.y/\xe6\x97\xa5\xe6\x9c\xac/z");
 	AT(vt, 6, 1, NULL);
+	/* hidden text ends it: what is seen is what opens */
+	w(vt, "\033[10;1Hhttp://good.com\033[8m.evil.net\033[28m x\r\n");
+	AT(vt, 9, 3, "http://good.com");
+	AT(vt, 9, 17, NULL);
+	AT(vt, 9, 15, NULL); /* on the first hidden cell */
+	w(vt, "\033[11;1H\033[2Khttp://a.b\033[8mcd\033[28m x");
+	AT(vt, 10, 10, NULL);
+	AT(vt, 10, 3, "http://a.b");
+	/* a hidden scheme before what is seen */
+	w(vt, "\033[12;1H\033[2K\033[8mhttp\033[28m://x.y");
+	AT(vt, 11, 6, NULL);
+	w(vt, "\033[10;1H\033[2Khttp://good.com\033[8m.evil.net\033[28m x\r\n");
+	/* CJK punctuation and fullwidth forms end it */
+	w(vt, "http://example.jp\xe3\x80\x82x http://e.jp\xef\xbc\x89\r\n");
+	AT(vt, 10, 3, "http://example.jp");
+	AT(vt, 10, 25, "http://e.jp");
+	w(vt, "\033[8;1H"); /* back to the rows below */
 	/* a no-break space ends it, as a blank; a scheme with only marks after */
 	w(vt, "http://a.b\xc2\xa0x http://. mailto:, http://)\r\n");
 	AT(vt, 7, 3, "http://a.b");
@@ -227,7 +244,7 @@ static void test_wrap(void)
 	 * scheme from text no longer shown. */
 	static const char *const after[] = {
 		"\033[?1049h\033[H", "\033[2J\033[H", "\033[H\033[J", "\033[3;1H\033[1J\033[H",
-		"\033c",
+		"\033c", "\033[?1049h\033c", "\033#8\033[H",
 	};
 	for (size_t i = 0; i < sizeof after / sizeof *after; i++) {
 		vt = mk(10, 3, 10);
@@ -244,6 +261,29 @@ static void test_wrap(void)
 	w(vt, "12345 http://abcdefghijklmnopqrstu");
 	w(vt, "\033[H\033[2K://evil.o");
 	AT(vt, 0, 3, "http://evil.o");
+	vt_free(vt);
+	/* erased from elsewhere than its start, the screen still goes on from the
+	 * history */
+	vt = mk(10, 3, 10);
+	w(vt, "12345 http://abcdefghijklmnopqrstu");
+	w(vt, "\033[3;1H\033[J");
+	AT(vt, 0, 3, "http://abcdefghijklmnopq");
+	vt_free(vt);
+	/* a window grown wider: the flag stays where the line ended, blanks after
+	 * it, on the screen as in the history */
+	vt = mk(10, 4, 10);
+	w(vt, "http://example.com/abcdef");
+	CHECK(vt_resize(vt, 20, 4));
+	AT(vt, 0, 2, "http://example.com/abcdef");
+	AT(vt, 1, 3, "http://example.com/abcdef");
+	AT(vt, 2, 4, "http://example.com/abcdef");
+	AT(vt, 0, 12, NULL); /* the blanks after the wrap */
+	w(vt, "\r\n\r\n\r\n\r\n");
+	struct link lw;
+	char *gw = NULL;
+	CHECK(link_at(vt, vt_abs_first(vt) + 1, 3, &lw, &gw) && gw &&
+	      !strcmp(gw, "http://example.com/abcdef"));
+	free(gw);
 	vt_free(vt);
 	/* the alternate screen cleared leaves the main screen's lines as they are */
 	vt = mk(10, 3, 10);
@@ -310,6 +350,36 @@ static void test_brackets(void)
 	CELLS(vt, 0, 5, 0, 0, 0, 11);
 	AT(vt, 20, 5, NULL);
 	free(s);
+	vt_free(vt);
+}
+
+/* Cut by LINK_SPAN before it: the run's start is not seen, so neither a scheme
+ * in its query nor its own counts. */
+static void test_cut(void)
+{
+	struct vt *vt = mk(100, 4, 200);
+	char *s = malloc(5000);
+	int n = sprintf(s, "https://tracker.example/r?");
+	memset(s + n, 'a', 4474);
+	n += 4474;
+	n += sprintf(s + n, "&u=https://target.example/x\r\n");
+	w(vt, s);
+	int64_t first = vt_abs_first(vt);
+	struct link l;
+	char *got = NULL;
+	/* near its start: the long one, cut */
+	CHECK(link_at(vt, first, 10, &l, &got) && got && !strncmp(got, "https://tracker", 15));
+	free(got);
+	/* near its end: none, not the inner one */
+	int64_t last = first + (n - 2) / 100;
+	CHECK(!link_at(vt, last, (n - 4) % 100, &l, NULL));
+	free(s);
+	vt_free(vt);
+
+	/* the pointer past the text of a short history line */
+	vt = mk(80, 2, 10);
+	w(vt, "ab\r\n\r\n\r\n");
+	CHECK(!link_at(vt, vt_abs_first(vt), 40, &l, NULL));
 	vt_free(vt);
 }
 
@@ -382,6 +452,7 @@ int main(void)
 	test_wrap();
 	test_long();
 	test_brackets();
+	test_cut();
 	test_same();
 	test_nomem();
 	test_argv();

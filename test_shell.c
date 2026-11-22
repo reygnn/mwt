@@ -62,7 +62,7 @@ static int forks;
 pid_t __wrap_fork(void)
 {
 	if (forks > 0 && --forks == 0) {
-		errno = EAGAIN;
+		errno = ENOMEM; /* not EAGAIN, which opener_spawn falls back on */
 		return -1;
 	}
 	return __real_fork();
@@ -998,7 +998,8 @@ static void test_opener(void)
 	/* stdout on the file for good: a redirection of each command would keep
 	 * the old one on an fd of the shell's while ls looks */
 	snprintf(script, sizeof script,
-		 "exec >%s; echo \"T=${XDG_ACTIVATION_TOKEN-unset} U=$1 N=$#\"; "
+		 "o=$(readlink /proc/$$/fd/1); exec >%s; echo \"O=$o\"; "
+		 "echo \"T=${XDG_ACTIVATION_TOKEN-unset} U=$1 N=$#\"; "
 		 "echo \"D=${DESKTOP_STARTUP_ID-unset}\"; "
 		 "echo \"S=$(cut -d' ' -f6 /proc/$$/stat) P=$(cut -d' ' -f4 /proc/$$/stat)\"; "
 		 "ls -m /proc/$$/fd; readlink /proc/$$/fd/0; "
@@ -1016,15 +1017,19 @@ static void test_opener(void)
 	sigemptyset(&block);
 	sigaddset(&block, SIGTERM);
 	sigprocmask(SIG_BLOCK, &block, &old);
-	/* nor its stdin: /dev/zero, so that /dev/null there is the opener's own */
-	int saved0 = dup(0), zero = open("/dev/zero", O_RDONLY);
+	/* nor its stdin and stdout: /dev/zero, so that /dev/null there is the
+	 * opener's own */
+	int saved0 = dup(0), saved1 = dup(1), zero = open("/dev/zero", O_RDWR);
 	dup2(zero, 0);
+	dup2(zero, 1);
 	close(zero);
 	setenv("DESKTOP_STARTUP_ID", "stale-id", 1);
 	CHECK(opener_spawn(argv, "tok-123"));
 	unsetenv("DESKTOP_STARTUP_ID");
 	dup2(saved0, 0);
+	dup2(saved1, 1);
 	close(saved0);
+	close(saved1);
 	sigprocmask(SIG_SETMASK, &old, NULL);
 	signal(SIGINT, SIG_DFL);
 	close(50);
@@ -1036,7 +1041,7 @@ static void test_opener(void)
 	char *got = opener_output(out);
 	CHECK(got);
 	if (got) {
-		CHECK(strstr(got, "T=tok-123 U=http://a.b/c?d=e&f N=1\nD=unset\n"));
+		CHECK(strstr(got, "O=/dev/null\nT=tok-123 U=http://a.b/c?d=e&f N=1\nD=tok-123\n"));
 		/* a session of its own, and another parent than mwt */
 		int sid = -1, ppid = -1;
 		char *sp = strstr(got, "S=");
@@ -1049,45 +1054,38 @@ static void test_opener(void)
 
 	/* without a token, one mwt was started with does not reach it */
 	setenv("XDG_ACTIVATION_TOKEN", "stale", 1);
+	setenv("DESKTOP_STARTUP_ID", "stale-id", 1);
 	CHECK(opener_spawn(argv, NULL));
 	got = opener_output(out);
-	CHECK(got && strstr(got, "T=unset U=http://a.b/c?d=e&f"));
+	CHECK(got && strstr(got, "T=unset U=http://a.b/c?d=e&f N=1\nD=unset\n"));
 	unsetenv("XDG_ACTIVATION_TOKEN");
+	unsetenv("DESKTOP_STARTUP_ID");
 
-	/* the mask straight, without a shell between: dash clears it itself */
+	/* the mask straight, without a shell between: dash clears it itself; cp
+	 * copies its own status */
 	snprintf(tmp, sizeof tmp, "%s/mask", dir);
-	int file = open(tmp, O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0600);
-	int saved1 = dup(1), saved2 = dup(2), null2 = open("/dev/null", O_WRONLY);
-	char *mask[] = { "grep", "-h", "^SigBlk", "/proc/self/status", "nofile", NULL };
+	char *mask[] = { "cp", "/proc/self/status", tmp, NULL };
 	sigprocmask(SIG_BLOCK, &block, &old);
-	dup2(file, 1);
-	dup2(null2, 2); /* grep on "nofile" */
 	CHECK(opener_spawn(mask, "t"));
-	dup2(saved1, 1);
-	dup2(saved2, 2);
 	sigprocmask(SIG_SETMASK, &old, NULL);
-	close(saved1);
-	close(saved2);
-	close(null2);
-	close(file);
-	char line[128] = "";
-	for (int64_t end = now_ms() + 5000; now_ms() < end && !strchr(line, '\n');) {
+	static char status[8192];
+	for (int64_t end = now_ms() + 5000; now_ms() < end && !strstr(status, "SigCgt");) {
 		FILE *f = fopen(tmp, "r");
 		if (f) {
-			size_t n = fread(line, 1, sizeof line - 1, f);
-			line[n] = '\0';
+			size_t n = fread(status, 1, sizeof status - 1, f);
+			status[n] = '\0';
 			fclose(f);
 		}
 		poll(NULL, 0, 10);
 	}
-	CHECK(!strcmp(line, "SigBlk:\t0000000000000000\n"));
+	CHECK(strstr(status, "SigBlk:\t0000000000000000\n"));
 	unlink(tmp);
 
 	/* either fork failing: false with its errno, nothing left to reap */
 	for (int k = 1; k <= 2; k++) {
 		forks = k;
 		errno = 0;
-		CHECK(!opener_spawn(none_args(), "t") && errno == EAGAIN);
+		CHECK(!opener_spawn(none_args(), "t") && errno == ENOMEM);
 		forks = 0;
 		errno = 0;
 		CHECK(waitpid(-1, NULL, WNOHANG) < 0 && errno == ECHILD);

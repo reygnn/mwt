@@ -127,13 +127,18 @@ def test_lost_release(win):
     mouse.send("down", "left")
     at(2, 1)
     mouse.send("up", "left")
-    time.sleep(0.2)
-    got = subprocess.run(["wl-paste", "-p", "-n"], capture_output=True, text=True, timeout=5).stdout
+    paste = lambda: subprocess.run(["wl-paste", "-p", "-n"], capture_output=True, text=True,
+                                   timeout=5).stdout
+    wait(lambda: paste() == "see")
+    got = paste()
     check(got == "see", "after a Ctrl+click whose release the menu took, a drag selects", repr(got))
 
 
 def test_zoom(win):
-    """A zoom with the pointer still: the URL under it now is the one opened."""
+    """A zoom with the pointer still: the URL under it now is the one opened.
+    With the pointer shown, or sway's hide_cursor sends a leave, and the enter
+    of the click would work the cell out anew without the fix."""
+    mwtlib.swaymsg("seat", "*", "hide_cursor", "0")
     win.feed(b"\033[2J\033[H" + b"".join(b"http://row%d.example/\r\n" % r for r in range(20)))
     settle()
     at(5, 12)
@@ -152,6 +157,7 @@ def test_zoom(win):
           "after a zoom Ctrl+click opens the URL now under the pointer", f"row {row}: {got!r}")
     combo("0", "ctrl", "shift")
     settle()
+    mwtlib.swaymsg("seat", "*", "hide_cursor", "100")
 
 
 def underlined(g, col, row):
@@ -258,7 +264,31 @@ def wait(cond, limit=3.0):
     return cond()
 
 
-def test_activation(win):
+def test_many_words():
+    """A urlLauncher of 31 words: nothing starts, and stderr says why. In the
+    mwt window sway floats, with the mwtrc changed for it and put back."""
+    rc = os.path.join(os.environ["XDG_CONFIG_HOME"], "mwt", "mwtrc")
+    keep = open(rc).read()
+    with open(rc, "w") as f:
+        f.write("Mwt*urlLauncher: " + " ".join(["w"] * 31) + "\n")
+    err = os.path.join(mwtlib.DIR, "many.log")
+    try:
+        with Window(stderr=err) as w:
+            w.feed(b"\033[2J\033[H\r\nsee " + URL.encode() + b"\r\n")
+            settle()
+            mouse.send("hold", "ctrl")
+            at(10, 1)
+            mouse.send("click", "left")
+            mouse.send("release", "ctrl")
+            check(nothing_opened(), "a urlLauncher of 31 words starts nothing")
+            check(wait(lambda: "more than 30 words" in open(err, errors="replace").read()),
+                  "and says so on stderr", open(err, errors="replace").read()[-300:])
+    finally:
+        with open(rc, "w") as f:
+            f.write(keep)
+
+
+def test_activation(win, log):
     """The token takes the focus: mwc's xdgc stands in for the browser and asks
     for it with what the opener got, as Firefox does with XDG_ACTIVATION_TOKEN.
     sway only marks a window urgent by default; with focus_on_window_activation
@@ -307,6 +337,23 @@ def test_activation(win):
     ctl.write(f"activate {token}\n")
     check(wait(lambda: focused("browser")), "the browser takes the focus with the token",
           f"mwt focused: {focused('mwt')}")
+    # and the token of Open link, made for the key that chose it
+    at(60, 10)
+    mouse.send("click", "left")
+    check(wait(lambda: focused("mwt")), "mwt has the focus again")
+    at(10, 1)
+    before = len(sizes(log))
+    mouse.send("click", "right")
+    menu_up(log, before)
+    time.sleep(0.1)
+    combo("Down")
+    combo("Return")
+    got = opened()
+    with open(token, "w") as f:
+        f.write(got[0][0] if got else "-")
+    ctl.write(f"activate {token}\n")
+    check(wait(lambda: focused("browser")), "the browser takes the focus with Open link's token",
+          f"{got!r}, mwt focused: {focused('mwt')}")
     mwtlib.swaymsg("focus_on_window_activation", "urgent")
     ctl.write("quit\n")
     ctl.close()
@@ -331,9 +378,12 @@ def main():
     settle()
     test_lost_release(win)
     test_zoom(win)
+    win.close()
+    test_many_words()
+    win = Window(env={"WAYLAND_DEBUG": "1"}, stderr=log + ".2")
     screen(win)
     settle()
-    test_activation(win)
+    test_activation(win, log + ".2")
     win.close()
     mouse.close()
     return finish()

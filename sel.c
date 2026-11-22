@@ -75,6 +75,12 @@ char *sel_text(const struct vt *vt, const struct sel *s)
 			continue;
 		int c0 = a == ba ? bc : 0;
 		int c1 = a == ea ? MIN(ec, n - 1) : n - 1;
+		/* a line that goes on in the next ends at its wrap, also with the
+		 * blanks of a window grown wider after it */
+		int w = vt_abs_wraps(vt, a);
+		bool wrapped = w > 0 && c1 >= w - 1;
+		if (wrapped)
+			c1 = w - 1;
 		/* begun on a right half: the character is highlighted, so copied */
 		if (c0 > 0 && c0 < n && (l[c0].attr & ATTR_WDUMMY))
 			c0--;
@@ -83,7 +89,6 @@ char *sel_text(const struct vt *vt, const struct sel *s)
 			if (!(l[c].attr & ATTR_WDUMMY) &&
 			    !put_utf8(&buf, &len, &cap, l[c].cp ? l[c].cp : ' '))
 				goto nomem;
-		bool wrapped = n > 0 && c1 == n - 1 && (l[n - 1].attr & ATTR_WRAP);
 		if (!wrapped) {
 			while (len > start && buf[len - 1] == ' ')
 				len--;

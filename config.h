@@ -16,8 +16,9 @@ static const double touchpad_step = 10;     /* touchpad travel, in surface pixel
                                              * one step of wheel_lines */
 static const int double_click_ms = 400;     /* a second click on the cell sooner is a
                                              * double click; a third, a triple */
-static const char *url_launcher = "xdg-open"; /* Ctrl+click on a URL; the
-                                             * mwtrc's urlLauncher wins */
+static const char *url_launcher = "xdg-open"; /* opens a URL (Ctrl+click,
+                                             * Open link); the mwtrc's
+                                             * urlLauncher wins */
 static const double zoom_min_pt = 4, zoom_max_pt = 96; /* Ctrl+Shift+Plus and Minus */
 
 /* DECRQCRA lets programs read the screen, as xterm's GetChecksum, so it is off.

@@ -7,16 +7,10 @@
 
 struct lcell {
 	uint32_t cp;
+	uint16_t attr;
 	int64_t abs;
 	int col;
 };
-
-static bool wraps(const struct vt *vt, int64_t abs)
-{
-	int n;
-	const struct cell *l = vt_abs_line(vt, abs, &n);
-	return l && n > 0 && (l[n - 1].attr & ATTR_WRAP);
-}
 
 static bool url_char(uint32_t cp)
 {
@@ -27,9 +21,19 @@ static bool url_char(uint32_t cp)
 	/* box drawing: a URL in tmux or mc ends at the frame next to it */
 	if (cp >= 0x2500 && cp <= 0x259f)
 		return false;
-	/* other spaces, and the angle brackets of math */
-	return !(cp >= 0x2000 && cp <= 0x200b) && cp != 0x3000 && cp != 0x27e8 &&
-	       cp != 0x27e9;
+	/* other spaces, the angle brackets of math, CJK punctuation (。、「」) and
+	 * the fullwidth forms of ASCII's (，）) */
+	return !(cp >= 0x2000 && cp <= 0x200b) && !(cp >= 0x3000 && cp <= 0x303f) &&
+	       !(cp >= 0xff01 && cp <= 0xff65) && cp != 0x27e8 && cp != 0x27e9;
+}
+
+/* The cells of line a that count: up to its wrap, when it goes on in the next. */
+static int line_cells(const struct vt *vt, int64_t a, bool *wraps)
+{
+	int n, w = vt_abs_wraps(vt, a);
+	vt_abs_line(vt, a, &n);
+	*wraps = w > 0;
+	return w ? w : n;
 }
 
 static bool alnum(uint32_t cp)
@@ -87,7 +91,9 @@ static size_t trim(const struct lcell *c, size_t a, size_t b)
 bool link_at(const struct vt *vt, int64_t abs, int col, struct link *l, char **url)
 {
 	int len;
+	bool wr;
 	const struct cell *row = vt_abs_line(vt, abs, &len);
+	len = line_cells(vt, abs, &wr);
 	if (!row || col < 0 || col >= len)
 		return false;
 	if (col > 0 && (row[col].attr & ATTR_WDUMMY))
@@ -99,47 +105,50 @@ bool link_at(const struct vt *vt, int64_t abs, int col, struct link *l, char **u
 	int64_t first = vt->mode & MODE_ALTSCREEN ? (int64_t)vt->scrolled : vt_abs_first(vt);
 	int64_t a0 = abs, a1 = abs;
 	long before = col, after = len - col;
-	while (a0 > first && before < LINK_SPAN && wraps(vt, a0 - 1)) {
-		int n;
-		vt_abs_line(vt, --a0, &n);
-		before += n;
+	bool back = a0 > first && vt_abs_wraps(vt, a0 - 1);
+	while (back && before < LINK_SPAN) {
+		bool w;
+		before += line_cells(vt, --a0, &w);
+		back = a0 > first && vt_abs_wraps(vt, a0 - 1);
 	}
-	/* cut off by LINK_SPAN rather than at the line's start: the first cell is
-	 * no word's beginning */
-	bool cut = a0 > first && wraps(vt, a0 - 1);
-	while (after < LINK_SPAN && wraps(vt, a1) && vt_abs_line(vt, a1 + 1, &len)) {
-		a1++;
-		after += len;
-	}
+	/* cut off by LINK_SPAN rather than at the line's start: what comes before
+	 * is not seen, so neither is where a word or a URL begins */
+	bool cut = back;
+	for (bool fwd = wr; after < LINK_SPAN && fwd && vt_abs_line(vt, a1 + 1, &len);)
+		after += line_cells(vt, ++a1, &fwd);
 	struct lcell *c = malloc(((size_t)before + (size_t)after) * sizeof *c);
 	if (!c)
 		return false;
 	size_t n = 0, p = SIZE_MAX;
 	for (int64_t a = a0; a <= a1; a++) {
 		const struct cell *r = vt_abs_line(vt, a, &len);
+		bool w;
+		len = line_cells(vt, a, &w);
 		for (int k = 0; r && k < len; k++) {
 			if (k > 0 && (r[k].attr & ATTR_WDUMMY))
 				continue;
 			if (a == abs && k == col)
 				p = n;
-			c[n++] = (struct lcell){ r[k].cp, a, k };
+			c[n++] = (struct lcell){ r[k].cp, r[k].attr, a, k };
 		}
 	}
 
 	bool found = false;
-	if (p != SIZE_MAX && url_char(c[p].cp)) {
+	if (p != SIZE_MAX && url_char(c[p].cp) && !(c[p].attr & ATTR_INVISIBLE)) {
 		/* the run of URL characters the pointer is in */
 		size_t s = p, e = p;
-		while (s > 0 && url_char(c[s - 1].cp))
+		/* hidden text (SGR 8) ends it: what is opened is what is seen */
+		while (s > 0 && url_char(c[s - 1].cp) && !(c[s - 1].attr & ATTR_INVISIBLE))
 			s--;
-		while (e + 1 < n && url_char(c[e + 1].cp))
+		while (e + 1 < n && url_char(c[e + 1].cp) && !(c[e + 1].attr & ATTR_INVISIBLE))
 			e++;
 		/* the first scheme in the run that begins a word: one in its query
-		 * (?u=https://...) is part of it, wherever the pointer is */
+		 * (?u=https://...) is part of it, wherever the pointer is. A run cut
+		 * at its start has none that can be trusted. */
 		size_t start = 0, slen = 0;
-		for (size_t i = s; i <= p && !slen; i++) {
+		for (size_t i = s; i <= p && !slen && !(s == 0 && cut); i++) {
 			size_t k = scheme_at(c, i, e + 1);
-			if (k && (i == s ? !(i == 0 && cut) : !alnum(c[i - 1].cp))) {
+			if (k && (i == s || !alnum(c[i - 1].cp))) {
 				start = i;
 				slen = k;
 			}

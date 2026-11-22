@@ -319,19 +319,26 @@ bool opener_spawn(char *const argv[], const char *token)
 		sigset_t none;
 		sigemptyset(&none);
 		sigprocmask(SIG_SETMASK, &none, NULL);
-		int null = open("/dev/null", O_RDONLY);
-		if (null >= 0 && null != 0) {
+		/* stdout too: a browser's chatter is not for mwt's output, and a
+		 * pipe on it would wait for the browser to end. stderr stays, for
+		 * what goes wrong. */
+		int null = open("/dev/null", O_RDWR);
+		if (null >= 0) {
 			dup2(null, 0);
-			close(null);
+			dup2(null, 1);
+			if (null > 1)
+				close(null);
 		}
 		close_from_3();
-		/* one mwt was started with is not for the link, nor its older
-		 * form, which GTK 3 still reads */
-		if (token)
+		/* also as its older name, which GTK 3 reads, as GLib sets both;
+		 * one mwt was started with is not for the link */
+		if (token) {
 			setenv("XDG_ACTIVATION_TOKEN", token, 1);
-		else
+			setenv("DESKTOP_STARTUP_ID", token, 1);
+		} else {
 			unsetenv("XDG_ACTIVATION_TOKEN");
-		unsetenv("DESKTOP_STARTUP_ID");
+			unsetenv("DESKTOP_STARTUP_ID");
+		}
 		execvp(argv[0], argv);
 		fprintf(stderr, "mwt: %s: %s\n", argv[0], strerror(errno));
 		_exit(127);

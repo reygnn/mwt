@@ -276,6 +276,19 @@ const struct cell *vt_view_line(const struct vt *vt, int r, int *len)
 	return vt_abs_line(vt, (int64_t)vt->scrolled - vt->view + r, len);
 }
 
+int vt_abs_wraps(const struct vt *vt, int64_t abs)
+{
+	int n;
+	const struct cell *l = vt_abs_line(vt, abs, &n);
+	for (int k = n - 1; l && k >= 0; k--) {
+		if (l[k].attr & ATTR_WRAP)
+			return k + 1;
+		if ((l[k].cp != ' ' && l[k].cp != 0) || l[k].bg != COL_DEFAULT_BG || l[k].attr)
+			return 0;
+	}
+	return 0;
+}
+
 int64_t vt_abs_first(const struct vt *vt)
 {
 	return (int64_t)vt->scrolled - vt->hist_count;
@@ -792,6 +805,7 @@ static void esc_dispatch(struct vt *vt, uint32_t f)
 	case '#':
 		if (f == '8') { /* DECALN */
 			struct cell e = { 'E', COL_DEFAULT_FG, COL_DEFAULT_BG, 0 };
+			hist_unwrap(vt);
 			for (int r = 0; r < vt->rows; r++)
 				fill_row(vt, vt->line[r], 0, vt->cols, e);
 			vt->top = 0;

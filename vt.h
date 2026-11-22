@@ -138,6 +138,10 @@ const struct cell *vt_view_line(const struct vt *vt, int r, int *len);
 /* absolute line addressing for selections: abs = row + scrolled - view */
 const struct cell *vt_abs_line(const struct vt *vt, int64_t abs, int *len);
 int64_t vt_abs_first(const struct vt *vt); /* oldest abs line in history */
+/* Whether line abs goes on in the next: the cells up to the one with
+ * ATTR_WRAP, or 0. Only default blanks may follow that cell, as after the
+ * window grew wider: there is no reflow, the flag stays where the line ended. */
+int vt_abs_wraps(const struct vt *vt, int64_t abs);
 void vt_scroll_view(struct vt *vt, int delta); /* +up into history */
 void vt_mark_all(struct vt *vt);
 
