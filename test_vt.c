@@ -31,7 +31,7 @@ void *__wrap_malloc(size_t n) { return inject() ? NULL : __real_malloc(n); }
 void *__wrap_calloc(size_t n, size_t sz) { return inject() ? NULL : __real_calloc(n, sz); }
 void *__wrap_realloc(void *p, size_t n) { return inject() ? NULL : __real_realloc(p, n); }
 static char replybuf[256];
-static char titlebuf[256];
+static char titlebuf[VT_OSC_MAX];
 
 static void on_write(void *ud, const char *b, size_t n)
 {
@@ -1033,6 +1033,42 @@ static void test_osc_controls(void)
 	vt_free(vt);
 }
 
+/* An OSC holds VT_OSC_MAX - 1 bytes, its number and the ';' among them. */
+static void test_osc_long(void)
+{
+	struct vt *vt = mk(10, 2, 0);
+	char seq[VT_OSC_MAX + 64], *o = seq;
+	/* a title that fills it to the last byte is whole */
+	o += sprintf(o, "\033]2;");
+	memset(o, 'a', VT_OSC_MAX - 3);
+	o += VT_OSC_MAX - 3;
+	*o++ = '\a';
+	vt_write(vt, seq, (size_t)(o - seq));
+	CHECK(strlen(titlebuf) == VT_OSC_MAX - 3);
+	/* one that does not fit is cut at a whole character, and for good: the Z
+	 * after the character that did not fit would leave a hole */
+	o = seq + sprintf(seq, "\033]2;");
+	memset(o, 'b', VT_OSC_MAX - 5);
+	o += VT_OSC_MAX - 5;
+	o += sprintf(o, "\xe2\x82\xacZ\a");
+	vt_write(vt, seq, (size_t)(o - seq));
+	CHECK(strlen(titlebuf) == VT_OSC_MAX - 5);
+	CHECK(titlebuf[VT_OSC_MAX - 6] == 'b');
+	/* a query that does not fit is not answered in part */
+	o = seq + sprintf(seq, "\033]4");
+	while (o - seq < VT_OSC_MAX + 16)
+		o += sprintf(o, ";1;?");
+	*o++ = '\a';
+	replybuf[0] = 0;
+	vt_write(vt, seq, (size_t)(o - seq));
+	CHECK_STR(replybuf, "");
+	/* and the next OSC starts anew */
+	w(vt, "\033]2;ok\a\033]4;1;?\a");
+	CHECK_STR(titlebuf, "ok");
+	CHECK_STR(replybuf, "\033]4;1;rgb:0101/0101/0202\a");
+	vt_free(vt);
+}
+
 static void test_charset_and_misc(void)
 {
 	struct vt *vt = mk(10, 3, 0);
@@ -1304,6 +1340,56 @@ static void test_csi_params(void)
 	w(vt, "\033[H\033[99999999999");
 	w(vt, "99C");
 	CHECK(vt->c.x == 19);
+	vt_free(vt);
+}
+
+/* Sequences that are not quite the ones they look like. */
+static void test_malformed_sequences(void)
+{
+	struct vt *vt = mk(20, 3, 0);
+	/* a second intermediate makes another sequence: ESC ( % 0 is DEC Turkish,
+	 * not the graphics, and ESC # ! 8 is no DECALN */
+	w(vt, "\033(%0q\033#!8");
+	CHECK(vt->c.charset[0] == 0);
+	CHECK_STR(row(vt, 0), "q");
+	/* so with CSI, and with more of them than are kept */
+	replybuf[0] = 0;
+	w(vt, "\033[?1h\033[4 !q\033[4 !\"#q\033[!\"p\033[>!c\033[> q\033[4$!p\033[?7$!p");
+	CHECK(vt->cursor_style == CURSOR_BLOCK);
+	CHECK(vt->mode & MODE_APPCURSOR); /* no DECSTR */
+	CHECK_STR(replybuf, "");
+	/* with one, or none, they are what they were */
+	w(vt, "\033[4 q\033[>c");
+	CHECK(vt->cursor_style == CURSOR_UNDERLINE);
+	CHECK_STR(replybuf, "\033[>1;10;0c");
+
+	/* a character that is not ASCII ends a sequence wherever it comes, also
+	 * after an intermediate and in a sequence that is ignored: the rest is
+	 * text (CAVEATS.md) */
+	w(vt, "\033[2J\033[H\033#\xc3\xa4" "8");
+	CHECK_STR(row(vt, 0), "8");
+	w(vt, "\033[2K\r\033[6 \xc3\xa4q");
+	CHECK(vt->cursor_style == CURSOR_UNDERLINE);
+	CHECK_STR(row(vt, 0), "q");
+	w(vt, "\033[2K\r\033[1?\xc3\xa4hx");
+	CHECK_STR(row(vt, 0), "hx");
+	/* DEL does not */
+	w(vt, "\033[6 \x7fq\033#\x7f" "8");
+	CHECK(vt->cursor_style == CURSOR_BAR);
+	CHECK(vt->pri[0][0].cp == 'E' && vt->pri[2][19].cp == 'E');
+
+	/* sub-parameters are SGR's alone: with a ':' anything else is ignored, also
+	 * when it comes after the last parameter that is kept */
+	replybuf[0] = 0;
+	w(vt, "\033[H\033[2:5H\033[2:1B\033[?25:1l\033[5:1n\033[0:1c\033[?7:1$p");
+	CHECK(vt->c.x == 0 && vt->c.y == 0 && !(vt->mode & MODE_HIDECURSOR));
+	CHECK_STR(replybuf, "");
+	w(vt, "\033[2;2;1;1;1;1;1;1;1;1;1;1;1;1;1;1;1;1;1;1;1;1;1;1;1;1:1H");
+	CHECK(vt->c.x == 0 && vt->c.y == 0);
+	/* the next sequence is not held to it, and SGR keeps them */
+	w(vt, "\033[2;3H\033[4:3mU");
+	CHECK(vt->c.y == 1 && vt->c.x == 3);
+	CHECK(vt->pri[1][2].cp == 'U' && (vt->pri[1][2].attr & ATTR_UNDERLINE));
 	vt_free(vt);
 }
 
@@ -1579,6 +1665,7 @@ int main(void)
 	test_checksum();
 	test_checksum_large();
 	test_osc_controls();
+	test_osc_long();
 	test_charset_and_misc();
 	test_unsupported_vt100();
 	test_resize();
@@ -1586,6 +1673,7 @@ int main(void)
 	test_xterm_details();
 	test_ascii_runs();
 	test_csi_params();
+	test_malformed_sequences();
 	test_width_table();
 	test_dirty_scrolled_back();
 	test_cursor_style_redraw();

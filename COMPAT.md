@@ -19,7 +19,7 @@ are left out is in CAVEATS.md.
 | VT52 mode | 0 | 0 | 1 |
 | VT102 additions | 4 | 0 | 1 |
 | **VT100 and VT102 together** | **46** | **6** | **16** |
-| Beyond the VT100 | 34 | 13 | 12 |
+| Beyond the VT100 | 34 | 14 | 12 |
 
 
 ## VT100
@@ -217,6 +217,7 @@ are left out is in CAVEATS.md.
 | Combining characters, ZWJ, variation selectors | ❌ | dropped (CAVEATS.md, Character widths) |
 | 8-bit C1 controls (0x80–0x9F, U+0080–U+009F) | ❌ | dropped; only the 7-bit forms such as `ESC [` work |
 | Characters that are not ASCII within a sequence | 🟡 | end the sequence; xterm puts a combining mark on the character before, ignores a C1, and reads U+00A0 to U+00FF as ASCII |
+| `:` between parameters | 🟡 | sub-parameters, which only SGR has; any other sequence with one is ignored |
 | DCS, SOS, PM, APC | 🟡 | parsed and swallowed up to ST, CAN or SUB, without effect |
 
 

@@ -112,12 +112,13 @@ struct vt {
 	bool subparam[VT_MAX_PARAMS]; /* param was preceded by ':' */
 	int nparams;
 	bool params_full;         /* a separator past the last slot: drop the rest */
-	bool param_started;
+	bool colon;               /* a ':' among the parameters: sub-parameters */
 	char priv;                /* '?', '>', '<', '=' or 0 */
 	char inter[2];
 	int ninter;
 	char osc[VT_OSC_MAX];
 	int osc_len;
+	bool osc_full;            /* it did not fit: cut there for good */
 	bool osc_bel;             /* the OSC ended with BEL, a reply ends the same */
 
 	struct vt_callbacks cb;

@@ -106,6 +106,9 @@ An unterminated DCS or OSC (ESC P or ESC ] without its end) swallows output up t
 next ESC, CAN or SUB, an OSC also up to BEL. bash usually ends it with the sequence of
 its next prompt.
 
+An OSC holds 1023 bytes, its number among them. A longer title is cut at a whole
+character; a longer color query gets no answer.
+
 
 ## Keypad mode
 

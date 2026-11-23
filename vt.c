@@ -800,6 +800,9 @@ static void esc_dispatch(struct vt *vt, uint32_t f)
 		}
 		return;
 	}
+	/* one intermediate and no more: ESC ( % 0 is DEC Turkish, not the graphics */
+	if (vt->ninter != 1)
+		return;
 	switch (vt->inter[0]) {
 	case '(':
 		vt->c.charset[0] = f == '0';
@@ -1115,6 +1118,9 @@ static void csi_dispatch(struct vt *vt, uint32_t f)
 	int n = arg(vt, 0, 1);
 	uint32_t rep_cp = vt->lastcp; /* for REP; feed() forgets it after this */
 
+	/* sub-parameters are SGR's alone: CSI 1:5 H is no CUP to row 1, column 5 */
+	if (vt->colon && (f != 'm' || vt->priv || vt->ninter))
+		return;
 	if (vt->priv == '?') {
 		if (vt->ninter == 1 && vt->inter[0] == '$' && f == 'p') { /* DECRQM */
 			int m = arg(vt, 0, 0);
@@ -1131,15 +1137,19 @@ static void csi_dispatch(struct vt *vt, uint32_t f)
 	if (vt->priv == '>') {
 		/* as xterm, only for 0 or none: CSI > 1 c and CSI > 1 q are no
 		 * requests of these */
-		if (arg(vt, 0, 0) == 0 && f == 'c')
+		if (vt->ninter || arg(vt, 0, 0) != 0)
+			return;
+		if (f == 'c')
 			reply(vt, "\033[>1;10;0c");
-		else if (arg(vt, 0, 0) == 0 && f == 'q')
+		else if (f == 'q')
 			reply(vt, "\033P>|mwt(" MWT_VERSION ")\033\\");
 		return;
 	}
 	if (vt->priv)
 		return;
 	if (vt->ninter) {
+		if (vt->ninter != 1) /* none here has two; see collect() */
+			return;
 		if (vt->inter[0] == ' ' && f == 'q') { /* DECSCUSR */
 			int s = arg(vt, 0, 0);
 			if (s > 6) /* xterm keeps the style */
@@ -1403,8 +1413,11 @@ static void osc_dispatch(struct vt *vt)
 	int num;
 	if (!osc_number(vt->osc, 999, &num))
 		return;
+	/* a title that did not fit is cut; a query is not answered in part */
 	if ((num == 0 || num == 2) && vt->cb.title)
 		vt->cb.title(vt->cb.ud, semi + 1);
+	else if (vt->osc_full)
+		return;
 	else if (num == 4 || (num >= 10 && num <= 12))
 		osc_colors(vt, num, semi + 1);
 }
@@ -1415,10 +1428,13 @@ static void clear_seq(struct vt *vt)
 {
 	vt->nparams = 0;
 	vt->params_full = false;
+	vt->colon = false;
 	vt->priv = 0;
 	vt->ninter = 0;
 }
 
+/* A third intermediate is not kept, and need not be: no sequence here has more
+ * than one, so the dispatchers drop what comes with two. */
 static void collect(struct vt *vt, uint32_t cp)
 {
 	if (vt->ninter < 2)
@@ -1432,6 +1448,8 @@ static void param(struct vt *vt, uint32_t cp)
 		vt->params[0] = 0;
 		vt->subparam[0] = false;
 	}
+	if (cp == ':') /* also past the last slot */
+		vt->colon = true;
 	if (vt->params_full)
 		return;
 	if (cp == ';' || cp == ':') {
@@ -1463,10 +1481,14 @@ static void osc_put(struct vt *vt, uint32_t cp)
 		buf[0] = 0xf0 | cp >> 18; buf[1] = 0x80 | (cp >> 12 & 0x3f);
 		buf[2] = 0x80 | (cp >> 6 & 0x3f); buf[3] = 0x80 | (cp & 0x3f); n = 4;
 	}
-	if (vt->osc_len + n < VT_OSC_MAX) {
-		memcpy(vt->osc + vt->osc_len, buf, n);
-		vt->osc_len += n;
+	/* cut for good at the first one that does not fit: a shorter one after it
+	 * would leave a title with a hole */
+	if (vt->osc_full || vt->osc_len + n >= VT_OSC_MAX) {
+		vt->osc_full = true;
+		return;
 	}
+	memcpy(vt->osc + vt->osc_len, buf, n);
+	vt->osc_len += n;
 }
 
 static void feed(struct vt *vt, uint32_t cp)
@@ -1508,6 +1530,7 @@ static void feed(struct vt *vt, uint32_t cp)
 			vt->state = ST_CSI_ENTRY;
 		} else if (cp == ']') {
 			vt->osc_len = 0;
+			vt->osc_full = false;
 			vt->state = ST_OSC;
 		} else if (cp == 'P' || cp == 'X' || cp == '^' || cp == '_') {
 			vt->state = ST_STR_IGNORE; /* DCS, SOS, PM, APC */
@@ -1525,6 +1548,8 @@ static void feed(struct vt *vt, uint32_t cp)
 			collect(vt, cp);
 		else if (cp < 0x7f) {
 			esc_dispatch(vt, cp);
+			vt->state = ST_GROUND;
+		} else if (cp != 0x7f) { /* not ASCII: ends it, as in ST_ESC */
 			vt->state = ST_GROUND;
 		}
 		break;
@@ -1562,12 +1587,14 @@ static void feed(struct vt *vt, uint32_t cp)
 		else if (cp < 0x7f) {
 			csi_dispatch(vt, cp);
 			vt->state = ST_GROUND;
+		} else if (cp != 0x7f) {
+			vt->state = ST_GROUND;
 		}
 		break;
 	case ST_CSI_IGNORE:
 		if (cp < 0x20)
 			control(vt, cp);
-		else if (cp >= 0x40 && cp < 0x7f)
+		else if ((cp >= 0x40 && cp < 0x7f) || cp >= 0x80)
 			vt->state = ST_GROUND;
 		break;
 	case ST_OSC:
