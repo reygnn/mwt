@@ -177,9 +177,9 @@ def check_acsc():
 
 def check_sgr():
     # p1 standout, p2 underline, p3 reverse, p4 blink, p5 dim, p6 bold, p7 invis.
-    # Blink sets nothing: mwt does not draw it, so sgr leaves it out.
+    # Blink sets nothing: mwt does not have it, so sgr leaves it out.
     table = {0: "reverse", 1: "underline", 2: "reverse", 3: None, 4: "dim", 5: "bold", 6: "invisible"}
-    all_attrs = {name for name in table.values() if name} | {"blink"}
+    all_attrs = {name for name in table.values() if name}
     for i, name in table.items():
         params = [0] * 9
         params[i] = 1

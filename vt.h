@@ -19,7 +19,7 @@ enum {
 	ATTR_DIM       = 1 << 1,
 	ATTR_ITALIC    = 1 << 2,
 	ATTR_UNDERLINE = 1 << 3,
-	ATTR_BLINK     = 1 << 4,
+	/* 1 << 4 free: blink (SGR 5, 6) is not kept, it was never drawn */
 	ATTR_REVERSE   = 1 << 5,
 	ATTR_INVISIBLE = 1 << 6,
 	ATTR_STRIKE    = 1 << 7,
@@ -49,7 +49,6 @@ enum {
 	MODE_MOUSE_ANY  = 1 << 10, /* 1003 */
 	MODE_MOUSE_SGR  = 1 << 11, /* 1006 */
 	MODE_FOCUS      = 1 << 12, /* 1004 */
-	MODE_LNM        = 1 << 13, /* LF also does CR */
 };
 #define MODE_MOUSE (MODE_MOUSE_BTN | MODE_MOUSE_DRAG | MODE_MOUSE_ANY)
 

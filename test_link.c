@@ -252,7 +252,7 @@ static void test_wrap(void)
 	 * scheme from text no longer shown. */
 	static const char *const after[] = {
 		"\033[?1049h\033[H", "\033[2J\033[H", "\033[H\033[J", "\033[3;1H\033[1J\033[H",
-		"\033c", "\033[?1049h\033c", "\033#8\033[H",
+		"\033c", "\033[?1049h\033c",
 	};
 	for (size_t i = 0; i < sizeof after / sizeof *after; i++) {
 		vt = mk(10, 3, 10);

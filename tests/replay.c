@@ -443,6 +443,8 @@ enum {
 	R_BLINK,   /* SGR 5/6 */
 	R_VT52,    /* CSI ? 2 l: VT52 mode */
 	R_DECID,   /* ESC Z */
+	R_DECALN,  /* ESC # 8: the alignment pattern */
+	R_LNM,     /* CSI 20 h: newline mode */
 	R_REQTP,   /* CSI x: DECREQTPARM */
 	R_DECLL,   /* CSI q: keyboard LEDs */
 	R_NATCS,   /* ESC ( or ) with a national set, e.g. UK */
@@ -453,7 +455,8 @@ enum {
 };
 static const char *rname[R_COUNT] = {
 	"double-size", "132-col", "reverse-screen", "blink", "vt52", "decid",
-	"decreqtparm", "leds", "national-cs", "g2/g3", "not-utf8", "c1",
+	"decaln", "newline-mode", "decreqtparm", "leds", "national-cs", "g2/g3",
+	"not-utf8", "c1",
 };
 static int rtotal[R_COUNT], rfiles[R_COUNT];
 
@@ -493,6 +496,8 @@ static void report(const char *name, const char *buf, size_t len)
 		unsigned char f = s[i + 1];
 		if (f == '#' && i + 2 < len && (s[i + 2] == '3' || s[i + 2] == '4' || s[i + 2] == '6'))
 			cnt[R_DOUBLE]++;
+		else if (f == '#' && i + 2 < len && s[i + 2] == '8')
+			cnt[R_DECALN]++;
 		else if (f == 'Z')
 			cnt[R_DECID]++;
 		else if ((f == '(' || f == ')') && i + 2 < len && s[i + 2] != '0' && s[i + 2] != 'B')
@@ -527,6 +532,8 @@ static void report(const char *name, const char *buf, size_t len)
 					if (params[k] == 2 && fin == 'l') cnt[R_VT52]++;
 				} else if (!priv && fin == 'm' && (params[k] == 5 || params[k] == 6))
 					cnt[R_BLINK]++;
+				else if (!priv && fin == 'h' && params[k] == 20)
+					cnt[R_LNM]++;
 			}
 			if (!priv && fin == 'x')
 				cnt[R_REQTP]++;

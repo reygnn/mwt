@@ -114,7 +114,7 @@ character; a longer color query gets no answer.
 
 The application keypad mode (ESC =, ESC >, CSI ? 66 h and l) is kept and reported by
 DECRQM but does not change the keys. With NumLock the digits send digits and Enter sends
-`\r` (CR LF in newline mode); without it xkb gives KP_Home, KP_Up and so on, which send
+`\r`; without it xkb gives KP_Home, KP_Up and so on, which send
 the normal cursor and tilde sequences. This is xterm's behaviour with its default mode
 1035. If the mode took effect, the keypad would send ESC O q instead of 1 as soon as a
 curses program starts (`smkx` in `mwt.info` turns it on), and without `ka1`, `kent` and
@@ -140,10 +140,16 @@ DECRQM reports the modes mwt knows of but does not have as permanently reset (4)
 Mode 1048 (save and restore the cursor) works, but DECRQM answers "unknown" for it:
 xterm reports whether a cursor is saved, which mwt does not keep track of.
 
+There is no newline mode (LNM, `CSI 20 h`): a line feed never returns the carriage,
+Return sends CR, and DECRQM reports the mode as permanently reset.
+
+Of the VT100's own sequences, the alignment pattern (DECALN, `ESC # 8`) and DECID
+(`ESC Z`) are left out too: only test programs send them.
+
 The cursor never blinks: the blinking styles of DECSCUSR (1, 3, 5) are drawn steady,
 and DECRQM reports mode 12 as permanently reset.
 
-Of SGR, blinking (5, 6) is kept but not drawn, double underline (21) is drawn single,
+Of SGR, blinking (5, 6) is ignored, double underline (21) is drawn single,
 and the underline color (58) is read and ignored.
 
 The wheel in the alternate screen sends arrow keys when no program has the mouse, as

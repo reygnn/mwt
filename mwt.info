@@ -1,5 +1,5 @@
-# terminfo for mwt: declares only what mwt does. Not blink: vt.c keeps SGR 5,
-# but mwt never draws it, so it is neither a capability nor in sgr. No kIC:
+# terminfo for mwt: declares only what mwt does. Not blink: mwt does not have
+# it, so it is neither a capability nor in sgr. No kIC:
 # Shift+Insert pastes the primary selection.
 # install with: tic -x mwt.info
 mwt|mwt minimal wayland terminal,

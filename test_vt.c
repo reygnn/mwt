@@ -227,9 +227,9 @@ static void test_row_extent(void)
 	/* the scroll region rotates rows, the count goes with them */
 	w(vt, "\033[H\033[2Jtop\r\nmid\033[1;2r\033[1;1H\033M\033[r");
 	CHECK(used(vt, 0) == 0 && used(vt, 1) == 3 && used(vt, 2) == 0 && used_ok(vt));
-	/* DECALN fills everything, the alternate screen has its own counts */
-	w(vt, "\033#8");
-	CHECK(used(vt, 0) == 12 && used_ok(vt));
+	/* every row written to its end, the alternate screen has its own counts */
+	w(vt, "\033[HEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEE");
+	CHECK(used(vt, 0) == 12 && used(vt, 2) == 12 && used_ok(vt));
 	w(vt, "\033[?1049h");
 	CHECK(used(vt, 0) == 0 && used_ok(vt));
 	w(vt, "alt\033[?1049l");
@@ -651,14 +651,10 @@ static void test_rep(void)
 	CHECK(inserted > 600 && cut > 600 && pending > 300);
 }
 
-/* DECALN, DECSCUSR and DECSTR as xterm 407 */
+/* DECSCUSR and DECSTR as xterm 407 */
 static void test_xterm_resets(void)
 {
 	struct vt *vt = mk(10, 4, 0);
-	/* DECALN resets the margins and origin mode */
-	w(vt, "\033[2;3r\033[?6h\033#8\033[1;1HX");
-	CHECK(!vt->c.origin && vt->top == 0 && vt->bot == 3);
-	CHECK_STR(row(vt, 0), "XEEEEEEEEE");
 	/* DECSCUSR 7 and up keep the style */
 	w(vt, "\033[3 q\033[7 q");
 	CHECK(vt->cursor_style == CURSOR_UNDERLINE);
@@ -672,15 +668,6 @@ static void test_xterm_resets(void)
 	CHECK(vt->cursor_style == CURSOR_BLOCK && vt->dirty[vt->c.y]);
 	vt_free(vt);
 
-	/* DECALN keeps the colours of SGR, not the rest */
-	vt = mk(10, 4, 0);
-	w(vt, "\033[1;2;3;4;5;7;8;9;41;32m\033#8\033[1;3HQ");
-	CHECK(vt->pri[0][2].cp == 'Q' && vt->pri[0][2].attr == 0 &&
-	      vt->pri[0][2].bg == 1 && vt->pri[0][2].fg == 2);
-	/* and fills with the default colours */
-	CHECK(vt->pri[0][3].cp == 'E' && vt->pri[0][3].attr == 0 &&
-	      vt->pri[0][3].bg == COL_DEFAULT_BG && vt->pri[0][3].fg == COL_DEFAULT_FG);
-	vt_free(vt);
 	/* DECSTR keeps a pending wrap, and resets only this screen's saved cursor */
 	vt = mk(10, 4, 0);
 	w(vt, "\033[1;10HZ\033[!pY");
@@ -785,9 +772,6 @@ static void test_replies(void)
 	w(vt, "\033[c");
 	CHECK_STR(replybuf, "\033[?62;22c");
 	replybuf[0] = 0;
-	w(vt, "\033Z"); /* DECID answers as DA does */
-	CHECK_STR(replybuf, "\033[?62;22c");
-	replybuf[0] = 0;
 	w(vt, "\033[>q");
 	CHECK_STR(replybuf, "\033P>|mwt(" MWT_VERSION ")\033\\");
 	replybuf[0] = 0;
@@ -814,8 +798,8 @@ static void test_replies(void)
 	w(vt, "\033[?2004h\033[?2004$p\033[?1049$p\033[?2027$p\033[?25$p");
 	CHECK_STR(replybuf, "\033[?2004;1$y\033[?1049;2$y\033[?2027;0$y\033[?25;1$y");
 	replybuf[0] = 0;
-	w(vt, "\033[4h\033[4$p\033[20$p\033[99$p\033[4l");
-	CHECK_STR(replybuf, "\033[4;1$y\033[20;2$y\033[99;0$y");
+	w(vt, "\033[4h\033[4$p\033[20$p\033[99$p\033[4l"); /* 20, LNM: never set */
+	CHECK_STR(replybuf, "\033[4;1$y\033[20;4$y\033[99;0$y");
 	/* 4: modes mwt knows of but does not have, so setting them never takes */
 	replybuf[0] = 0;
 	w(vt, "\033[?3h\033[?3$p\033[?5$p\033[?12$p\033[?45$p\033[?69$p\033[?1005$p");
@@ -895,11 +879,7 @@ static void test_keys(void)
 	/* the keypad mode changes nothing, see CAVEATS.md */
 	w(vt, "\033[?1l\033=");
 	CHECK_STR(key(vt, VT_KEY_ENTER, 0), "\r");
-	/* newline mode: Return sends CR LF */
-	w(vt, "\033[20h");
-	CHECK_STR(key(vt, VT_KEY_ENTER, 0), "\r\n");
-	CHECK_STR(key(vt, VT_KEY_ENTER, A), "\033\r\n");
-	w(vt, "\033[20l");
+	CHECK_STR(key(vt, VT_KEY_ENTER, A), "\033\r");
 	CHECK_STR(key(vt, VT_KEY_UP, 0), "\033[A");
 	/* no room, no key: nothing */
 	char small[3];
@@ -1138,12 +1118,12 @@ static void test_unsupported_vt100(void)
 	unsigned mode = vt->mode;
 	w(vt, "\033[?3h\033[?5h\033[?4h\033[?9h\033[?3l\033[?5l");
 	CHECK(vt->cols == 10 && vt->mode == mode && vt->c.x == 8);
-	/* blink is kept as an attribute */
-	w(vt, "\r\n\033[5mB\033[m");
-	CHECK(vt->pri[1][0].attr & ATTR_BLINK);
-	/* DECREQTPARM, LEDs, ENQ: no answer, nothing written (DECID answers as DA) */
+	/* blink is no attribute: the cell is as one written without it */
+	w(vt, "\r\n\033[5;6mB\033[25m\033[m");
+	CHECK(vt->pri[1][0].cp == 'B' && vt->pri[1][0].attr == 0);
+	/* DECREQTPARM, LEDs, ENQ, DECID: no answer, nothing written */
 	replybuf[0] = 0;
-	w(vt, "\033[x\033[1x\033[1;2q\005C");
+	w(vt, "\033[x\033[1x\033[1;2q\005\033ZC");
 	CHECK_STR(replybuf, "");
 	CHECK_STR(row(vt, 1), "BC");
 	/* a national set (UK) and G2/G3 shifts are plain ASCII */
@@ -1153,6 +1133,13 @@ static void test_unsupported_vt100(void)
 	/* VT52 mode is not entered: ESC A afterwards is not "cursor up" */
 	w(vt, "\033[?2l\033Az");
 	CHECK(vt->c.y == 1 && vt->pri[1][6].cp == 'z');
+	/* nor newline mode: a line feed stays in its column */
+	w(vt, "\033[20h\033[1;3H\nL");
+	CHECK(vt->c.y == 1 && vt->c.x == 3 && vt->pri[1][2].cp == 'L');
+	/* the alignment pattern (DECALN) is not drawn */
+	w(vt, "\033#8");
+	CHECK_STR(row(vt, 0), "abcdefgh");
+	CHECK_STR(row(vt, 2), "");
 	vt_free(vt);
 }
 
@@ -1348,9 +1335,9 @@ static void test_malformed_sequences(void)
 {
 	struct vt *vt = mk(20, 3, 0);
 	/* a second intermediate makes another sequence: ESC ( % 0 is DEC Turkish,
-	 * not the graphics, and ESC # ! 8 is no DECALN */
-	w(vt, "\033(%0q\033#!8");
-	CHECK(vt->c.charset[0] == 0);
+	 * not the graphics, nor is ESC ) % 0 for G1 */
+	w(vt, "\033(%0q\033)%0");
+	CHECK(vt->c.charset[0] == 0 && vt->c.charset[1] == 0);
 	CHECK_STR(row(vt, 0), "q");
 	/* so with CSI, and with more of them than are kept */
 	replybuf[0] = 0;
@@ -1366,17 +1353,18 @@ static void test_malformed_sequences(void)
 	/* a character that is not ASCII ends a sequence wherever it comes, also
 	 * after an intermediate and in a sequence that is ignored: the rest is
 	 * text (CAVEATS.md) */
-	w(vt, "\033[2J\033[H\033#\xc3\xa4" "8");
-	CHECK_STR(row(vt, 0), "8");
+	w(vt, "\033[2J\033[H\033(\xc3\xa4" "0q");
+	CHECK(vt->c.charset[0] == 0);
+	CHECK_STR(row(vt, 0), "0q");
 	w(vt, "\033[2K\r\033[6 \xc3\xa4q");
 	CHECK(vt->cursor_style == CURSOR_UNDERLINE);
 	CHECK_STR(row(vt, 0), "q");
 	w(vt, "\033[2K\r\033[1?\xc3\xa4hx");
 	CHECK_STR(row(vt, 0), "hx");
 	/* DEL does not */
-	w(vt, "\033[6 \x7fq\033#\x7f" "8");
+	w(vt, "\033[2K\r\033[6 \x7fq\033(\x7f" "0q\033(B");
 	CHECK(vt->cursor_style == CURSOR_BAR);
-	CHECK(vt->pri[0][0].cp == 'E' && vt->pri[2][19].cp == 'E');
+	CHECK(vt->pri[0][0].cp == 0x2500 && vt->pri[0][1].cp == ' ');
 
 	/* sub-parameters are SGR's alone: with a ':' anything else is ignored, also
 	 * when it comes after the last parameter that is kept */
@@ -1473,8 +1461,8 @@ static void test_dirty_scrolled_back(void)
 
 /* Section 8 of the review of 2026-11-18: mutants of vt.c these caught none of. */
 
-/* ESC D, E and M drop a pending wrap, as they move the cursor; ESC H and ESC Z
- * keep it. */
+/* ESC D, E and M drop a pending wrap, as they move the cursor; ESC H keeps it,
+ * and so does ESC Z, which is nothing here. */
 static void test_wrap_flag_esc(void)
 {
 	struct vt *vt = mk(10, 4, 0);
@@ -1515,9 +1503,9 @@ static void test_resize_alt_and_view(void)
 	vt_free(vt);
 }
 
-/* SGR 22 ends dim too, 4:0 ends the underline and 4:3 starts one, 25 ends
- * blinking, and sub-parameters of what mwt does not know are skipped, not read
- * as the next parameters. */
+/* SGR 22 ends dim too, 4:0 ends the underline and 4:3 starts one, blinking (5
+ * and 25) changes nothing, and sub-parameters of what mwt does not know are
+ * skipped, not read as the next parameters. */
 static void test_sgr_details(void)
 {
 	struct vt *vt = mk(20, 2, 0);
@@ -1527,7 +1515,7 @@ static void test_sgr_details(void)
 	CHECK((l[0].attr & ATTR_DIM) && !(l[1].attr & (ATTR_BOLD | ATTR_DIM)));
 	CHECK((l[2].attr & ATTR_UNDERLINE) && !(l[3].attr & ATTR_UNDERLINE));
 	CHECK(l[4].attr & ATTR_UNDERLINE);
-	CHECK((l[5].attr & ATTR_BLINK) && !(l[6].attr & ATTR_BLINK));
+	CHECK(l[5].cp == 'f' && !l[5].attr && l[6].cp == 'g' && !l[6].attr);
 	CHECK((l[7].attr & ATTR_BOLD) && !(l[7].attr & (ATTR_DIM | ATTR_ITALIC)) && l[7].fg == 1);
 	CHECK(!(l[8].attr & (ATTR_DIM | ATTR_ITALIC)));
 	vt_free(vt);

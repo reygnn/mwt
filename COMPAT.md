@@ -13,13 +13,13 @@ are left out is in CAVEATS.md.
 | Group | ✅ | 🟡 | ❌ |
 |---|---:|---:|---:|
 | VT100 control characters | 9 | 2 | 1 |
-| VT100 escape and control sequences | 25 | 3 | 5 |
-| VT100 modes | 4 | 0 | 6 |
-| VT100 keyboard | 4 | 1 | 2 |
+| VT100 escape and control sequences | 23 | 2 | 8 |
+| VT100 modes | 3 | 0 | 7 |
+| VT100 keyboard | 3 | 2 | 2 |
 | VT52 mode | 0 | 0 | 1 |
 | VT102 additions | 4 | 0 | 1 |
-| **VT100 and VT102 together** | **46** | **6** | **16** |
-| Beyond the VT100 | 34 | 14 | 12 |
+| **VT100 and VT102 together** | **42** | **6** | **20** |
+| Beyond the VT100 | 34 | 13 | 13 |
 
 
 ## VT100
@@ -33,7 +33,7 @@ are left out is in CAVEATS.md.
 | 0x07 | BEL | 🟡 | without the focus the window asks for attention through xdg-activation, once until it has the focus again; no sound, no flash (CAVEATS.md) |
 | 0x08 | BS | ✅ | stops at the first column |
 | 0x09 | HT | ✅ | |
-| 0x0A–0x0C | LF, VT, FF | ✅ | with LNM also a carriage return |
+| 0x0A–0x0C | LF, VT, FF | ✅ | never a carriage return too: there is no newline mode |
 | 0x0D | CR | ✅ | |
 | 0x0E, 0x0F | SO, SI | ✅ | G1 or G0 into GL |
 | 0x11, 0x13 | XON, XOFF | ✅ | the pty's line discipline handles them, not mwt |
@@ -62,11 +62,11 @@ are left out is in CAVEATS.md.
 | `ESC H` | HTS, set tab | ✅ | |
 | `CSI g`, `CSI 3 g` | TBC, clear tabs | ✅ | |
 | `CSI Ps ; … m` | SGR 0, 1, 4, 7 | ✅ | normal, bold, underline, reverse |
-| `CSI 5 m` | SGR 5, blink | 🟡 | stored, and DECRQCRA counts it, but drawn steady |
+| `CSI 5 m` | SGR 5, blink | ❌ | ignored; it was never drawn |
 | `CSI Ps h`, `CSI Ps l` | SM, RM | ✅ | see Modes |
 | `ESC ( C`, `ESC ) C` | SCS, G0 and G1 | 🟡 | `B` (US) and `0` (special graphics) as on the VT100. `A` (UK) is US ASCII, so `#` stays `#` and is not `£`. `1` and `2` (the alternate character ROM) are US ASCII too; CAVEATS.md counts them among the national character sets |
 | `CSI c`, `CSI 0 c` | DA | ✅ | answers `CSI ? 62 ; 22 c` (a VT220 with color); a VT100 answers `CSI ? 1 ; 2 c` |
-| `ESC Z` | DECID | ✅ | same answer as DA |
+| `ESC Z` | DECID | ❌ | no answer; DA (`CSI c`) is the way to ask |
 | `CSI 5 n` | DSR, status | ✅ | `CSI 0 n` |
 | `CSI 6 n` | DSR, CPR | ✅ | relative to the margins in origin mode |
 | `CSI x`, `CSI 1 x` | DECREQTPARM | ❌ | no DECREPTPARM answer |
@@ -75,7 +75,7 @@ are left out is in CAVEATS.md.
 | `ESC # 3`, `ESC # 4` | DECDHL | ❌ | no double height |
 | `ESC # 6` | DECDWL | ❌ | no double width |
 | `ESC # 5` | DECSWL | ✅ | nothing to do, since every line is single width |
-| `ESC # 8` | DECALN | ✅ | also resets the margins, origin mode and the attributes, and homes the cursor, as xterm |
+| `ESC # 8` | DECALN | ❌ | no alignment pattern |
 | `ESC =`, `ESC >` | DECKPAM, DECKPNM | 🟡 | DECRQM reports the mode, but the keypad sends the same in both (CAVEATS.md, Keypad mode) |
 | `ESC c` | RIS | ✅ | |
 
@@ -83,7 +83,7 @@ are left out is in CAVEATS.md.
 
 | Sequence | Name | mwt | Note |
 |---|---|:-:|---|
-| `CSI 20 h` | LNM, newline mode | ✅ | LF also returns, and Return sends CR LF |
+| `CSI 20 h` | LNM, newline mode | ❌ | LF never returns and Return sends CR; DECRQM answers 4 |
 | `CSI ? 1 h` | DECCKM, cursor keys | ✅ | |
 | `CSI ? 2 l` | DECANM, VT52 mode | ❌ | no VT52 mode; DECRQM answers 0 |
 | `CSI ? 3 h` | DECCOLM, 132 columns | ❌ | the column count stays; DECRQM answers 4 |
@@ -100,7 +100,7 @@ are left out is in CAVEATS.md.
 |---|---|:-:|---|
 | Cursor keys | `ESC [ A`, or `ESC O A` with DECCKM | ✅ | with modifiers `CSI 1 ; m A`, as xterm; mwt.info declares them (`kUP5` and the like) |
 | PF1–PF4 | `ESC O P` to `ESC O S` | ✅ | on F1 to F4 |
-| Return | CR, or CR LF with LNM | ✅ | |
+| Return | CR, or CR LF with LNM | 🟡 | always CR |
 | Backspace | BS (0x08) | 🟡 | DEL (0x7F), as xterm and `kbs` in mwt.info; Ctrl+Backspace sends BS |
 | Ctrl with a letter or `[ \ ] ^ _` | C0 controls | ✅ | |
 | Keypad in application mode | `ESC O p` to `ESC O y`, `ESC O m`, `l`, `n`, `M` | ❌ | always the digits and CR (CAVEATS.md, Keypad mode) |
@@ -188,10 +188,10 @@ are left out is in CAVEATS.md.
 | Parameter | Name | mwt | Note |
 |---|---|:-:|---|
 | 2, 3, 8, 9 | dim, italic, invisible, strike | ✅ | |
-| 6 | rapid blink | 🟡 | as 5: stored, drawn steady |
+| 6 | rapid blink | ❌ | ignored, as 5 |
 | 21 | double underline | 🟡 | drawn as a single underline |
 | `4:0` to `4:5` | underline styles | 🟡 | only on or off |
-| 22 to 29 | reset bold and dim, italic, underline, blink, reverse, invisible, strike | ✅ | |
+| 22 to 29 | reset bold and dim, italic, underline, reverse, invisible, strike | ✅ | 25 has nothing to reset |
 | 30–37, 40–47, 39, 49 | 8 colors, default colors | ✅ | |
 | 90–97, 100–107 | bright colors | ✅ | |
 | `38;5;n`, `48;5;n` | 256 colors | ✅ | also with colons |

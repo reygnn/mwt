@@ -759,8 +759,6 @@ static void control(struct vt *vt, uint32_t cp)
 		break;
 	case 0x0a: case 0x0b: case 0x0c:
 		index_down(vt);
-		if (vt->mode & MODE_LNM)
-			vt->c.x = 0;
 		vt->c.wrapnext = false;
 		break;
 	case 0x0d:
@@ -778,7 +776,7 @@ static void control(struct vt *vt, uint32_t cp)
 
 /* ---- escape sequences ------------------------------------------------- */
 
-/* DA and DECID: a VT220 with ANSI color */
+/* DA: a VT220 with ANSI color */
 #define DA1 "\033[?62;22c"
 
 static void esc_dispatch(struct vt *vt, uint32_t f)
@@ -793,7 +791,6 @@ static void esc_dispatch(struct vt *vt, uint32_t f)
 		case 'E': vt->c.x = 0; index_down(vt); vt->c.wrapnext = false; break;
 		case 'H': vt->tabs[vt->c.x] = true; break;
 		case 'M': reverse_index(vt); vt->c.wrapnext = false; break;
-		case 'Z': reply(vt, DA1); break; /* DECID, the old DA */
 		case 'c': vt_reset(vt); break;
 		case '=': vt->mode |= MODE_APPKEYPAD; break;
 		case '>': vt->mode &= ~MODE_APPKEYPAD; break;
@@ -809,20 +806,6 @@ static void esc_dispatch(struct vt *vt, uint32_t f)
 		break;
 	case ')':
 		vt->c.charset[1] = f == '0';
-		break;
-	case '#':
-		if (f == '8') { /* DECALN */
-			struct cell e = { 'E', COL_DEFAULT_FG, COL_DEFAULT_BG, 0 };
-			hist_unwrap(vt);
-			for (int r = 0; r < vt->rows; r++)
-				fill_row(vt, vt->line[r], 0, vt->cols, e);
-			vt->top = 0;
-			vt->bot = vt->rows - 1;
-			vt->c.origin = false; /* as xterm, which keeps only the colours */
-			vt->c.tmpl.attr = 0;
-			moveto(vt, 0, 0);
-			vt_mark_all(vt);
-		}
 		break;
 	}
 }
@@ -901,7 +884,6 @@ static void sgr(struct vt *vt)
 				t->attr |= ATTR_UNDERLINE;
 			}
 			break;
-		case 5: case 6: t->attr |= ATTR_BLINK; break;
 		case 7: t->attr |= ATTR_REVERSE; break;
 		case 8: t->attr |= ATTR_INVISIBLE; break;
 		case 9: t->attr |= ATTR_STRIKE; break;
@@ -909,7 +891,6 @@ static void sgr(struct vt *vt)
 		case 22: t->attr &= ~(ATTR_BOLD | ATTR_DIM); break;
 		case 23: t->attr &= ~ATTR_ITALIC; break;
 		case 24: t->attr &= ~ATTR_UNDERLINE; break;
-		case 25: t->attr &= ~ATTR_BLINK; break;
 		case 27: t->attr &= ~ATTR_REVERSE; break;
 		case 28: t->attr &= ~ATTR_INVISIBLE; break;
 		case 29: t->attr &= ~ATTR_STRIKE; break;
@@ -959,10 +940,10 @@ static unsigned private_bit(int m)
 	return 0;
 }
 
-/* ANSI modes: IRM (4) and LNM (20) */
+/* ANSI modes: IRM (4) alone; there is no newline mode (LNM, 20), CAVEATS.md */
 static unsigned ansi_bit(int m)
 {
-	return m == 4 ? MODE_INSERT : m == 20 ? MODE_LNM : 0;
+	return m == 4 ? MODE_INSERT : 0;
 }
 
 static void set_private_mode(struct vt *vt, int m, bool on)
@@ -1046,9 +1027,10 @@ static int private_mode_state(const struct vt *vt, int m)
 /* What a cell adds to the DECRQCRA checksum, as xterm counts it: the character
  * as a DEC 8-bit code (anything beyond Latin-1, wide halves included, as ESC;
  * Latin-1 cut to 7 bits; DEC graphics as the code it came in as) plus a bit per
- * video attribute. Every cell counts, an erased one as a blank: that is what
- * esctest expects of xterm by default. Current xterm skips cells never written
- * to unless checksumExtension says otherwise, and mwt does not tell them apart. */
+ * video attribute, but for blink, which mwt does not keep. Every cell counts, an
+ * erased one as a blank: that is what esctest expects of xterm by default. Current
+ * xterm skips cells never written to unless checksumExtension says otherwise, and
+ * mwt does not tell them apart. */
 static int checksum_cell(const struct cell *c)
 {
 	uint32_t cp = c->cp;
@@ -1068,8 +1050,6 @@ static int checksum_cell(const struct cell *c)
 		ch += 0x10;
 	if (c->attr & ATTR_REVERSE)
 		ch += 0x20;
-	if (c->attr & ATTR_BLINK)
-		ch += 0x40;
 	if (c->attr & ATTR_BOLD)
 		ch += 0x80;
 	return ch;
@@ -1165,9 +1145,10 @@ static void csi_dispatch(struct vt *vt, uint32_t f)
 			int m = arg(vt, 0, 0);
 			unsigned bit = ansi_bit(m);
 			/* the ECMA-48 modes of a terminal mwt is not (guarded areas,
-			 * a locked keyboard, editing extents...) are permanently reset;
-			 * SRM (12) stays unknown, terminals disagree on what reset means */
-			bool never = (m >= 1 && m <= 19 && m != 4 && m != 6 && m != 8 &&
+			 * a locked keyboard, editing extents...) are permanently reset,
+			 * and so is LNM (20), which mwt does not have; SRM (12) stays
+			 * unknown, terminals disagree on what reset means */
+			bool never = (m >= 1 && m <= 20 && m != 4 && m != 6 && m != 8 &&
 				      m != 9 && m != 12);
 			reply(vt, "\033[%d;%d$y", m, bit ? (vt->mode & bit ? 1 : 2) : never ? 4 : 0);
 		}
@@ -1756,8 +1737,7 @@ size_t vt_key(const struct vt *vt, enum vt_key key, unsigned mods, char *buf, si
 	} else {
 		switch (key) {
 		case VT_KEY_BACKSPACE: s = ctrl ? "\b" : "\x7f"; break;
-		/* newline mode (LNM, CSI 20 h): CR LF, as the VT100 */
-		case VT_KEY_ENTER: s = vt->mode & MODE_LNM ? "\r\n" : "\r"; break;
+		case VT_KEY_ENTER: s = "\r"; break;
 		case VT_KEY_TAB: s = shift ? "\033[Z" : "\t"; break;
 		case VT_KEY_BACKTAB: s = "\033[Z"; alt = false; break;
 		case VT_KEY_ESCAPE: s = "\033"; break;

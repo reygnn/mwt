@@ -260,15 +260,14 @@ static void test_special_keys(void)
 	CHECK_SEND(key(&k, KEY_F1, 0), "\033OP");
 	CHECK_SEND(key(&k, KEY_A, S), "A");
 	kb_free(&k);
-	/* the modes of the terminal: DECCKM, LNM */
+	/* the modes of the terminal: DECCKM; newline mode (LNM) is left out */
 	k = kb_new("us", NULL);
 	mode("\033[?1h");
 	CHECK_SEND(key(&k, KEY_UP, 0), "\033OA");
 	CHECK_SEND(key(&k, KEY_UP, C), "\033[1;5A");
 	mode("\033[?1l\033[20h");
-	CHECK_SEND(key(&k, KEY_ENTER, 0), "\r\n");
-	mode("\033[20l");
 	CHECK_SEND(key(&k, KEY_ENTER, 0), "\r");
+	mode("\033[20l");
 	kb_free(&k);
 }
 

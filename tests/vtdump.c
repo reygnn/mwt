@@ -45,7 +45,7 @@ int main(int argc, char **argv)
 		{ MODE_ALTSCREEN, "altscreen" }, { MODE_BRACKETED, "bracketed" },
 		{ MODE_MOUSE_BTN, "mousebtn" }, { MODE_MOUSE_DRAG, "mousedrag" },
 		{ MODE_MOUSE_ANY, "mouseany" }, { MODE_MOUSE_SGR, "mousesgr" },
-		{ MODE_FOCUS, "focus" }, { MODE_LNM, "lnm" },
+		{ MODE_FOCUS, "focus" },
 	};
 	static const char *const styles[] = { "block", "underline", "bar" };
 
@@ -65,9 +65,9 @@ int main(int argc, char **argv)
 	printf("],\"reply\":\"");
 	for (size_t i = 0; i < nreply; i++)
 		printf("%02x", (unsigned char)reply[i]);
-	printf("\",\"attrbits\":{\"bold\":%d,\"dim\":%d,\"italic\":%d,\"underline\":%d,\"blink\":%d,"
+	printf("\",\"attrbits\":{\"bold\":%d,\"dim\":%d,\"italic\":%d,\"underline\":%d,"
 	       "\"reverse\":%d,\"invisible\":%d,\"strike\":%d,\"wide\":%d,\"wdummy\":%d},",
-	       ATTR_BOLD, ATTR_DIM, ATTR_ITALIC, ATTR_UNDERLINE, ATTR_BLINK,
+	       ATTR_BOLD, ATTR_DIM, ATTR_ITALIC, ATTR_UNDERLINE,
 	       ATTR_REVERSE, ATTR_INVISIBLE, ATTR_STRIKE, ATTR_WIDE, ATTR_WDUMMY);
 	printf("\"defaultfg\":%u,\"defaultbg\":%u,\"rgbflag\":%u,\"cells\":[",
 	       COL_DEFAULT_FG, COL_DEFAULT_BG, COL_RGB);
