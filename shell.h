@@ -102,7 +102,9 @@ void child_hangup(struct child *c, int *pty, int ms);
  * mwt's stderr, default signals, none blocked, and no other file descriptor.
  * Through a child that ends at once and is reaped here, so mwt has no zombie
  * and the shell's pid stays the only child it waits for. False when either
- * fork fails, with errno set; a program that is not there says so on stderr. */
+ * fork fails, with errno set, and when the opener cannot be run (ENOENT for one
+ * that is not there): its exec's errno comes back through a pipe closed by the
+ * exec, waited for up to a second. */
 bool opener_spawn(char *const argv[], const char *token);
 
 #endif

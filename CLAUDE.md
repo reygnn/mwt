@@ -19,7 +19,7 @@ use mwc's `vinput` need `MWC_DIR`, which defaults to `../../mwc`:
 | `make terminfo` | each capability of `mwt.info` against the VT core; python3 and ncurses |
 | `make keys` | what mwt sends for keys and the mouse, against `mwt.info`, under headless sway |
 | `make bell` | BEL marks the window urgent without the focus, once, under headless sway |
-| `make links` | Ctrl+click, the menu's Open link and the underline on URLs, with a fake opener; the token's focus with mwc's `xdgc` (`XDGC`), under headless sway |
+| `make links` | Ctrl+click, the menu's Open link and the underline on URLs, with a fake opener; the toast for one that is not there; the token's focus with mwc's `xdgc` (`XDGC`), under headless sway |
 | `make wayland` | a hidden window's configure, the min size, long `-T` and `-a`, from mwt's Wayland log; the token mwt is started with, with mwc's `xdgc` (`XDGC`), under headless sway |
 | `make pixel` | what mwt draws, by screenshot, under headless sway |
 | `make mouse` | the mouse modes, under headless sway |
@@ -51,13 +51,13 @@ esctest is GPL. The containers have no network, so fetch on the host first with
 | `vt.c`, `vt.h` | parser after Paul Williams' DEC state machine, grid, scrollback; no Wayland, so testable headless |
 | `font.c` | fontconfig and FreeType, four styles, fallback faces, glyph cache |
 | `box.c` | box drawing and block elements (U+2500 to U+259F) and the DEC scan lines (U+23BA to U+23BD) drawn to fill the cell; no FreeType |
-| `mwt.c` | Wayland (xdg-shell, xdg-decoration, viewporter, xdg-activation, wl_shm, data device, primary selection), keyboard and pointer events, the hover over a URL, pty, event loop |
+| `mwt.c` | Wayland (xdg-shell, xdg-decoration, viewporter, xdg-activation, wl_shm, data device, primary selection, a subsurface for the toast), keyboard and pointer events, the hover over a URL, pty, event loop |
 | `input.c` | what keys and the mouse send: xkbcommon with Compose, shortcuts, mouse reports; no Wayland |
 | `paste.c` | what a paste becomes: UTF-8 checks, decoding, the control filter, the brackets; the clipboard's types |
 | `sel.c` | the selection over the VT core's lines: words, lines, clicks, drags, its text |
 | `link.c` | URLs in the VT core's lines, over lines that wrap; the opener's words |
 | `shell.c` | the shell on its pty: what waits to be written, its output read in turns, the paste dropped for a signal; spawn, reap, hang up; the opener of a link |
-| `util.c` | `-g`, the context menu's keys, the first size within the compositor's bounds, cutting `-T` and `-a`, the token mwt was started with |
+| `util.c` | `-g`, the context menu's keys, the first size within the compositor's bounds, cutting `-T` and `-a`, the token mwt was started with, the toast's text and place |
 | `rc.c` | the mwtrc, the minimum contrast, the cursor's color on a cell, the URL launcher; no Wayland |
 | `mwt.info` | terminfo; declares only what `vt.c` really does |
 | `config.h`, `version.h` | defaults; the version for `-v` and XTVERSION, with the commit from `build/gitversion.h` (the Makefile) |

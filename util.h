@@ -4,6 +4,8 @@
 #define UTIL_H
 
 #include <stdbool.h>
+#include <stddef.h>
+#include <stdint.h>
 
 enum { GEOM_OK, GEOM_SYNTAX, GEOM_RANGE };
 
@@ -45,5 +47,26 @@ bool stdio_fill(void);
  * that long, and the Wayland message would not fit) or no memory. */
 #define TOKEN_MAX 1024
 char *startup_token(void);
+
+/* A toast, as mwc shows one: a line of text in a box at the top of the window,
+ * centered, for a while. Its sizes in logical pixels. */
+#define TOAST_PAD 12    /* around the text */
+#define TOAST_MARGIN 16 /* from the window's top and sides */
+#define TOAST_MS 3000
+#define TOAST_MAX 64    /* code points */
+
+/* "name: not found" for ENOENT, else "name: " and strerror(err), in buf. */
+void toast_text(char *buf, size_t size, const char *name, int err);
+
+/* s as code points, at most max into cp: what is not UTF-8 one U+FFFD a byte.
+ * Their count. */
+int toast_cps(const char *s, uint32_t *cp, int max);
+
+/* Where a toast of n cells goes in a window of win_w x win_h, with cells of cw x
+ * ch buffer pixels at scale: n cut to what fits between the margins, the box in
+ * logical pixels. False when not one cell fits. */
+struct toast_box { int n, x, y, w, h; };
+bool toast_place(int n, int win_w, int win_h, int cw, int ch, int scale,
+		 struct toast_box *b);
 
 #endif

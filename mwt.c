@@ -82,6 +82,7 @@ static struct {
 	/* globals */
 	struct wl_display *display;
 	struct wl_compositor *compositor;
+	struct wl_subcompositor *subcompositor;
 	struct wl_shm *shm;
 	struct xdg_wm_base *wm_base;
 	struct wl_seat *seat;
@@ -188,7 +189,20 @@ static struct {
 		bool configured, dirty;
 	} menu;
 	struct wl_surface *ptr_surface; /* the surface the pointer is on */
-} t = { .pty = -1, .repeat_fd = -1, .paste_fd = -1, .child = { 0, -1 }, .scale = 1 };
+
+	/* a toast at the top of the window, see util.h */
+	struct {
+		struct wl_surface *surface;
+		struct wl_subsurface *sub;
+		struct buffer bufs[2];
+		int fd; /* timerfd: hides it */
+		uint32_t cp[TOAST_MAX];
+		int n; /* code points; 0: none shown */
+		int width, height, scale, cw; /* what it was drawn for */
+		bool moved; /* its place waits for a commit of the window */
+	} toast;
+} t = { .pty = -1, .repeat_fd = -1, .paste_fd = -1, .child = { 0, -1 }, .scale = 1,
+	.toast = { .fd = -1 } };
 
 static void link_hover(void);
 static void pointer_cell(int *col, int *row);
@@ -1084,6 +1098,82 @@ static void check_redraw(const struct buffer *b, int64_t ba, int bc, int64_t ea,
 }
 #endif
 
+/* ---- toast ------------------------------------------------------------ */
+
+/* As mwc draws its toasts: white bold text on dark grey, a grey line around. */
+#define TOAST_BG 0x2b2b2b
+#define TOAST_BORDER 0x808080
+#define TOAST_FG 0xffffff
+
+static void toast_hide(void)
+{
+	if (!t.toast.n)
+		return;
+	t.toast.n = 0;
+	wl_surface_attach(t.toast.surface, NULL, 0, 0);
+	wl_surface_commit(t.toast.surface);
+}
+
+/* Draws it for the window as it is now and puts it in place, which the window's
+ * next commit applies; hides it where not one cell fits. */
+static void toast_draw(void)
+{
+	struct toast_box box;
+	struct buffer *b = !t.toast.bufs[0].busy ? &t.toast.bufs[0] :
+			   !t.toast.bufs[1].busy ? &t.toast.bufs[1] : NULL;
+	if (!b || !toast_place(t.toast.n, t.width, t.height, t.cw, t.ch, t.scale, &box)) {
+		toast_hide();
+		return;
+	}
+	int W = box.w * t.scale, H = box.h * t.scale;
+	if ((b->w != W || b->h != H) && !buffer_init(b, W, H)) {
+		toast_hide();
+		return;
+	}
+	int line = t.scale, pad = TOAST_PAD * t.scale;
+	fill_rect(b, 0, 0, W, H, TOAST_BORDER);
+	fill_rect(b, line, line, W - 2 * line, H - 2 * line, TOAST_BG);
+	int base = (H - t.ch) / 2 + t.ascent;
+	for (int i = 0; i < box.n; i++) {
+		const struct glyph *g = font_glyph(t.font, t.toast.cp[i], STYLE_BOLD, false);
+		if (g->w)
+			blit(b, g, pad + i * t.cw, base, line, W - line, line, H - line, TOAST_FG);
+	}
+	wl_surface_set_buffer_scale(t.toast.surface, t.scale);
+	wl_surface_attach(t.toast.surface, b->wb, 0, 0);
+	wl_surface_damage_buffer(t.toast.surface, 0, 0, W, H);
+	wl_surface_commit(t.toast.surface);
+	b->busy = true;
+	wl_subsurface_set_position(t.toast.sub, box.x, box.y);
+	t.toast.width = t.width;
+	t.toast.height = t.height;
+	t.toast.scale = t.scale;
+	t.toast.cw = t.cw;
+	t.toast.moved = true;
+	t.need_redraw = true;
+}
+
+/* Shows text for TOAST_MS, in place of one shown. Clicks go through it to the
+ * window. Without wl_subcompositor or a timerfd, nothing. */
+static void toast_show(const char *text)
+{
+	if (!t.subcompositor || t.toast.fd < 0)
+		return;
+	if (!t.toast.surface) {
+		t.toast.surface = wl_compositor_create_surface(t.compositor);
+		t.toast.sub = wl_subcompositor_get_subsurface(t.subcompositor, t.toast.surface,
+							      t.surface);
+		wl_subsurface_set_desync(t.toast.sub); /* shown and hidden on its own */
+		struct wl_region *none = wl_compositor_create_region(t.compositor);
+		wl_surface_set_input_region(t.toast.surface, none);
+		wl_region_destroy(none);
+	}
+	t.toast.n = toast_cps(text, t.toast.cp, TOAST_MAX);
+	struct itimerspec its = { .it_value = { TOAST_MS / 1000, TOAST_MS % 1000 * 1000000L } };
+	timerfd_settime(t.toast.fd, 0, &its, NULL);
+	toast_draw();
+}
+
 static void draw(void)
 {
 	struct vt *vt = t.vt;
@@ -1105,8 +1195,11 @@ static void draw(void)
 
 	/* Nothing new, as for a title alone: no commit. One a configure waits
 	 * for still goes out. */
+	if (t.toast.n && (t.toast.width != t.width || t.toast.height != t.height ||
+			  t.toast.scale != t.scale || t.toast.cw != t.cw))
+		toast_draw();
 	if (t.last && t.last->w == W && t.last->h == H && !t.need_full && !t.acked &&
-	    !memchr(vt->dirty, true, vt->rows)) {
+	    !t.toast.moved && !memchr(vt->dirty, true, vt->rows)) {
 		t.need_redraw = false;
 		return;
 	}
@@ -1182,6 +1275,7 @@ static void draw(void)
 	t.last = b;
 	t.need_redraw = false;
 	t.acked = false;
+	t.toast.moved = false;
 	/* the launcher's token, once the window shows: the focus it was started
 	 * with may come to it, as the compositor decides */
 	if (t.start_token) {
@@ -1841,15 +1935,22 @@ static void link_hover(void)
 	cursor_update(false);
 }
 
+/* What does not start says so in a toast too: mwt started from a launcher has
+ * its stderr nowhere to be seen. */
 static void link_launch(const char *url, const char *token)
 {
-	char buf[sizeof t.col.launcher];
+	char buf[sizeof t.col.launcher], msg[TOAST_MAX * 4 + 1];
 	char *argv[32];
-	if (!link_argv(t.col.launcher, url, buf, sizeof buf, argv, LEN(argv)))
+	if (!link_argv(t.col.launcher, url, buf, sizeof buf, argv, LEN(argv))) {
 		fprintf(stderr, "mwt: urlLauncher \"%s\": no command, too long or more than %d "
 			"words\n", t.col.launcher, (int)LEN(argv) - 2);
-	else if (!opener_spawn(argv, token))
-		fprintf(stderr, "mwt: cannot start %s: %s\n", argv[0], strerror(errno));
+		toast_show("urlLauncher: cannot be used");
+	} else if (!opener_spawn(argv, token)) {
+		int e = errno;
+		fprintf(stderr, "mwt: cannot start %s: %s\n", argv[0], strerror(e));
+		toast_text(msg, sizeof msg, argv[0], e);
+		toast_show(msg);
+	}
 }
 
 static void link_token_done(void *d, struct xdg_activation_token_v1 *tok, const char *token)
@@ -2276,6 +2377,8 @@ static void reg_global(void *d, struct wl_registry *r, uint32_t name,
 		if (ver < 4)
 			die("wl_compositor version 4 required");
 		t.compositor = wl_registry_bind(r, name, &wl_compositor_interface, MIN(ver, 6));
+	} else if (!strcmp(iface, wl_subcompositor_interface.name)) {
+		t.subcompositor = wl_registry_bind(r, name, &wl_subcompositor_interface, 1);
 	} else if (!strcmp(iface, wl_shm_interface.name)) {
 		t.shm = wl_registry_bind(r, name, &wl_shm_interface, 1);
 	} else if (!strcmp(iface, xdg_wm_base_interface.name)) {
@@ -2500,6 +2603,7 @@ done:;
 		xkb_compose_table_unref(ct);
 	}
 	t.repeat_fd = timerfd_create(CLOCK_MONOTONIC, TFD_CLOEXEC | TFD_NONBLOCK);
+	t.toast.fd = timerfd_create(CLOCK_MONOTONIC, TFD_CLOEXEC | TFD_NONBLOCK);
 	t.repeat_rate = REPEAT_RATE_DEFAULT;
 	t.repeat_delay = REPEAT_DELAY_DEFAULT;
 
@@ -2549,20 +2653,21 @@ done:;
 		if (!wl_out && send_title())
 			wl_out = wl_display_flush(t.display) < 0 && errno == EAGAIN;
 
-		struct pollfd fds[5 + MAX_XFERS] = {
+		struct pollfd fds[6 + MAX_XFERS] = {
 			{ wlfd, POLLIN | (wl_out ? POLLOUT : 0), 0 },
 			{ t.pty, POLLIN | (t.out.len ? POLLOUT : 0), 0 },
 			{ t.repeat_fd, POLLIN, 0 },
 			{ t.paste_fd, POLLIN, 0 },
 			{ t.child.fd, POLLIN, 0 },
+			{ t.toast.fd, POLLIN, 0 },
 		};
 		int nx = t.nxfers;
 		for (int i = 0; i < nx; i++)
-			fds[5 + i] = (struct pollfd){ t.xfers[i].fd, POLLOUT, 0 };
+			fds[6 + i] = (struct pollfd){ t.xfers[i].fd, POLLOUT, 0 };
 		/* Without a pidfd (before Linux 5.3, or denied by seccomp) only the
 		 * pty's end shows the shell's, and jobs can keep the pty open: the
 		 * child is asked for four times a second instead. */
-		if (poll(fds, 5 + nx, t.child.fd >= 0 ? -1 : CHILD_POLL_MS) < 0) {
+		if (poll(fds, 6 + nx, t.child.fd >= 0 ? -1 : CHILD_POLL_MS) < 0) {
 			wl_display_cancel_read(t.display);
 			if (errno == EINTR)
 				continue;
@@ -2600,9 +2705,14 @@ done:;
 			read_paste();
 		if (fds[4].revents & POLLIN)
 			t.running = false; /* the pty may stay open, held by jobs */
+		if (fds[5].revents & POLLIN) {
+			uint64_t n;
+			if (read(t.toast.fd, &n, sizeof n) == sizeof n)
+				toast_hide();
+		}
 		/* slots may have moved during dispatch, so try them all */
 		for (int i = 0; i < nx; i++)
-			if (fds[5 + i].revents) {
+			if (fds[6 + i].revents) {
 				xfers_run();
 				break;
 			}

@@ -2,6 +2,7 @@
 #define _POSIX_C_SOURCE 200809L
 #include <errno.h>
 #include <fcntl.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
 
@@ -65,6 +66,56 @@ char *startup_token(void)
 	unsetenv("XDG_ACTIVATION_TOKEN");
 	unsetenv("DESKTOP_STARTUP_ID");
 	return tok;
+}
+
+void toast_text(char *buf, size_t size, const char *name, int err)
+{
+	snprintf(buf, size, "%s: %s", name, err == ENOENT ? "not found" : strerror(err));
+}
+
+int toast_cps(const char *s, uint32_t *cp, int max)
+{
+	const unsigned char *p = (const unsigned char *)s;
+	int n = 0;
+	while (*p && n < max) {
+		int k = *p < 0x80 ? 1 : *p >= 0xc2 && *p < 0xe0 ? 2 :
+			*p >= 0xe0 && *p < 0xf0 ? 3 : *p >= 0xf0 && *p < 0xf5 ? 4 : 0;
+		uint32_t c = k == 1 ? *p : k ? *p & (0x7f >> k) : 0;
+		for (int i = 1; i < k; i++) {
+			if ((p[i] & 0xc0) != 0x80) {
+				k = 0;
+				break;
+			}
+			c = c << 6 | (p[i] & 0x3f);
+		}
+		/* overlong, surrogate or past U+10FFFF: not UTF-8 either */
+		if (k == 3 && (c < 0x800 || (c >= 0xd800 && c < 0xe000)))
+			k = 0;
+		if (k == 4 && (c < 0x10000 || c > 0x10ffff))
+			k = 0;
+		cp[n++] = k ? c : 0xfffd;
+		p += k ? k : 1;
+	}
+	return n;
+}
+
+bool toast_place(int n, int win_w, int win_h, int cw, int ch, int scale,
+		 struct toast_box *b)
+{
+	if (cw <= 0 || ch <= 0 || scale <= 0)
+		return false;
+	int room = (win_w - 2 * TOAST_MARGIN - 2 * TOAST_PAD) * scale / cw;
+	if (n > room)
+		n = room;
+	int h = (ch + scale - 1) / scale + 2 * TOAST_PAD;
+	if (n < 1 || TOAST_MARGIN + h > win_h)
+		return false;
+	b->n = n;
+	b->w = (n * cw + scale - 1) / scale + 2 * TOAST_PAD;
+	b->h = h;
+	b->x = (win_w - b->w) / 2;
+	b->y = TOAST_MARGIN;
+	return true;
 }
 
 size_t utf8_clip(const char *s, size_t max)

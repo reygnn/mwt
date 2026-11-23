@@ -121,7 +121,8 @@ them with `mwt -a indigo3`.
 * The launcher's xdg-activation token, taken for the window and kept from the shell
 * HiDPI through `wl_surface.preferred_buffer_scale`, integer scales only
 * URLs (http, https, ftp, file, mailto) found in the text, opened with an
-  xdg-activation token, so the browser may come to the front
+  xdg-activation token, so the browser may come to the front; an opener that is not
+  there shows a toast
 
 COMPAT.md goes through the VT100's sequences, and those after it, one by one.
 

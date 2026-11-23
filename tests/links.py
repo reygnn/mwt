@@ -288,6 +288,73 @@ def test_many_words():
             f.write(keep)
 
 
+TOAST_BG, TOAST_BORDER, TOAST_FG = 0x2b2b2b, 0x808080, 0xffffff
+TOAST_MARGIN, TOAST_PAD = 16, 12  # util.h
+
+
+def toast_edges(img):
+    """The toast's border on the row TOAST_MARGIN: (left, right), or None."""
+    xs = [x for x in range(img.w) if img.px(x, TOAST_MARGIN) == TOAST_BORDER]
+    return (xs[0], xs[-1]) if xs else None
+
+
+def test_missing_opener():
+    """A urlLauncher that is not there: a toast at the top of the window, centered,
+    says so for three seconds, and stderr too. Open link in the menu first, with
+    the keys: nothing else in the window changes then, so the toast must show by
+    itself. A Ctrl+click would not tell: sway's hide_cursor (100 ms here) takes
+    the pointer away and gives it back, and the underline drawn anew each time
+    commits the window too. Then Ctrl+click, which shows it again."""
+    rc = os.path.join(os.environ["XDG_CONFIG_HOME"], "mwt", "mwtrc")
+    keep = open(rc).read()
+    with open(rc, "w") as f:
+        f.write("Mwt*urlLauncher: mwt-no-such-opener --tab\n")
+    err = os.path.join(mwtlib.DIR, "missing.log")
+    try:
+        with Window(stderr=err, env={"WAYLAND_DEBUG": "1"}) as w:
+            w.feed(b"\033[2J\033[H\r\nsee " + URL.encode() + b"\r\n")
+            at(10, 1)
+            before = settle()
+            check(toast_edges(before) is None, "no toast before")
+            n = len(sizes(err))
+            mouse.send("click", "right")
+            menu_up(err, n)
+            time.sleep(0.1)
+            combo("Down")
+            combo("Return")
+            t0 = time.time()
+            check(wait(lambda: toast_edges(mwtlib.shot())), "Open link: a toast shows")
+            img = settle()
+            edges = toast_edges(img)
+            if check(edges, "and stays", f"row {TOAST_MARGIN}: {img.px(img.w // 2, TOAST_MARGIN):06x}"):
+                left, right = edges
+                check(abs(left + right - (img.w - 1)) <= 1, "centered", f"{left}..{right} of {img.w}")
+                inside = [img.px(x, y) for y in range(TOAST_MARGIN + 1, TOAST_MARGIN + 2 * TOAST_PAD)
+                          for x in range(left + 1, right)]
+                check(inside.count(TOAST_BG) > len(inside) // 2 and TOAST_FG in inside,
+                      "white text on dark grey")
+                # "mwt-no-such-opener: not found" in cells of the window's font
+                cw = (img.w - 2 * mwtlib.PAD) // 80
+                n = len("mwt-no-such-opener: not found")
+                check(abs((right - left + 1) - (n * cw + 2 * TOAST_PAD)) <= 2,
+                      "as wide as its text", f"{right - left + 1} for {n} cells of {cw}")
+            check(wait(lambda: "mwt-no-such-opener: No such file" in open(err, errors="replace").read()),
+                  "stderr says why")
+            check(wait(lambda: toast_edges(mwtlib.shot()) is None, 6.0), "the toast goes")
+            gone = time.time() - t0
+            check(2.5 <= gone <= 4.5, "after three seconds", f"{gone:.1f} s")
+            check(settle() == before, "and leaves the window as it was")
+            mouse.send("hold", "ctrl")
+            at(10, 1)
+            mouse.send("click", "left")
+            mouse.send("release", "ctrl")
+            check(wait(lambda: toast_edges(mwtlib.shot())), "Ctrl+click: the toast again")
+            check(w.proc.poll() is None, "mwt runs on")
+    finally:
+        with open(rc, "w") as f:
+            f.write(keep)
+
+
 def test_activation(win, log):
     """The token takes the focus: mwc's xdgc stands in for the browser and asks
     for it with what the opener got, as Firefox does with XDG_ACTIVATION_TOKEN.
@@ -380,6 +447,7 @@ def main():
     test_zoom(win)
     win.close()
     test_many_words()
+    test_missing_opener()
     win = Window(env={"WAYLAND_DEBUG": "1"}, stderr=log + ".2")
     screen(win)
     settle()

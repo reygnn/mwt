@@ -85,7 +85,14 @@ the front is the compositor's choice: sway only marks it urgent unless
 `focus_on_window_activation` says otherwise, mwc gives the focus while mwt still has the
 keyboard. The token is in `DESKTOP_STARTUP_ID` too, which GTK 3 reads. Without
 xdg-activation the opener gets no token. mwt does not wait for the opener. Its stdin and stdout are `/dev/null`,
-its stderr is mwt's: a program that is not there says so there.
+its stderr is mwt's.
+
+An opener that is not there, or may not be run, shows a toast at the top of the window
+for three seconds, such as "xdg-open: not found", and a line on stderr; there is no
+fallback to another program. One that starts but fails later, as xdg-open without a
+browser, shows nothing: its messages go to mwt's stderr. The toast covers the text under
+it while it shows, and clicks go through it. Without `wl_subcompositor` only stderr says
+so.
 
 A token mwt was itself started with (`XDG_ACTIVATION_TOKEN`, or else
 `DESKTOP_STARTUP_ID`) is taken out of the environment, so neither the shell nor the

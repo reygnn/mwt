@@ -134,10 +134,11 @@ void out_drop(struct out *o, int fd)
  * each up to the hard limit, as one opened before the soft limit was lowered
  * may lie above it; at most 2^20, fs.nr_open's default. close_range is not there before Linux 5.9, nor in glibc
  * before 2.34, and a seccomp filter may refuse it. */
-static void close_from_3(void)
+/* every fd from lo up */
+static void close_from(int lo)
 {
 #ifdef SYS_close_range
-	if (syscall(SYS_close_range, 3U, ~0U, 0U) == 0)
+	if (syscall(SYS_close_range, (unsigned)lo, ~0U, 0U) == 0)
 		return;
 #endif
 	DIR *d = opendir("/proc/self/fd");
@@ -145,7 +146,7 @@ static void close_from_3(void)
 		int dfd = dirfd(d);
 		for (struct dirent *e; (e = readdir(d));) {
 			int fd = atoi(e->d_name);
-			if (fd > 2 && fd != dfd)
+			if (fd >= lo && fd != dfd)
 				close(fd);
 		}
 		closedir(d);
@@ -153,7 +154,7 @@ static void close_from_3(void)
 	}
 	struct rlimit rl;
 	long max = getrlimit(RLIMIT_NOFILE, &rl) < 0 ? 65536 : (long)MIN(rl.rlim_max, 1 << 20);
-	for (long fd = 3; fd < max; fd++)
+	for (long fd = lo; fd < max; fd++)
 		close((int)fd);
 }
 
@@ -202,7 +203,7 @@ bool child_spawn(struct child *c, int *pty, char **argv, const char *term, int c
 		sigprocmask(SIG_SETMASK, &none, NULL);
 		/* nor what mwt was given open: what mwt opens is CLOEXEC, an fd
 		 * its parent left open would reach the shell and all it starts */
-		close_from_3();
+		close_from(3);
 		if (argv && argv[0]) {
 			execvp(argv[0], argv);
 			perror(argv[0]);
@@ -273,6 +274,7 @@ size_t shell_read(int fd, const struct shell_turn *turn, bool *gone)
 }
 
 #define WAIT_POLL_MS 20
+#define OPENER_WAIT_MS 1000 /* for the opener's exec, see opener_spawn */
 
 void child_wait(struct child *c, int ms)
 {
@@ -304,10 +306,20 @@ void child_hangup(struct child *c, int *pty, int ms)
 
 bool opener_spawn(char *const argv[], const char *token)
 {
-	pid_t pid = fork();
-	if (pid < 0)
+	/* the opener's errno if exec fails; closed by an exec that works */
+	int p[2];
+	if (pipe2(p, O_CLOEXEC) < 0)
 		return false;
+	pid_t pid = fork();
+	if (pid < 0) {
+		int e = errno;
+		close(p[0]);
+		close(p[1]);
+		errno = e;
+		return false;
+	}
 	if (pid == 0) {
+		close(p[0]);
 		setsid(); /* a hangup of mwt's session is not the browser's */
 		pid_t g = fork();
 		if (g < 0) /* its errno as the exit status, for mwt's message */
@@ -329,7 +341,10 @@ bool opener_spawn(char *const argv[], const char *token)
 			if (null > 1)
 				close(null);
 		}
-		close_from_3();
+		/* the pipe as 3, still closed by exec, and nothing above it */
+		if (p[1] != 3 && dup3(p[1], 3, O_CLOEXEC) < 0)
+			_exit(127);
+		close_from(4);
 		/* also as its older name, which GTK 3 reads, as GLib sets both;
 		 * one mwt was started with is not for the link */
 		if (token) {
@@ -340,15 +355,42 @@ bool opener_spawn(char *const argv[], const char *token)
 			unsetenv("DESKTOP_STARTUP_ID");
 		}
 		execvp(argv[0], argv);
-		fprintf(stderr, "mwt: %s: %s\n", argv[0], strerror(errno));
+		int e = errno;
+		while (write(3, &e, sizeof e) < 0 && errno == EINTR)
+			;
 		_exit(127);
 	}
+	close(p[1]);
 	int st;
 	pid_t r;
 	while ((r = waitpid(pid, &st, 0)) < 0 && errno == EINTR)
 		;
 	if (r == pid && WIFEXITED(st) && WEXITSTATUS(st)) {
+		close(p[0]);
 		errno = WEXITSTATUS(st); /* the second fork failed */
+		return false;
+	}
+	/* The exec comes at once, so this waits no time; a grandchild that
+	 * hangs before it does not hold mwt up for longer than this. */
+	int e = 0;
+	ssize_t n = 0;
+	struct pollfd pf = { p[0], POLLIN, 0 };
+	for (int64_t end = now_ms() + OPENER_WAIT_MS;;) {
+		int64_t left = end - now_ms();
+		if (left <= 0)
+			break;
+		int k = poll(&pf, 1, (int)left);
+		if (k < 0 && errno == EINTR)
+			continue;
+		if (k <= 0)
+			break;
+		n = read(p[0], &e, sizeof e);
+		if (n >= 0 || errno != EINTR)
+			break;
+	}
+	close(p[0]);
+	if (n == sizeof e) {
+		errno = e;
 		return false;
 	}
 	return true;

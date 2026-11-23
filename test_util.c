@@ -1,6 +1,7 @@
 /* test_util.c - the -g argument, the context menu's keys and the standard
  * fds: make check */
 #define _POSIX_C_SOURCE 200809L
+#include <errno.h>
 #include <fcntl.h>
 #include <limits.h>
 #include <stdio.h>
@@ -257,6 +258,55 @@ static void test_token(void)
 	free(tok);
 }
 
+static void test_toast(void)
+{
+	char buf[64];
+	toast_text(buf, sizeof buf, "xdg-open", ENOENT);
+	CHECK(!strcmp(buf, "xdg-open: not found"));
+	toast_text(buf, sizeof buf, "/tmp", EACCES);
+	CHECK(!strcmp(buf, "/tmp: Permission denied"));
+	toast_text(buf, 8, "xdg-open", ENOENT); /* cut, not past the end */
+	CHECK(!strcmp(buf, "xdg-ope"));
+
+	uint32_t cp[16];
+	CHECK(toast_cps("", cp, 8) == 0);
+	CHECK(toast_cps("a\xc3\xa9\xe2\x82\xac\xf0\x9f\x98\x80", cp, 8) == 4 &&
+	      cp[0] == 'a' && cp[1] == 0xe9 && cp[2] == 0x20ac && cp[3] == 0x1f600);
+	/* not UTF-8: a U+FFFD a byte, the next byte read anew */
+	CHECK(toast_cps("\xff\xc3x\xc0\xaf\xed\xa0\x80\xf4\x90\x80\x80", cp, 8) == 8 &&
+	      cp[0] == 0xfffd && cp[1] == 0xfffd && cp[2] == 'x' && cp[3] == 0xfffd &&
+	      cp[4] == 0xfffd && cp[5] == 0xfffd);
+	CHECK(toast_cps("\xe0\xa0\x80\xf0\x90\x80\x80\xf4\x8f\xbf\xbf", cp, 8) == 3 &&
+	      cp[0] == 0x800 && cp[1] == 0x10000 && cp[2] == 0x10ffff);
+	CHECK(toast_cps("\xe0\x9f\xbf", cp, 8) == 3 && cp[0] == 0xfffd); /* overlong */
+	/* past U+10FFFF, and an overlong four: each byte one */
+	CHECK(toast_cps("\xf4\x90\x80\x80\xf0\x8f\xbf\xbf", cp, 16) == 8 &&
+	      cp[0] == 0xfffd && cp[4] == 0xfffd && cp[7] == 0xfffd);
+	CHECK(toast_cps("abcdefghij", cp, 8) == 8 && cp[7] == 'h'); /* no more than max */
+	CHECK(toast_cps("\xe2\x82", cp, 8) == 2); /* cut short at the end */
+
+	/* top, centered: 20 cells of 10x20 at scale 1 in 400x300 */
+	struct toast_box b = { 0 };
+	CHECK(toast_place(20, 400, 300, 10, 20, 1, &b));
+	CHECK(b.n == 20 && b.w == 200 + 2 * TOAST_PAD && b.h == 20 + 2 * TOAST_PAD);
+	CHECK(b.x == (400 - b.w) / 2 && b.y == TOAST_MARGIN);
+	/* cut to what fits between the margins: 400 - 56 = 344 px, 34 cells */
+	CHECK(toast_place(50, 400, 300, 10, 20, 1, &b) && b.n == 34);
+	CHECK(b.x >= TOAST_MARGIN && b.x + b.w <= 400 - TOAST_MARGIN);
+	/* at scale 2 the cells are buffer pixels: 20 of them take 100 logical */
+	CHECK(toast_place(20, 400, 300, 10, 20, 2, &b) && b.w == 100 + 2 * TOAST_PAD &&
+	      b.h == 10 + 2 * TOAST_PAD);
+	CHECK(toast_place(3, 400, 300, 9, 19, 2, &b) && b.w == 14 + 2 * TOAST_PAD &&
+	      b.h == 10 + 2 * TOAST_PAD); /* rounded up */
+	/* not one cell, or no height: none */
+	CHECK(!toast_place(5, 2 * TOAST_MARGIN + 2 * TOAST_PAD + 9, 300, 10, 20, 1, &b));
+	CHECK(toast_place(5, 2 * TOAST_MARGIN + 2 * TOAST_PAD + 10, 300, 10, 20, 1, &b) &&
+	      b.n == 1);
+	CHECK(!toast_place(5, 400, TOAST_MARGIN + 20 + 2 * TOAST_PAD - 1, 10, 20, 1, &b));
+	CHECK(toast_place(5, 400, TOAST_MARGIN + 20 + 2 * TOAST_PAD, 10, 20, 1, &b));
+	CHECK(!toast_place(0, 400, 300, 10, 20, 1, &b));
+}
+
 int main(void)
 {
 	test_geometry();
@@ -266,6 +316,7 @@ int main(void)
 	test_snap();
 	test_stdio();
 	test_token();
+	test_toast();
 	printf("test_util: %d/%d checks passed\n", checks - failures, checks);
 	return failures != 0;
 }

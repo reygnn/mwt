@@ -979,6 +979,19 @@ static char *opener_output(const char *path)
 	return NULL;
 }
 
+/* how many fds this process has open */
+static int open_fds(void)
+{
+	int n = 0;
+	DIR *d = opendir("/proc/self/fd");
+	if (!d)
+		return -1;
+	while (readdir(d))
+		n++;
+	closedir(d);
+	return n;
+}
+
 static char **none_args(void)
 {
 	static char *a[] = { "/nonexistent/opener", "u", NULL };
@@ -1091,16 +1104,21 @@ static void test_opener(void)
 		CHECK(waitpid(-1, NULL, WNOHANG) < 0 && errno == ECHILD);
 	}
 
-	/* a program that is not there: started all the same, and reaped */
+	/* a program that is not there, or may not be run: false with the exec's
+	 * errno, at once, and nothing left to reap or open */
 	char *none[] = { "/nonexistent/opener", "u", NULL };
-	int saved = dup(2), null = open("/dev/null", O_WRONLY);
-	dup2(null, 2); /* its message */
-	CHECK(opener_spawn(none, "t"));
-	dup2(saved, 2);
-	close(saved);
-	close(null);
+	char *noexec[] = { dir, "u", NULL }; /* a directory */
+	int fds = open_fds();
+	int64_t t0 = now_ms();
+	errno = 0;
+	CHECK(!opener_spawn(none, "t") && errno == ENOENT);
+	errno = 0;
+	CHECK(!opener_spawn(noexec, "t") && errno == EACCES);
+	CHECK(now_ms() - t0 < 500);
+	CHECK(open_fds() == fds);
 	errno = 0;
 	CHECK(waitpid(-1, NULL, WNOHANG) < 0 && errno == ECHILD);
+
 	rmdir(dir);
 }
 
