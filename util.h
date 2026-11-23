@@ -43,8 +43,8 @@ bool stdio_fill(void);
 /* The xdg-activation token mwt was started with, from XDG_ACTIVATION_TOKEN or
  * else DESKTOP_STARTUP_ID, and both names taken out of the environment: the
  * token is for mwt's window, and the shell would hand it on, stale, to what it
- * starts. NULL for none, an empty one, one over TOKEN_MAX bytes (no token is
- * that long, and the Wayland message would not fit) or no memory. */
+ * starts. An empty one, or one over TOKEN_MAX bytes, counts as none: no token
+ * is that long. NULL for none or no memory. */
 #define TOKEN_MAX 1024
 char *startup_token(void);
 
@@ -53,14 +53,21 @@ char *startup_token(void);
 #define TOAST_PAD 12    /* around the text */
 #define TOAST_MARGIN 16 /* from the window's top and sides */
 #define TOAST_MS 3000
-#define TOAST_MAX 64    /* code points */
+#define TOAST_MAX 64    /* cells shown at most */
+#define TOAST_TEXT 256  /* code points kept */
 
-/* "name: not found" for ENOENT, else "name: " and strerror(err), in buf. */
+/* "name: not found" for ENOENT, else "name: " and strerror(err) as the C locale
+ * says it, in buf: the toast is English whatever the locale, as mwt's own
+ * words in it are. */
 void toast_text(char *buf, size_t size, const char *name, int err);
 
 /* s as code points, at most max into cp: what is not UTF-8 one U+FFFD a byte.
  * Their count. */
 int toast_cps(const char *s, uint32_t *cp, int max);
+
+/* n code points cut to fit from the left, so that the end, which says what went
+ * wrong, stays: an ellipsis, then the last fit - 1. The count left. */
+int toast_fit(uint32_t *cp, int n, int fit);
 
 /* Where a toast of n cells goes in a window of win_w x win_h, with cells of cw x
  * ch buffer pixels at scale: n cut to what fits between the margins, the box in

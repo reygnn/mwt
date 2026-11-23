@@ -4,6 +4,7 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <limits.h>
+#include <locale.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -252,6 +253,9 @@ static void test_token(void)
 	big[sizeof big - 1] = 0;
 	CHECK(!token_with(big, NULL));
 	CHECK(!token_with(NULL, big));
+	tok = token_with(big, "def"); /* too long counts as none, as empty does */
+	CHECK(tok && !strcmp(tok, "def"));
+	free(tok);
 	big[TOKEN_MAX] = 0;
 	tok = token_with(big, "def");
 	CHECK(tok && strlen(tok) == TOKEN_MAX);
@@ -267,6 +271,24 @@ static void test_toast(void)
 	CHECK(!strcmp(buf, "/tmp: Permission denied"));
 	toast_text(buf, 8, "xdg-open", ENOENT); /* cut, not past the end */
 	CHECK(!strcmp(buf, "xdg-ope"));
+	/* English in another locale too, where libc's messages are translated */
+	if ((setlocale(LC_ALL, "de_DE.UTF-8") || setlocale(LC_ALL, "de_CH.UTF-8")) &&
+	    strcmp(strerror(EACCES), "Permission denied")) {
+		toast_text(buf, sizeof buf, "/tmp", EACCES);
+		CHECK(!strcmp(buf, "/tmp: Permission denied"));
+	} else {
+		printf("test_util: no translated libc messages, the toast's English not checked\n");
+	}
+	setlocale(LC_ALL, "C");
+
+	/* cut from the left, the end kept */
+	uint32_t f[6] = { 'a', 'b', 'c', 'd', 'e', 'f' };
+	CHECK(toast_fit(f, 6, 6) == 6 && f[0] == 'a');
+	CHECK(toast_fit(f, 6, 4) == 4 && f[0] == 0x2026 && f[1] == 'd' && f[2] == 'e' &&
+	      f[3] == 'f');
+	uint32_t g[3] = { 'a', 'b', 'c' };
+	CHECK(toast_fit(g, 3, 1) == 1 && g[0] == 0x2026);
+	CHECK(toast_fit(g, 3, 0) == 0);
 
 	uint32_t cp[16];
 	CHECK(toast_cps("", cp, 8) == 0);

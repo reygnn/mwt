@@ -59,13 +59,30 @@ int __wrap_kill(pid_t pid, int sig)
  * fails the second fork of opener_spawn, made in its child */
 pid_t __real_fork(void);
 static int forks;
+static pid_t test_pid;
+static bool kill_middle; /* opener_spawn's child dies of a signal after its fork */
 pid_t __wrap_fork(void)
 {
 	if (forks > 0 && --forks == 0) {
 		errno = ENOMEM; /* not EAGAIN, which opener_spawn falls back on */
 		return -1;
 	}
-	return __real_fork();
+	pid_t pid = __real_fork();
+	if (kill_middle && pid > 0 && getpid() != test_pid)
+		raise(SIGKILL);
+	return pid;
+}
+
+/* dup3 that fails, when asked; the child inherits the flag */
+int __real_dup3(int old, int new, int flags);
+static bool dup3_fails;
+int __wrap_dup3(int old, int new, int flags)
+{
+	if (dup3_fails) {
+		errno = EMFILE;
+		return -1;
+	}
+	return __real_dup3(old, new, flags);
 }
 
 /* opendir as without /proc, when asked: hiding /proc for real needs a mount
@@ -1116,6 +1133,20 @@ static void test_opener(void)
 	CHECK(!opener_spawn(noexec, "t") && errno == EACCES);
 	CHECK(now_ms() - t0 < 500);
 	CHECK(open_fds() == fds);
+	/* a program that is there, but the pipe could not be moved to 3 for it: it
+	 * does not start, and says why; nor when the child between dies of a
+	 * signal, whatever became of the opener */
+	char *works[] = { "true", NULL };
+	dup3_fails = true;
+	errno = 0;
+	CHECK(!opener_spawn(works, "t") && errno == EMFILE);
+	dup3_fails = false;
+	kill_middle = true;
+	errno = 0;
+	CHECK(!opener_spawn(works, "t") && errno == EINTR);
+	kill_middle = false;
+	CHECK(open_fds() == fds);
+	CHECK(opener_spawn(works, "t")); /* and with neither, it does */
 	errno = 0;
 	CHECK(waitpid(-1, NULL, WNOHANG) < 0 && errno == ECHILD);
 
@@ -1125,6 +1156,7 @@ static void test_opener(void)
 int main(void)
 {
 	signal(SIGPIPE, SIG_IGN); /* as mwt */
+	test_pid = getpid();
 	test_write();
 	test_write_front();
 	test_write_random();

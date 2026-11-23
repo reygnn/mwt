@@ -2,6 +2,7 @@
 #define _POSIX_C_SOURCE 200809L
 #include <errno.h>
 #include <fcntl.h>
+#include <locale.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
@@ -57,12 +58,17 @@ bool stdio_fill(void)
 	return true;
 }
 
+static const char *token_usable(const char *s)
+{
+	return s && *s && strnlen(s, TOKEN_MAX + 1) <= TOKEN_MAX ? s : NULL;
+}
+
 char *startup_token(void)
 {
-	const char *s = getenv("XDG_ACTIVATION_TOKEN");
-	if (!s || !*s)
-		s = getenv("DESKTOP_STARTUP_ID");
-	char *tok = s && *s && strnlen(s, TOKEN_MAX + 1) <= TOKEN_MAX ? strdup(s) : NULL;
+	const char *s = token_usable(getenv("XDG_ACTIVATION_TOKEN"));
+	if (!s)
+		s = token_usable(getenv("DESKTOP_STARTUP_ID"));
+	char *tok = s ? strdup(s) : NULL;
 	unsetenv("XDG_ACTIVATION_TOKEN");
 	unsetenv("DESKTOP_STARTUP_ID");
 	return tok;
@@ -70,7 +76,22 @@ char *startup_token(void)
 
 void toast_text(char *buf, size_t size, const char *name, int err)
 {
-	snprintf(buf, size, "%s: %s", name, err == ENOENT ? "not found" : strerror(err));
+	locale_t c = err == ENOENT ? (locale_t)0 : newlocale(LC_ALL_MASK, "C", (locale_t)0);
+	snprintf(buf, size, "%s: %s", name, err == ENOENT ? "not found" :
+		 c ? strerror_l(err, c) : strerror(err));
+	if (c)
+		freelocale(c);
+}
+
+int toast_fit(uint32_t *cp, int n, int fit)
+{
+	if (n <= fit)
+		return n;
+	if (fit < 1)
+		return 0;
+	memmove(cp + 1, cp + n - (fit - 1), (size_t)(fit - 1) * sizeof *cp);
+	cp[0] = 0x2026;
+	return fit;
 }
 
 int toast_cps(const char *s, uint32_t *cp, int max)

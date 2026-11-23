@@ -196,10 +196,12 @@ static struct {
 		struct wl_subsurface *sub;
 		struct buffer bufs[2];
 		int fd; /* timerfd: hides it */
-		uint32_t cp[TOAST_MAX];
-		int n; /* code points; 0: none shown */
-		int width, height, scale, cw; /* what it was drawn for */
-		bool moved; /* its place waits for a commit of the window */
+		uint32_t cp[TOAST_TEXT];
+		int n; /* code points; 0: none */
+		int width, height, scale, cw, ch, ascent; /* what it was drawn for */
+		bool mapped;  /* the surface has a buffer */
+		bool pending; /* to draw again once a buffer is free */
+		bool moved;   /* its place waits for a commit of the window */
 	} toast;
 } t = { .pty = -1, .repeat_fd = -1, .paste_fd = -1, .child = { 0, -1 }, .scale = 1,
 	.toast = { .fd = -1 } };
@@ -945,6 +947,8 @@ static void buffer_release(void *d, struct wl_buffer *wb)
 {
 	(void)wb;
 	((struct buffer *)d)->busy = false;
+	if (t.toast.pending) /* it waits for a buffer, perhaps this one */
+		t.need_redraw = true;
 }
 static const struct wl_buffer_listener buffer_listener = { buffer_release };
 
@@ -1105,37 +1109,69 @@ static void check_redraw(const struct buffer *b, int64_t ba, int bc, int64_t ea,
 #define TOAST_BORDER 0x808080
 #define TOAST_FG 0xffffff
 
-static void toast_hide(void)
+static void toast_unmap(void)
 {
-	if (!t.toast.n)
+	if (!t.toast.mapped)
 		return;
-	t.toast.n = 0;
+	t.toast.mapped = false;
 	wl_surface_attach(t.toast.surface, NULL, 0, 0);
 	wl_surface_commit(t.toast.surface);
 }
 
+static void toast_hide(void)
+{
+	t.toast.n = 0;
+	t.toast.pending = false;
+	toast_unmap();
+}
+
+/* Whether the window, its scale or the font changed since it was drawn. */
+static bool toast_stale(void)
+{
+	return t.toast.width != t.width || t.toast.height != t.height ||
+	       t.toast.scale != t.scale || t.toast.cw != t.cw || t.toast.ch != t.ch ||
+	       t.toast.ascent != t.ascent;
+}
+
 /* Draws it for the window as it is now and puts it in place, which the window's
- * next commit applies; hides it where not one cell fits. */
+ * next commit applies. Where not one cell fits, or there is no memory, it is
+ * taken off until the window changes again, its time running on; with both
+ * buffers held, it is drawn again once one comes back. */
 static void toast_draw(void)
 {
+	t.toast.width = t.width;
+	t.toast.height = t.height;
+	t.toast.scale = t.scale;
+	t.toast.cw = t.cw;
+	t.toast.ch = t.ch;
+	t.toast.ascent = t.ascent;
+	t.toast.pending = false;
 	struct toast_box box;
+	if (!toast_place(MIN(t.toast.n, TOAST_MAX), t.width, t.height, t.cw, t.ch, t.scale,
+			 &box)) {
+		toast_unmap();
+		return;
+	}
 	struct buffer *b = !t.toast.bufs[0].busy ? &t.toast.bufs[0] :
 			   !t.toast.bufs[1].busy ? &t.toast.bufs[1] : NULL;
-	if (!b || !toast_place(t.toast.n, t.width, t.height, t.cw, t.ch, t.scale, &box)) {
-		toast_hide();
+	if (!b) {
+		t.toast.pending = true;
 		return;
 	}
 	int W = box.w * t.scale, H = box.h * t.scale;
 	if ((b->w != W || b->h != H) && !buffer_init(b, W, H)) {
-		toast_hide();
+		toast_unmap();
 		return;
 	}
+	uint32_t cp[TOAST_TEXT];
+	memcpy(cp, t.toast.cp, (size_t)t.toast.n * sizeof *cp);
+	int n = toast_fit(cp, t.toast.n, box.n);
 	int line = t.scale, pad = TOAST_PAD * t.scale;
 	fill_rect(b, 0, 0, W, H, TOAST_BORDER);
 	fill_rect(b, line, line, W - 2 * line, H - 2 * line, TOAST_BG);
 	int base = (H - t.ch) / 2 + t.ascent;
-	for (int i = 0; i < box.n; i++) {
-		const struct glyph *g = font_glyph(t.font, t.toast.cp[i], STYLE_BOLD, false);
+	for (int i = 0; i < n; i++) {
+		const struct glyph *g = font_glyph(t.font, cp[i], STYLE_BOLD, false);
 		if (g->w)
 			blit(b, g, pad + i * t.cw, base, line, W - line, line, H - line, TOAST_FG);
 	}
@@ -1144,11 +1180,8 @@ static void toast_draw(void)
 	wl_surface_damage_buffer(t.toast.surface, 0, 0, W, H);
 	wl_surface_commit(t.toast.surface);
 	b->busy = true;
+	t.toast.mapped = true;
 	wl_subsurface_set_position(t.toast.sub, box.x, box.y);
-	t.toast.width = t.width;
-	t.toast.height = t.height;
-	t.toast.scale = t.scale;
-	t.toast.cw = t.cw;
 	t.toast.moved = true;
 	t.need_redraw = true;
 }
@@ -1168,7 +1201,7 @@ static void toast_show(const char *text)
 		wl_surface_set_input_region(t.toast.surface, none);
 		wl_region_destroy(none);
 	}
-	t.toast.n = toast_cps(text, t.toast.cp, TOAST_MAX);
+	t.toast.n = toast_cps(text, t.toast.cp, TOAST_TEXT);
 	struct itimerspec its = { .it_value = { TOAST_MS / 1000, TOAST_MS % 1000 * 1000000L } };
 	timerfd_settime(t.toast.fd, 0, &its, NULL);
 	toast_draw();
@@ -1193,11 +1226,10 @@ static void draw(void)
 	t.last_cx = vt->c.x;
 	t.last_cy = vt->c.y;
 
+	if (t.toast.n && (t.toast.pending || toast_stale()))
+		toast_draw();
 	/* Nothing new, as for a title alone: no commit. One a configure waits
 	 * for still goes out. */
-	if (t.toast.n && (t.toast.width != t.width || t.toast.height != t.height ||
-			  t.toast.scale != t.scale || t.toast.cw != t.cw))
-		toast_draw();
 	if (t.last && t.last->w == W && t.last->h == H && !t.need_full && !t.acked &&
 	    !t.toast.moved && !memchr(vt->dirty, true, vt->rows)) {
 		t.need_redraw = false;
@@ -1939,7 +1971,7 @@ static void link_hover(void)
  * its stderr nowhere to be seen. */
 static void link_launch(const char *url, const char *token)
 {
-	char buf[sizeof t.col.launcher], msg[TOAST_MAX * 4 + 1];
+	char buf[sizeof t.col.launcher], msg[TOAST_TEXT * 4 + 1];
 	char *argv[32];
 	if (!link_argv(t.col.launcher, url, buf, sizeof buf, argv, LEN(argv))) {
 		fprintf(stderr, "mwt: urlLauncher \"%s\": no command, too long or more than %d "

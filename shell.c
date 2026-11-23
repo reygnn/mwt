@@ -130,11 +130,11 @@ void out_drop(struct out *o, int fd)
 		out_write(o, fd, "\033[201~", 6);
 }
 
-/* Every fd from 3 up closed: close_range, else what /proc/self/fd lists, else
+/* Every fd from lo up closed: close_range, else what /proc/self/fd lists, else
  * each up to the hard limit, as one opened before the soft limit was lowered
- * may lie above it; at most 2^20, fs.nr_open's default. close_range is not there before Linux 5.9, nor in glibc
- * before 2.34, and a seccomp filter may refuse it. */
-/* every fd from lo up */
+ * may lie above it; at most 2^20, fs.nr_open's default. close_range is not
+ * there before Linux 5.9, nor in glibc before 2.34, and a seccomp filter may
+ * refuse it. */
 static void close_from(int lo)
 {
 #ifdef SYS_close_range
@@ -342,8 +342,12 @@ bool opener_spawn(char *const argv[], const char *token)
 				close(null);
 		}
 		/* the pipe as 3, still closed by exec, and nothing above it */
-		if (p[1] != 3 && dup3(p[1], 3, O_CLOEXEC) < 0)
+		if (p[1] != 3 && dup3(p[1], 3, O_CLOEXEC) < 0) {
+			int e = errno;
+			while (write(p[1], &e, sizeof e) < 0 && errno == EINTR)
+				;
 			_exit(127);
+		}
 		close_from(4);
 		/* also as its older name, which GTK 3 reads, as GLib sets both;
 		 * one mwt was started with is not for the link */
@@ -355,9 +359,15 @@ bool opener_spawn(char *const argv[], const char *token)
 			unsetenv("DESKTOP_STARTUP_ID");
 		}
 		execvp(argv[0], argv);
+		/* mwt stopped waiting after OPENER_WAIT_MS: then stderr, the
+		 * only place left to say so */
 		int e = errno;
-		while (write(3, &e, sizeof e) < 0 && errno == EINTR)
+		ssize_t w;
+		signal(SIGPIPE, SIG_IGN);
+		while ((w = write(3, &e, sizeof e)) < 0 && errno == EINTR)
 			;
+		if (w != sizeof e)
+			fprintf(stderr, "mwt: %s: %s\n", argv[0], strerror(e));
 		_exit(127);
 	}
 	close(p[1]);
@@ -368,6 +378,11 @@ bool opener_spawn(char *const argv[], const char *token)
 	if (r == pid && WIFEXITED(st) && WEXITSTATUS(st)) {
 		close(p[0]);
 		errno = WEXITSTATUS(st); /* the second fork failed */
+		return false;
+	}
+	if (r == pid && WIFSIGNALED(st)) { /* killed before or after its fork */
+		close(p[0]);
+		errno = EINTR;
 		return false;
 	}
 	/* The exec comes at once, so this waits no time; a grandchild that

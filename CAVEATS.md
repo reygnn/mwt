@@ -90,9 +90,13 @@ its stderr is mwt's.
 An opener that is not there, or may not be run, shows a toast at the top of the window
 for three seconds, such as "xdg-open: not found", and a line on stderr; there is no
 fallback to another program. One that starts but fails later, as xdg-open without a
-browser, shows nothing: its messages go to mwt's stderr. The toast covers the text under
-it while it shows, and clicks go through it. Without `wl_subcompositor` only stderr says
-so.
+browser, shows nothing: its messages go to mwt's stderr. A urlLauncher mwt cannot use
+(no command, too long, more than 30 words) shows "urlLauncher: cannot be used". The toast
+covers the text under it while it shows, and clicks go through it. It is English
+whatever the locale. A text wider than the window is cut from the left, so that the
+reason stays; each character takes one cell, a wide one too. In a window too small for
+it, it shows once the window is larger again, within its three seconds. Without
+`wl_subcompositor` only stderr says so.
 
 A token mwt was itself started with (`XDG_ACTIVATION_TOKEN`, or else
 `DESKTOP_STARTUP_ID`) is taken out of the environment, so neither the shell nor the

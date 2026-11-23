@@ -344,11 +344,58 @@ def test_missing_opener():
             gone = time.time() - t0
             check(2.5 <= gone <= 4.5, "after three seconds", f"{gone:.1f} s")
             check(settle() == before, "and leaves the window as it was")
+
+            # a second one while the first shows starts the time anew
+            def by_menu():
+                at(10, 1)
+                n = len(sizes(err))
+                mouse.send("click", "right")
+                menu_up(err, n)
+                time.sleep(0.1)
+                combo("Down")
+                combo("Return")
+                return time.time()
+            t1 = by_menu()
+            wait(lambda: toast_edges(mwtlib.shot()))
+            time.sleep(max(0.0, t1 + 1.5 - time.time()))
+            t2 = by_menu()
+            time.sleep(max(0.0, t1 + 3.6 - time.time()))
+            check(toast_edges(mwtlib.shot()), "a second toast keeps it past the first's time")
+            check(wait(lambda: toast_edges(mwtlib.shot()) is None, 4.0), "and then it goes")
+            gone = time.time() - t2
+            check(2.5 <= gone <= 4.5, "three seconds after the second", f"{gone:.1f} s")
+
+            # the window changes under it: centered anew, cut from the left,
+            # off while too small, back when large again
+            x, y, ww, hh = rect()
             mouse.send("hold", "ctrl")
             at(10, 1)
             mouse.send("click", "left")
             mouse.send("release", "ctrl")
+            t3 = time.time()
             check(wait(lambda: toast_edges(mwtlib.shot())), "Ctrl+click: the toast again")
+            mwtlib.swaymsg('[app_id="mwt"]', "resize", "set", "250", str(hh))
+            wait(lambda: rect()[2] < ww)  # cells whole: a few pixels less
+            img = settle()
+            edges = toast_edges(img)
+            cw = (ww - 2 * mwtlib.PAD) // 80
+            room = (img.w - 2 * TOAST_MARGIN - 2 * TOAST_PAD) // cw
+            if check(edges and img.w <= 250, "narrower: the toast stays", f"{edges} in {img.w}"):
+                left, right = edges
+                check(abs(left + right - (img.w - 1)) <= 1, "centered in it", f"{left}..{right}")
+                check(abs((right - left + 1) - (room * cw + 2 * TOAST_PAD)) <= 2,
+                      "cut to what fits", f"{right - left + 1} for {room} cells of {cw}")
+            # lower than the toast with its margin; as narrow as sway lets it
+            # be, where one cell, an ellipsis, would still fit
+            mwtlib.swaymsg('[app_id="mwt"]', "resize", "set", "40", "30")
+            small = wait(lambda: rect()[3] < 50)  # one row, its padding
+            img = settle()
+            check(small and toast_edges(img) is None, "too small: none", f"{rect()}")
+            mwtlib.swaymsg('[app_id="mwt"]', "resize", "set", str(ww), str(hh))
+            wait(lambda: rect()[2] == ww)
+            check(time.time() - t3 < 2.8, "(all within its time)", f"{time.time() - t3:.1f} s")
+            check(toast_edges(settle()), "large again: back")
+            check(wait(lambda: toast_edges(mwtlib.shot()) is None, 4.0), "and goes in time")
             check(w.proc.poll() is None, "mwt runs on")
     finally:
         with open(rc, "w") as f:
