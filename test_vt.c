@@ -36,7 +36,9 @@ static char titlebuf[VT_OSC_MAX];
 static void on_write(void *ud, const char *b, size_t n)
 {
 	(void)ud;
-	strncat(replybuf, b, n);
+	/* a reply that does not fit fails a check rather than ASan */
+	size_t l = strlen(replybuf), room = sizeof replybuf - 1 - l;
+	strncat(replybuf, b, n < room ? n : room);
 }
 
 static void on_title(void *ud, const char *t)
