@@ -16,14 +16,6 @@ TODO
   des REP-Fixes auch wie xterm). ncurses nutzt es, um Zeichenfolgen kürzer zu
   schicken. Dazu ein Check in tests/terminfo.py.
 
-* Das Aktivierungstoken, mit dem mwt selbst gestartet wird
-  (XDG_ACTIVATION_TOKEN, DESKTOP_STARTUP_ID), nutzt mwt nicht und gibt es an
-  die Shell weiter: ein xdg-open in der Shell reicht dann ein altes Token
-  weiter. Besser: mwt aktiviert sein Fenster damit nach dem ersten Frame und
-  nimmt beide Variablen aus der Umgebung, bevor die Shell startet. Den Opener
-  der Links betrifft es nicht (shell.c, opener_spawn). Dazu ein Test unter
-  sway mit focus_on_window_activation focus.
-
 * Ein Opener, der nicht da ist, meldet sich nur auf stderr: mwt aus einem
   Launcher oder aus mwc gestartet hat das auf einem tty oder nirgends, und
   Ctrl+Klick tut scheinbar nichts (so geschehen ohne xdg-utils). Zu entscheiden:

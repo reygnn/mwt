@@ -118,6 +118,7 @@ them with `mwt -a indigo3`.
 * Wide characters, and emoji as outlines if a fallback font has them
 * Box drawing and block elements (U+2500 to U+259F) and the DEC scan lines (U+23BA to
   U+23BD) drawn to fill the cell, so lines join between rows whatever the font
+* The launcher's xdg-activation token, taken for the window and kept from the shell
 * HiDPI through `wl_surface.preferred_buffer_scale`, integer scales only
 * URLs (http, https, ftp, file, mailto) found in the text, opened with an
   xdg-activation token, so the browser may come to the front

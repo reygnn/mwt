@@ -4,6 +4,7 @@
 #include <fcntl.h>
 #include <limits.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
 #include <sys/wait.h>
@@ -219,6 +220,43 @@ static void test_stdio(void)
 	CHECK(stdio_fill()); /* nothing closed: nothing to do */
 }
 
+/* the token: XDG_ACTIVATION_TOKEN first, then DESKTOP_STARTUP_ID; both gone after */
+static char *token_with(const char *xdg, const char *startup)
+{
+	if (xdg)
+		setenv("XDG_ACTIVATION_TOKEN", xdg, 1);
+	if (startup)
+		setenv("DESKTOP_STARTUP_ID", startup, 1);
+	char *tok = startup_token();
+	CHECK(!getenv("XDG_ACTIVATION_TOKEN") && !getenv("DESKTOP_STARTUP_ID"));
+	return tok;
+}
+
+static void test_token(void)
+{
+	char *tok = token_with("abc", "def");
+	CHECK(tok && !strcmp(tok, "abc"));
+	free(tok);
+	tok = token_with(NULL, "def"); /* GTK 3 and older launchers */
+	CHECK(tok && !strcmp(tok, "def"));
+	free(tok);
+	tok = token_with("", "def"); /* an empty one is none */
+	CHECK(tok && !strcmp(tok, "def"));
+	free(tok);
+	CHECK(!token_with(NULL, NULL));
+	CHECK(!token_with("", ""));
+	/* as long as it may be, and one byte longer */
+	char big[TOKEN_MAX + 2];
+	memset(big, 'x', sizeof big - 1);
+	big[sizeof big - 1] = 0;
+	CHECK(!token_with(big, NULL));
+	CHECK(!token_with(NULL, big));
+	big[TOKEN_MAX] = 0;
+	tok = token_with(big, "def");
+	CHECK(tok && strlen(tok) == TOKEN_MAX);
+	free(tok);
+}
+
 int main(void)
 {
 	test_geometry();
@@ -227,6 +265,7 @@ int main(void)
 	test_bounds();
 	test_snap();
 	test_stdio();
+	test_token();
 	printf("test_util: %d/%d checks passed\n", checks - failures, checks);
 	return failures != 0;
 }

@@ -56,6 +56,17 @@ bool stdio_fill(void)
 	return true;
 }
 
+char *startup_token(void)
+{
+	const char *s = getenv("XDG_ACTIVATION_TOKEN");
+	if (!s || !*s)
+		s = getenv("DESKTOP_STARTUP_ID");
+	char *tok = s && *s && strnlen(s, TOKEN_MAX + 1) <= TOKEN_MAX ? strdup(s) : NULL;
+	unsetenv("XDG_ACTIVATION_TOKEN");
+	unsetenv("DESKTOP_STARTUP_ID");
+	return tok;
+}
+
 size_t utf8_clip(const char *s, size_t max)
 {
 	size_t n = strnlen(s, max + 1);

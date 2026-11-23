@@ -96,6 +96,7 @@ static struct {
 	struct wp_viewporter *viewporter;
 	struct xdg_activation_v1 *activation;
 	bool bell_asked; /* BEL since the focus went: once is enough */
+	char *start_token; /* the one mwt was started with, until the first frame */
 
 	/* window */
 	struct wl_surface *surface;
@@ -1181,6 +1182,14 @@ static void draw(void)
 	t.last = b;
 	t.need_redraw = false;
 	t.acked = false;
+	/* the launcher's token, once the window shows: the focus it was started
+	 * with may come to it, as the compositor decides */
+	if (t.start_token) {
+		if (t.activation)
+			xdg_activation_v1_activate(t.activation, t.start_token, t.surface);
+		free(t.start_token);
+		t.start_token = NULL;
+	}
 }
 
 /* ---- context menu ----------------------------------------------------- */
@@ -2403,6 +2412,7 @@ static void usage(void)
 int main(int argc, char **argv)
 {
 	stdio_fill(); /* before anything is opened or printed */
+	t.start_token = startup_token(); /* before the shell or an opener starts */
 	const char *app_id = default_app_id, *title = default_title;
 	t.font_spec = font_spec;
 	t.init_cols = default_cols;

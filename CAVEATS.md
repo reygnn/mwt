@@ -84,10 +84,14 @@ Ctrl+click or for the click or key that chose Open link. Whether the browser com
 the front is the compositor's choice: sway only marks it urgent unless
 `focus_on_window_activation` says otherwise, mwc gives the focus while mwt still has the
 keyboard. The token is in `DESKTOP_STARTUP_ID` too, which GTK 3 reads. Without
-xdg-activation the opener gets no token. A token mwt was itself started with
-(`XDG_ACTIVATION_TOKEN`, `DESKTOP_STARTUP_ID`) does not reach the opener, but the shell
-still gets it. mwt does not wait for the opener. Its stdin and stdout are `/dev/null`,
+xdg-activation the opener gets no token. mwt does not wait for the opener. Its stdin and stdout are `/dev/null`,
 its stderr is mwt's: a program that is not there says so there.
+
+A token mwt was itself started with (`XDG_ACTIVATION_TOKEN`, or else
+`DESKTOP_STARTUP_ID`) is taken out of the environment, so neither the shell nor the
+opener gets it, and mwt asks for the focus with it once its window shows. sway gives a
+new window the focus anyway; where `no_focus` keeps it away, `focus_on_window_activation`
+decides. A token over 1024 bytes is dropped.
 
 
 ## Replies and the line discipline

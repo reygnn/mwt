@@ -20,7 +20,7 @@ use mwc's `vinput` need `MWC_DIR`, which defaults to `../../mwc`:
 | `make keys` | what mwt sends for keys and the mouse, against `mwt.info`, under headless sway |
 | `make bell` | BEL marks the window urgent without the focus, once, under headless sway |
 | `make links` | Ctrl+click, the menu's Open link and the underline on URLs, with a fake opener; the token's focus with mwc's `xdgc` (`XDGC`), under headless sway |
-| `make wayland` | a hidden window's configure, the min size, long `-T` and `-a`, from mwt's Wayland log, under headless sway |
+| `make wayland` | a hidden window's configure, the min size, long `-T` and `-a`, from mwt's Wayland log; the token mwt is started with, with mwc's `xdgc` (`XDGC`), under headless sway |
 | `make pixel` | what mwt draws, by screenshot, under headless sway |
 | `make mouse` | the mouse modes, under headless sway |
 | `make keyboard` | dead keys, Compose and key repeat, under headless sway |
@@ -57,7 +57,7 @@ esctest is GPL. The containers have no network, so fetch on the host first with
 | `sel.c` | the selection over the VT core's lines: words, lines, clicks, drags, its text |
 | `link.c` | URLs in the VT core's lines, over lines that wrap; the opener's words |
 | `shell.c` | the shell on its pty: what waits to be written, its output read in turns, the paste dropped for a signal; spawn, reap, hang up; the opener of a link |
-| `util.c` | `-g`, the context menu's keys, the first size within the compositor's bounds, cutting `-T` and `-a` |
+| `util.c` | `-g`, the context menu's keys, the first size within the compositor's bounds, cutting `-T` and `-a`, the token mwt was started with |
 | `rc.c` | the mwtrc, the minimum contrast, the cursor's color on a cell, the URL launcher; no Wayland |
 | `mwt.info` | terminfo; declares only what `vt.c` really does |
 | `config.h`, `version.h` | defaults; the version for `-v` and XTVERSION, with the commit from `build/gitversion.h` (the Makefile) |

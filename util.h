@@ -38,4 +38,12 @@ size_t utf8_clip(const char *s, size_t max);
  * the Wayland socket. False when /dev/null cannot be opened. */
 bool stdio_fill(void);
 
+/* The xdg-activation token mwt was started with, from XDG_ACTIVATION_TOKEN or
+ * else DESKTOP_STARTUP_ID, and both names taken out of the environment: the
+ * token is for mwt's window, and the shell would hand it on, stale, to what it
+ * starts. NULL for none, an empty one, one over TOKEN_MAX bytes (no token is
+ * that long, and the Wayland message would not fit) or no memory. */
+#define TOKEN_MAX 1024
+char *startup_token(void);
+
 #endif

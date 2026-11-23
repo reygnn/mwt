@@ -1,11 +1,13 @@
 #!/usr/bin/env python3
 """What mwt asks of the compositor and answers it, from its WAYLAND_DEBUG log and
 sway's tree, where windows with the app_id mwt float: a configure on a hidden
-window is committed, the min size, -T and -a cut to one message. sway sends no
+window is committed, the min size, -T and -a cut to one message, the token mwt
+is started with. sway sends no
 configure_bounds: test_util has fit_bounds. Run with
 `make wayland`, which goes through tests/headless.sh."""
 import os
 import re
+import subprocess
 import sys
 import time
 
@@ -171,6 +173,88 @@ def test_long_names():
     win.close()
 
 
+def focused(app_id):
+    n = node(app_id)
+    return bool(n and n.get("focused"))
+
+
+def wait(cond, limit=3.0):
+    end = time.time() + limit
+    while time.time() < end and not cond():
+        time.sleep(0.05)
+    return cond()
+
+
+def test_startup_token(mouse):
+    """The token mwt is started with: its window asks for the focus with it, and
+    the shell does not see it. mwc's xdgc stands in for the launcher and makes
+    a token for a click on it. no_focus keeps sway from focusing the new window
+    by itself, so a window without the token stays unfocused, which is checked
+    first; focus_on_window_activation focus gives it the focus with one."""
+    xdgc = os.environ.get("XDGC")
+    if not xdgc or not os.access(xdgc, os.X_OK):
+        print("info: no XDGC (mwc's build/xdgc): the startup token not checked")
+        return
+    fifo = os.path.join(mwtlib.DIR, "launcher.fifo")
+    os.mkfifo(fifo)
+    p = subprocess.Popen([xdgc, "app=launcher", "size=200x100", f"control={fifo}"],
+                         stdout=subprocess.DEVNULL)
+    fd = -1
+    end = time.time() + 5
+    while fd < 0 and p.poll() is None and time.time() < end:
+        try:
+            fd = os.open(fifo, os.O_WRONLY | os.O_NONBLOCK)
+        except OSError:
+            time.sleep(0.05)
+    if not check(fd >= 0, "the launcher stand-in reads its fifo", f"exit {p.poll()}"):
+        p.kill()
+        return
+    os.set_blocking(fd, True)
+    ctl = os.fdopen(fd, "w", buffering=1)
+    swaymsg("no_focus", '[app_id="mwt-token"]')
+    swaymsg("focus_on_window_activation", "focus")
+    envfile = os.path.join(os.environ["HOME"], "token-env")
+
+    def start(token):
+        """mwt with token, whose shell writes what it got of it to envfile"""
+        if os.path.exists(envfile):
+            os.remove(envfile)
+        r = wait(lambda: rect("launcher"))
+        mouse.send("move", r[0] + 20, r[1] + 20)
+        mouse.send("click", "left")
+        wait(lambda: focused("launcher"))
+        env = {"XDG_ACTIVATION_TOKEN": token, "DESKTOP_STARTUP_ID": token} if token else None
+        return Window("sh", "-c", f"env | grep -E 'ACTIVATION|STARTUP' >'{envfile}'; "
+                      "echo done >>'{envfile}'; exec sleep 100".replace("{envfile}", envfile),
+                      app_id="mwt-token", env=env)
+
+    if not check(wait(lambda: rect("launcher")), "the launcher stand-in maps"):
+        p.kill()
+        return
+    win = start(None)
+    time.sleep(0.5)
+    check(not focused("mwt-token") and focused("launcher"),
+          "without a token the new window stays unfocused (no_focus)")
+    win.close()
+    token = os.path.join(mwtlib.DIR, "token")
+    ctl.write(f"token {token}\n")
+    got = wait(lambda: os.path.exists(token) and os.path.getsize(token) > 0)
+    if check(got, "the launcher has a token for its click"):
+        win = start(open(token).read().strip())
+        check(wait(lambda: focused("mwt-token")), "with it mwt takes the focus")
+        check(wait(lambda: os.path.exists(envfile) and "done" in open(envfile).read()),
+              "the shell starts")
+        seen = open(envfile).read() if os.path.exists(envfile) else ""
+        check(seen.strip() == "done", "and has neither XDG_ACTIVATION_TOKEN nor DESKTOP_STARTUP_ID",
+              seen)
+        win.close()
+    swaymsg("focus_on_window_activation", "urgent")
+    ctl.write("quit\n")
+    ctl.close()
+    p.wait(5)
+    wait(lambda: not rect("launcher"))
+
+
 def main():
     mouse = Mouse()
     test_hidden(os.path.join(mwtlib.DIR, "hidden.log"))
@@ -179,6 +263,7 @@ def main():
     test_title(os.path.join(mwtlib.DIR, "title.log"))
     test_flood_frames(os.path.join(mwtlib.DIR, "flood.log"))
     test_long_names()
+    test_startup_token(mouse)
     mouse.close()
     return finish()
 
