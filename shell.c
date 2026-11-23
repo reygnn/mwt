@@ -275,6 +275,7 @@ size_t shell_read(int fd, const struct shell_turn *turn, bool *gone)
 
 #define WAIT_POLL_MS 20
 #define OPENER_WAIT_MS 1000 /* for the opener's exec, see opener_spawn */
+#define OPENER_FORKED (-1) /* in the pipe: the grandchild is there; errnos are > 0 */
 
 void child_wait(struct child *c, int ms)
 {
@@ -326,6 +327,11 @@ bool opener_spawn(char *const argv[], const char *token)
 			_exit(errno > 0 && errno < 256 ? errno : EAGAIN);
 		if (g > 0)
 			_exit(0);
+		/* first: the opener's process is there. SIGPIPE is still ignored,
+		 * as in mwt, should mwt have stopped waiting. */
+		int here = OPENER_FORKED;
+		while (write(p[1], &here, sizeof here) < 0 && errno == EINTR)
+			;
 		for (int sig = 1; sig < NSIG; sig++)
 			signal(sig, SIG_DFL);
 		sigset_t none;
@@ -384,32 +390,41 @@ bool opener_spawn(char *const argv[], const char *token)
 		errno = WEXITSTATUS(st); /* the second fork failed */
 		return false;
 	}
-	/* The exec comes at once, so this waits no time; a grandchild that
-	 * hangs before it does not hold mwt up for longer than this. A child
-	 * between that died of a signal after its fork left the grandchild to
-	 * say how it went; one that died before is taken as started. */
-	int e = 0;
-	ssize_t n = 0;
+	/* What the grandchild says: OPENER_FORKED as it begins, then the errno
+	 * of what failed, or EOF from a working exec. Each an int, which a pipe
+	 * writes whole. The exec comes at once, so this waits no time; one that
+	 * hangs before it holds mwt up no longer than OPENER_WAIT_MS. */
+	bool forked = false, eof = false;
+	int err = 0;
 	struct pollfd pf = { p[0], POLLIN, 0 };
-	for (int64_t end = now_ms() + OPENER_WAIT_MS;;) {
+	for (int64_t end = now_ms() + OPENER_WAIT_MS; !eof && !err;) {
 		int64_t left = end - now_ms();
-		if (left <= 0)
-			break;
-		int k = poll(&pf, 1, (int)left);
+		/* timed out: what came at the last moment still counts */
+		int k = poll(&pf, 1, left > 0 ? (int)left : 0);
 		if (k < 0 && errno == EINTR)
 			continue;
 		if (k <= 0)
 			break;
-		n = read(p[0], &e, sizeof e);
-		if (n >= 0 || errno != EINTR)
-			break;
+		int v;
+		ssize_t n = read(p[0], &v, sizeof v);
+		if (n < 0 && errno == EINTR)
+			continue;
+		if (n != sizeof v)
+			eof = true;
+		else if (v == OPENER_FORKED)
+			forked = true;
+		else
+			err = v;
 	}
-	/* timed out: what came at the last moment still counts */
-	if (n == 0 && poll(&pf, 1, 0) > 0)
-		n = read(p[0], &e, sizeof e);
 	close(p[0]);
-	if (n == sizeof e) {
-		errno = e;
+	if (err) {
+		errno = err;
+		return false;
+	}
+	/* EOF with no word: there never was a grandchild, the child between
+	 * died before its fork (a SIGKILL from outside) */
+	if (eof && !forked) {
+		errno = ECHILD;
 		return false;
 	}
 	return true;

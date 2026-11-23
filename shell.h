@@ -102,9 +102,10 @@ void child_hangup(struct child *c, int *pty, int ms);
  * mwt's stderr, default signals, none blocked, and no other file descriptor.
  * Through a child that ends at once and is reaped here, so mwt has no zombie
  * and the shell's pid stays the only child it waits for. False, with errno set,
- * when the pipe or either fork fails, or the opener cannot be run (ENOENT for
- * one that is not there): the errno of its exec, or of moving the pipe, comes
- * back through a pipe the exec closes, waited for up to a second. */
+ * when the pipe or either fork fails, the child between dies before its fork
+ * (ECHILD), or the opener cannot be run (ENOENT for one that is not there): the
+ * errno of its exec, or of moving the pipe, comes back through a pipe the exec
+ * closes, waited for up to a second. */
 bool opener_spawn(char *const argv[], const char *token);
 
 #endif

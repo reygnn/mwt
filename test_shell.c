@@ -61,12 +61,15 @@ pid_t __real_fork(void);
 static int forks;
 static pid_t test_pid;
 static bool kill_middle; /* opener_spawn's child dies of a signal after its fork */
+static bool kill_before;  /* or before it */
 pid_t __wrap_fork(void)
 {
 	if (forks > 0 && --forks == 0) {
 		errno = ENOMEM; /* not EAGAIN, which opener_spawn falls back on */
 		return -1;
 	}
+	if (kill_before && getpid() != test_pid)
+		raise(SIGKILL);
 	pid_t pid = __real_fork();
 	if (kill_middle && pid > 0 && getpid() != test_pid)
 		raise(SIGKILL);
@@ -1146,6 +1149,11 @@ static void test_opener(void)
 	errno = 0;
 	CHECK(!opener_spawn(none, "t") && errno == ENOENT);
 	kill_middle = false;
+	/* and before it: no opener ever, though the pipe only ends */
+	kill_before = true;
+	errno = 0;
+	CHECK(!opener_spawn(works, "t") && errno == ECHILD);
+	kill_before = false;
 	CHECK(open_fds() == fds);
 	CHECK(opener_spawn(works, "t")); /* and with neither, it does */
 	errno = 0;
