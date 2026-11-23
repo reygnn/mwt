@@ -1134,16 +1134,17 @@ static void test_opener(void)
 	CHECK(now_ms() - t0 < 500);
 	CHECK(open_fds() == fds);
 	/* a program that is there, but the pipe could not be moved to 3 for it: it
-	 * does not start, and says why; nor when the child between dies of a
-	 * signal, whatever became of the opener */
+	 * does not start, and says why */
 	char *works[] = { "true", NULL };
 	dup3_fails = true;
 	errno = 0;
 	CHECK(!opener_spawn(works, "t") && errno == EMFILE);
 	dup3_fails = false;
+	/* the child between killed after its fork: the opener says how it went */
 	kill_middle = true;
+	CHECK(opener_spawn(works, "t"));
 	errno = 0;
-	CHECK(!opener_spawn(works, "t") && errno == EINTR);
+	CHECK(!opener_spawn(none, "t") && errno == ENOENT);
 	kill_middle = false;
 	CHECK(open_fds() == fds);
 	CHECK(opener_spawn(works, "t")); /* and with neither, it does */

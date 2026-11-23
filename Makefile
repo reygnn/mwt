@@ -106,7 +106,7 @@ test_shell: test_shell.c shell.c shell.h paste.c paste.h
 		-o $@ test_shell.c shell.c paste.c -lutil
 
 test_util: test_util.c util.c util.h
-	$(CC) $(TEST_CFLAGS) -o $@ test_util.c util.c
+	$(CC) $(TEST_CFLAGS) -Wl,--wrap=strerror -o $@ test_util.c util.c
 
 # Box drawing and block elements at many cell sizes: where lines meet the edges,
 # how thick they are, how blocks tile; no font.

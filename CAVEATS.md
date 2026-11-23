@@ -84,8 +84,8 @@ Ctrl+click or for the click or key that chose Open link. Whether the browser com
 the front is the compositor's choice: sway only marks it urgent unless
 `focus_on_window_activation` says otherwise, mwc gives the focus while mwt still has the
 keyboard. The token is in `DESKTOP_STARTUP_ID` too, which GTK 3 reads. Without
-xdg-activation the opener gets no token. mwt does not wait for the opener. Its stdin and stdout are `/dev/null`,
-its stderr is mwt's.
+xdg-activation the opener gets no token. mwt waits up to a second for the opener's exec,
+not for the opener. Its stdin and stdout are `/dev/null`, its stderr is mwt's.
 
 An opener that is not there, or may not be run, shows a toast at the top of the window
 for three seconds, such as "xdg-open: not found", and a line on stderr; there is no
@@ -93,10 +93,12 @@ fallback to another program. One that starts but fails later, as xdg-open withou
 browser, shows nothing: its messages go to mwt's stderr. A urlLauncher mwt cannot use
 (no command, too long, more than 30 words) shows "urlLauncher: cannot be used". The toast
 covers the text under it while it shows, and clicks go through it. It is English
-whatever the locale. A text wider than the window is cut from the left, so that the
-reason stays; each character takes one cell, a wide one too. In a window too small for
-it, it shows once the window is larger again, within its three seconds. Without
-`wl_subcompositor` only stderr says so.
+whatever the locale. A text over 64 cells or wider than the window is cut from the
+left, so that the reason stays; each character takes one cell, a wide one too. In a
+window too small for it, it shows once the window is larger again, within its three
+seconds. It is drawn anew for a zoom, a scale or a size; a zoom that keeps the cell size
+and the baseline keeps the glyphs it had. Without `wl_subcompositor` only stderr says
+so.
 
 A token mwt was itself started with (`XDG_ACTIVATION_TOKEN`, or else
 `DESKTOP_STARTUP_ID`) is taken out of the environment, so neither the shell nor the

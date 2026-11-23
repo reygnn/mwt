@@ -61,8 +61,8 @@ char *startup_token(void);
  * words in it are. */
 void toast_text(char *buf, size_t size, const char *name, int err);
 
-/* s as code points, at most max into cp: what is not UTF-8 one U+FFFD a byte.
- * Their count. */
+/* The last max code points of s into cp, as the end says what went wrong:
+ * what is not UTF-8 one U+FFFD a byte. Their count. */
 int toast_cps(const char *s, uint32_t *cp, int max);
 
 /* n code points cut to fit from the left, so that the end, which says what went
@@ -71,7 +71,7 @@ int toast_fit(uint32_t *cp, int n, int fit);
 
 /* Where a toast of n cells goes in a window of win_w x win_h, with cells of cw x
  * ch buffer pixels at scale: n cut to what fits between the margins, the box in
- * logical pixels. False when not one cell fits. */
+ * logical pixels. False when not one cell fits, or the box is too high. */
 struct toast_box { int n, x, y, w, h; };
 bool toast_place(int n, int win_w, int win_h, int cw, int ch, int scale,
 		 struct toast_box *b);

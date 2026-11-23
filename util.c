@@ -94,28 +94,40 @@ int toast_fit(uint32_t *cp, int n, int fit)
 	return fit;
 }
 
+/* One code point from p, U+FFFD for a byte that starts none; its length. */
+static int utf8_one(const unsigned char *p, uint32_t *cp)
+{
+	int k = *p < 0x80 ? 1 : *p >= 0xc2 && *p < 0xe0 ? 2 :
+		*p >= 0xe0 && *p < 0xf0 ? 3 : *p >= 0xf0 && *p < 0xf5 ? 4 : 0;
+	uint32_t c = k == 1 ? *p : k ? *p & (0x7f >> k) : 0;
+	for (int i = 1; i < k; i++) {
+		if ((p[i] & 0xc0) != 0x80) {
+			k = 0;
+			break;
+		}
+		c = c << 6 | (p[i] & 0x3f);
+	}
+	/* overlong, surrogate or past U+10FFFF: not UTF-8 either */
+	if (k == 3 && (c < 0x800 || (c >= 0xd800 && c < 0xe000)))
+		k = 0;
+	if (k == 4 && (c < 0x10000 || c > 0x10ffff))
+		k = 0;
+	*cp = k ? c : 0xfffd;
+	return k ? k : 1;
+}
+
 int toast_cps(const char *s, uint32_t *cp, int max)
 {
 	const unsigned char *p = (const unsigned char *)s;
+	uint32_t c;
+	int total = 0;
+	for (const unsigned char *q = p; *q; total++)
+		q += utf8_one(q, &c);
 	int n = 0;
-	while (*p && n < max) {
-		int k = *p < 0x80 ? 1 : *p >= 0xc2 && *p < 0xe0 ? 2 :
-			*p >= 0xe0 && *p < 0xf0 ? 3 : *p >= 0xf0 && *p < 0xf5 ? 4 : 0;
-		uint32_t c = k == 1 ? *p : k ? *p & (0x7f >> k) : 0;
-		for (int i = 1; i < k; i++) {
-			if ((p[i] & 0xc0) != 0x80) {
-				k = 0;
-				break;
-			}
-			c = c << 6 | (p[i] & 0x3f);
-		}
-		/* overlong, surrogate or past U+10FFFF: not UTF-8 either */
-		if (k == 3 && (c < 0x800 || (c >= 0xd800 && c < 0xe000)))
-			k = 0;
-		if (k == 4 && (c < 0x10000 || c > 0x10ffff))
-			k = 0;
-		cp[n++] = k ? c : 0xfffd;
-		p += k ? k : 1;
+	for (int i = 0; *p; i++) {
+		p += utf8_one(p, &c);
+		if (i >= total - max) /* the last max: the end says what went wrong */
+			cp[n++] = c;
 	}
 	return n;
 }

@@ -4,7 +4,6 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <limits.h>
-#include <locale.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -15,6 +14,15 @@
 #include "util.h"
 
 static int failures, checks;
+
+/* strerror as in a locale whose libc messages are translated, when asked: few
+ * systems have them installed */
+char *__real_strerror(int err);
+static bool strerror_german;
+char *__wrap_strerror(int err)
+{
+	return strerror_german ? (char *)"Keine Berechtigung" : __real_strerror(err);
+}
 
 #define CHECK(c) do { checks++; if (!(c)) { failures++; \
 	fprintf(stderr, "%s:%d: FAIL: %s\n", __FILE__, __LINE__, #c); } } while (0)
@@ -271,15 +279,11 @@ static void test_toast(void)
 	CHECK(!strcmp(buf, "/tmp: Permission denied"));
 	toast_text(buf, 8, "xdg-open", ENOENT); /* cut, not past the end */
 	CHECK(!strcmp(buf, "xdg-ope"));
-	/* English in another locale too, where libc's messages are translated */
-	if ((setlocale(LC_ALL, "de_DE.UTF-8") || setlocale(LC_ALL, "de_CH.UTF-8")) &&
-	    strcmp(strerror(EACCES), "Permission denied")) {
-		toast_text(buf, sizeof buf, "/tmp", EACCES);
-		CHECK(!strcmp(buf, "/tmp: Permission denied"));
-	} else {
-		printf("test_util: no translated libc messages, the toast's English not checked\n");
-	}
-	setlocale(LC_ALL, "C");
+	/* English whatever the locale: strerror as a translated one says it */
+	strerror_german = true;
+	toast_text(buf, sizeof buf, "/tmp", EACCES);
+	strerror_german = false;
+	CHECK(!strcmp(buf, "/tmp: Permission denied"));
 
 	/* cut from the left, the end kept */
 	uint32_t f[6] = { 'a', 'b', 'c', 'd', 'e', 'f' };
@@ -295,7 +299,7 @@ static void test_toast(void)
 	CHECK(toast_cps("a\xc3\xa9\xe2\x82\xac\xf0\x9f\x98\x80", cp, 8) == 4 &&
 	      cp[0] == 'a' && cp[1] == 0xe9 && cp[2] == 0x20ac && cp[3] == 0x1f600);
 	/* not UTF-8: a U+FFFD a byte, the next byte read anew */
-	CHECK(toast_cps("\xff\xc3x\xc0\xaf\xed\xa0\x80\xf4\x90\x80\x80", cp, 8) == 8 &&
+	CHECK(toast_cps("\xff\xc3x\xc0\xaf\xed\xa0\x80\xf4\x90\x80\x80", cp, 16) == 12 &&
 	      cp[0] == 0xfffd && cp[1] == 0xfffd && cp[2] == 'x' && cp[3] == 0xfffd &&
 	      cp[4] == 0xfffd && cp[5] == 0xfffd);
 	CHECK(toast_cps("\xe0\xa0\x80\xf0\x90\x80\x80\xf4\x8f\xbf\xbf", cp, 8) == 3 &&
@@ -304,7 +308,15 @@ static void test_toast(void)
 	/* past U+10FFFF, and an overlong four: each byte one */
 	CHECK(toast_cps("\xf4\x90\x80\x80\xf0\x8f\xbf\xbf", cp, 16) == 8 &&
 	      cp[0] == 0xfffd && cp[4] == 0xfffd && cp[7] == 0xfffd);
-	CHECK(toast_cps("abcdefghij", cp, 8) == 8 && cp[7] == 'h'); /* no more than max */
+	CHECK(toast_cps("abcdefghij", cp, 8) == 8 && cp[0] == 'c' && cp[7] == 'j'); /* the last max */
+	/* a name longer than all that is kept: its reason stays */
+	char longname[301], longmsg[400];
+	memset(longname, 'a', 300);
+	longname[300] = 0;
+	toast_text(longmsg, sizeof longmsg, longname, ENOENT);
+	uint32_t many[TOAST_TEXT];
+	int got = toast_cps(longmsg, many, TOAST_TEXT);
+	CHECK(got == TOAST_TEXT && many[got - 1] == 'd' && many[got - 9] == 'n');
 	CHECK(toast_cps("\xe2\x82", cp, 8) == 2); /* cut short at the end */
 
 	/* top, centered: 20 cells of 10x20 at scale 1 in 400x300 */

@@ -338,8 +338,20 @@ def test_missing_opener():
                 n = len("mwt-no-such-opener: not found")
                 check(abs((right - left + 1) - (n * cw + 2 * TOAST_PAD)) <= 2,
                       "as wide as its text", f"{right - left + 1} for {n} cells of {cw}")
-            check(wait(lambda: "mwt-no-such-opener: No such file" in open(err, errors="replace").read()),
-                  "stderr says why")
+            def starts():
+                return open(err, errors="replace").read().count("cannot start mwt-no-such-opener")
+            check(wait(lambda: starts() == 1), "stderr says why")
+            # a click on the URL under the toast goes through it to the window
+            if edges:
+                x0, y0, _, _ = rect()
+                at(30, 1)
+                inside = left < mouse_xy[0] - x0 < right and TOAST_MARGIN < mouse_xy[1] - y0
+                check(inside, "(column 30 of row 1 is under the toast)", f"{mouse_xy} {edges}")
+                mouse.send("hold", "ctrl")
+                mouse.send("click", "left")
+                mouse.send("release", "ctrl")
+                t0 = time.time()  # its toast starts the time anew
+                check(wait(lambda: starts() == 2), "a Ctrl+click under the toast reaches the URL")
             check(wait(lambda: toast_edges(mwtlib.shot()) is None, 6.0), "the toast goes")
             gone = time.time() - t0
             check(2.5 <= gone <= 4.5, "after three seconds", f"{gone:.1f} s")
@@ -356,11 +368,13 @@ def test_missing_opener():
                 combo("Return")
                 return time.time()
             t1 = by_menu()
-            wait(lambda: toast_edges(mwtlib.shot()))
-            time.sleep(max(0.0, t1 + 1.5 - time.time()))
+            check(wait(lambda: toast_edges(mwtlib.shot())), "a first toast")
+            time.sleep(max(0.0, t1 + 1.0 - time.time()))
             t2 = by_menu()
-            time.sleep(max(0.0, t1 + 3.6 - time.time()))
-            check(toast_edges(mwtlib.shot()), "a second toast keeps it past the first's time")
+            # only then does a toast at t1 + 3.6 tell the second from the first
+            if check(t2 - t1 < 2.0, "(the second soon enough)", f"{t2 - t1:.1f} s"):
+                time.sleep(max(0.0, t1 + 3.6 - time.time()))
+                check(toast_edges(mwtlib.shot()), "a second toast keeps it past the first's time")
             check(wait(lambda: toast_edges(mwtlib.shot()) is None, 4.0), "and then it goes")
             gone = time.time() - t2
             check(2.5 <= gone <= 4.5, "three seconds after the second", f"{gone:.1f} s")
@@ -392,7 +406,7 @@ def test_missing_opener():
             img = settle()
             check(small and toast_edges(img) is None, "too small: none", f"{rect()}")
             mwtlib.swaymsg('[app_id="mwt"]', "resize", "set", str(ww), str(hh))
-            wait(lambda: rect()[2] == ww)
+            check(wait(lambda: rect()[2] == ww), "(back to its size)", f"{rect()}")
             check(time.time() - t3 < 2.8, "(all within its time)", f"{time.time() - t3:.1f} s")
             check(toast_edges(settle()), "large again: back")
             check(wait(lambda: toast_edges(mwtlib.shot()) is None, 4.0), "and goes in time")

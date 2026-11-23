@@ -344,6 +344,7 @@ bool opener_spawn(char *const argv[], const char *token)
 		/* the pipe as 3, still closed by exec, and nothing above it */
 		if (p[1] != 3 && dup3(p[1], 3, O_CLOEXEC) < 0) {
 			int e = errno;
+			signal(SIGPIPE, SIG_IGN); /* mwt may have stopped waiting */
 			while (write(p[1], &e, sizeof e) < 0 && errno == EINTR)
 				;
 			_exit(127);
@@ -359,8 +360,8 @@ bool opener_spawn(char *const argv[], const char *token)
 			unsetenv("DESKTOP_STARTUP_ID");
 		}
 		execvp(argv[0], argv);
-		/* mwt stopped waiting after OPENER_WAIT_MS: then stderr, the
-		 * only place left to say so */
+		/* mwt stopped waiting after OPENER_WAIT_MS: then stderr. A write
+		 * that lands just before mwt closes the pipe unread is lost. */
 		int e = errno;
 		ssize_t w;
 		signal(SIGPIPE, SIG_IGN);
@@ -380,13 +381,10 @@ bool opener_spawn(char *const argv[], const char *token)
 		errno = WEXITSTATUS(st); /* the second fork failed */
 		return false;
 	}
-	if (r == pid && WIFSIGNALED(st)) { /* killed before or after its fork */
-		close(p[0]);
-		errno = EINTR;
-		return false;
-	}
 	/* The exec comes at once, so this waits no time; a grandchild that
-	 * hangs before it does not hold mwt up for longer than this. */
+	 * hangs before it does not hold mwt up for longer than this. A child
+	 * between that died of a signal after its fork left the grandchild to
+	 * say how it went; one that died before is taken as started. */
 	int e = 0;
 	ssize_t n = 0;
 	struct pollfd pf = { p[0], POLLIN, 0 };
@@ -403,6 +401,9 @@ bool opener_spawn(char *const argv[], const char *token)
 		if (n >= 0 || errno != EINTR)
 			break;
 	}
+	/* timed out: what came at the last moment still counts */
+	if (n == 0 && poll(&pf, 1, 0) > 0)
+		n = read(p[0], &e, sizeof e);
 	close(p[0]);
 	if (n == sizeof e) {
 		errno = e;

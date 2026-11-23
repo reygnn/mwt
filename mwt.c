@@ -1109,6 +1109,8 @@ static void check_redraw(const struct buffer *b, int64_t ba, int bc, int64_t ea,
 #define TOAST_BORDER 0x808080
 #define TOAST_FG 0xffffff
 
+/* The subsurface is synchronized: what it commits shows with the window's next
+ * commit, together with its place, which moved asks draw() for. */
 static void toast_unmap(void)
 {
 	if (!t.toast.mapped)
@@ -1116,6 +1118,8 @@ static void toast_unmap(void)
 	t.toast.mapped = false;
 	wl_surface_attach(t.toast.surface, NULL, 0, 0);
 	wl_surface_commit(t.toast.surface);
+	t.toast.moved = true;
+	t.need_redraw = true;
 }
 
 static void toast_hide(void)
@@ -1133,8 +1137,8 @@ static bool toast_stale(void)
 	       t.toast.ascent != t.ascent;
 }
 
-/* Draws it for the window as it is now and puts it in place, which the window's
- * next commit applies. Where not one cell fits, or there is no memory, it is
+/* Draws it for the window as it is now and puts it in place, both shown with the
+ * window's next commit. Where not one cell fits, or there is no memory, it is
  * taken off until the window changes again, its time running on; with both
  * buffers held, it is drawn again once one comes back. */
 static void toast_draw(void)
@@ -1193,13 +1197,22 @@ static void toast_show(const char *text)
 	if (!t.subcompositor || t.toast.fd < 0)
 		return;
 	if (!t.toast.surface) {
-		t.toast.surface = wl_compositor_create_surface(t.compositor);
-		t.toast.sub = wl_subcompositor_get_subsurface(t.subcompositor, t.toast.surface,
-							      t.surface);
-		wl_subsurface_set_desync(t.toast.sub); /* shown and hidden on its own */
-		struct wl_region *none = wl_compositor_create_region(t.compositor);
-		wl_surface_set_input_region(t.toast.surface, none);
+		/* without memory for these, only stderr */
+		struct wl_surface *s = wl_compositor_create_surface(t.compositor);
+		struct wl_subsurface *sub = s ?
+			wl_subcompositor_get_subsurface(t.subcompositor, s, t.surface) : NULL;
+		struct wl_region *none = sub ? wl_compositor_create_region(t.compositor) : NULL;
+		if (!none) {
+			if (sub)
+				wl_subsurface_destroy(sub);
+			if (s)
+				wl_surface_destroy(s);
+			return;
+		}
+		wl_surface_set_input_region(s, none); /* clicks go to the window */
 		wl_region_destroy(none);
+		t.toast.surface = s;
+		t.toast.sub = sub;
 	}
 	t.toast.n = toast_cps(text, t.toast.cp, TOAST_TEXT);
 	struct itimerspec its = { .it_value = { TOAST_MS / 1000, TOAST_MS % 1000 * 1000000L } };
