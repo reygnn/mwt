@@ -1,4 +1,4 @@
-/* test_paste.c - what a paste becomes and the clipboard's Latin-1, headless:
+/* test_paste.c - what a paste becomes and the clipboard's types, headless:
  * make check */
 #define _GNU_SOURCE
 #include <stdint.h>
@@ -204,15 +204,15 @@ static void test_put_utf8(void)
 }
 
 /* paste_decode of a literal; *r gets its result */
-static char *dec(const char *in, size_t n, bool latin1, size_t max, size_t *len, int *r)
+static char *dec(const char *in, size_t n, size_t max, size_t *len, int *r)
 {
 	char *out = (char *)"untouched";
-	*r = paste_decode(in, n, latin1, max, &out, len);
+	*r = paste_decode(in, n, max, &out, len);
 	return out;
 }
-#define DECODE(in, latin1, want) do { \
+#define DECODE(in, want) do { \
 	size_t len_; int r_; \
-	char *o_ = dec(in, sizeof in - 1, latin1, 1 << 20, &len_, &r_); \
+	char *o_ = dec(in, sizeof in - 1, 1 << 20, &len_, &r_); \
 	CHECK(r_ == PASTE_OK); \
 	if (r_ == PASTE_OK) { \
 		check_bytes(__LINE__, o_ ? o_ : "", o_ ? len_ : 0, want, sizeof want - 1); \
@@ -222,46 +222,44 @@ static char *dec(const char *in, size_t n, bool latin1, size_t max, size_t *len,
 
 static void test_decode(void)
 {
-	DECODE("abc", false, "abc");
-	DECODE("\xc3\xa9\xe2\x82\xac\xf0\x9f\x98\x80", false, "\xc3\xa9\xe2\x82\xac\xf0\x9f\x98\x80");
-	/* STRING is Latin-1 */
-	DECODE("caf\xe9", true, "caf\xc3\xa9");
-	DECODE("\xc3\xa9", true, "\xc3\x83\xc2\xa9");
-	DECODE("\xff", true, "\xc3\xbf");
-	/* and so is what is not UTF-8, byte by byte, whatever the label */
-	DECODE("\xe9t\xe9", false, "\xc3\xa9t\xc3\xa9");
-	DECODE("\xc3", false, "\xc3\x83");
-	DECODE("\xc0\xaf", false, "\xc3\x80\xc2\xaf");
-	DECODE("\xed\xa0\x80", false, "\xc3\xad\xc2\xa0"); /* a surrogate; 0x80 is C1 */
-	/* C1 controls go, as UTF-8 and as Latin-1; U+00A0 stays */
-	DECODE("a\xc2\x85" "b\xc2\x9f" "c\xc2\xa0", false, "abc\xc2\xa0");
-	DECODE("a\x85" "b\x9f" "c\xa0", true, "abc\xc2\xa0");
-	DECODE("\x80\x9f", false, "");
+	DECODE("abc", "abc");
+	DECODE("\xc3\xa9\xe2\x82\xac\xf0\x9f\x98\x80", "\xc3\xa9\xe2\x82\xac\xf0\x9f\x98\x80");
+	/* what is not UTF-8 is taken as Latin-1, byte by byte */
+	DECODE("caf\xe9", "caf\xc3\xa9");
+	DECODE("\xff", "\xc3\xbf");
+	DECODE("\xe9t\xe9", "\xc3\xa9t\xc3\xa9");
+	DECODE("\xc3", "\xc3\x83");
+	DECODE("\xc0\xaf", "\xc3\x80\xc2\xaf");
+	DECODE("\xed\xa0\x80", "\xc3\xad\xc2\xa0"); /* a surrogate; 0x80 is C1 */
+	/* C1 controls go, as UTF-8 and as single bytes; U+00A0 stays */
+	DECODE("a\xc2\x85" "b\xc2\x9f" "c\xc2\xa0", "abc\xc2\xa0");
+	DECODE("a\x85" "b\x9f" "c\xa0", "abc\xc2\xa0");
+	DECODE("\x80\x9f", "");
 	/* C0 controls stay here, paste_filter takes them out */
-	DECODE("\x03\x1b\x7f\t", false, "\x03\x1b\x7f\t");
+	DECODE("\x03\x1b\x7f\t", "\x03\x1b\x7f\t");
 	/* a NUL is a character like any other */
-	DECODE("a\0b", false, "a\0b");
+	DECODE("a\0b", "a\0b");
 
 	/* nothing: no text, and no buffer */
 	size_t len;
 	int r;
-	char *o = dec("", 0, false, 10, &len, &r);
+	char *o = dec("", 0, 10, &len, &r);
 	CHECK(r == PASTE_OK && o == NULL && len == 0);
-	o = dec("\x85\x85", 2, true, 10, &len, &r);
+	o = dec("\x85\x85", 2, 10, &len, &r);
 	CHECK(r == PASTE_OK && o == NULL && len == 0);
 
-	/* the limit is on what comes out: Latin-1 doubles */
-	o = dec("abcd", 4, false, 4, &len, &r);
+	/* the limit is on what comes out: a byte that is not UTF-8 doubles */
+	o = dec("abcd", 4, 4, &len, &r);
 	CHECK(r == PASTE_OK && len == 4);
 	free(o);
-	o = dec("abcde", 5, false, 4, &len, &r);
+	o = dec("abcde", 5, 4, &len, &r);
 	CHECK(r == PASTE_TOO_LARGE);
-	o = dec("\xe9\xe9", 2, true, 4, &len, &r);
+	o = dec("\xe9\xe9", 2, 4, &len, &r);
 	CHECK(r == PASTE_OK && len == 4);
 	free(o);
-	o = dec("\xe9\xe9", 2, true, 3, &len, &r);
+	o = dec("\xe9\xe9", 2, 3, &len, &r);
 	CHECK(r == PASTE_TOO_LARGE);
-	o = dec("\x85\x85\x85\x85\x85", 5, true, 4, &len, &r);
+	o = dec("\x85\x85\x85\x85\x85", 5, 4, &len, &r);
 	CHECK(r == PASTE_OK && len == 0);
 
 	/* out of memory at each allocation in turn: PASTE_NOMEM, nothing leaks */
@@ -272,7 +270,7 @@ static void test_decode(void)
 	for (long n = 0;; n++) {
 		countdown = n;
 		injected = false;
-		r = paste_decode(big, sizeof big, true, 1 << 20, &o, &len);
+		r = paste_decode(big, sizeof big, 1 << 20, &o, &len);
 		countdown = -1;
 		if (!injected) {
 			CHECK(r == PASTE_OK && len == 2 * sizeof big);
@@ -291,8 +289,7 @@ static void test_decode(void)
 		size_t n = rnd(sizeof in);
 		for (size_t i = 0; i < n; i++)
 			in[i] = (char)(rnd(4) ? (char)rnd(256) : "\xc3\xa9\xe2\x82\xac\xf0\x9f\x98\x80"[rnd(9)]);
-		bool latin1 = rnd(2);
-		r = paste_decode(in, n, latin1, 1 << 20, &o, &len);
+		r = paste_decode(in, n, 1 << 20, &o, &len);
 		if (r != PASTE_OK) {
 			bad++;
 			continue;
@@ -312,7 +309,7 @@ static void test_decode(void)
 		}
 		/* each input character, or byte where it is none, is one out or a C1 */
 		for (size_t i = 0; i < n; chars++) {
-			int k = latin1 ? 0 : utf8_seq((unsigned char *)in + i, n - i);
+			int k = utf8_seq((unsigned char *)in + i, n - i);
 			uint32_t cp = k > 1 ? decode((unsigned char *)in + i, k) : (unsigned char)in[i];
 			i += k ? (size_t)k : 1;
 			if (cp >= 0x80 && cp < 0xa0)
@@ -467,60 +464,14 @@ static void test_brackets(void)
 	CHECK(bad == 0);
 }
 
-static void test_latin1(void)
-{
-	char *s = to_latin1("abc");
-	CHECK(s && !strcmp(s, "abc"));
-	free(s);
-	s = to_latin1("caf\xc3\xa9 \xc2\xa0\xc3\xbf");
-	CHECK(s && !strcmp(s, "caf\xe9 \xa0\xff"));
-	free(s);
-	/* what Latin-1 cannot hold, and the C1 controls */
-	s = to_latin1("\xe2\x82\xac \xf0\x9f\x98\x80 \xc2\x85 \xc4\x80");
-	CHECK(s && !strcmp(s, "? ? ? ?"));
-	free(s);
-	s = to_latin1("");
-	CHECK(s && !*s);
-	free(s);
-	countdown = 0;
-	s = to_latin1("abc");
-	countdown = -1;
-	CHECK(!s);
-
-	/* every code point, as put_utf8 writes it */
-	long wrong = 0;
-	for (uint32_t cp = 1; cp <= 0x10ffff; cp++) {
-		if (cp >= 0xd800 && cp <= 0xdfff)
-			continue;
-		char *buf = NULL;
-		size_t len = 0, cap = 0;
-		put_utf8(&buf, &len, &cap, cp);
-		put_utf8(&buf, &len, &cap, 0);
-		char *l = to_latin1(buf);
-		char want = cp < 0x80 || (cp >= 0xa0 && cp < 0x100) ? (char)cp : '?';
-		if (!l || l[0] != want || l[1])
-			wrong++;
-		free(l);
-		free(buf);
-	}
-	CHECK(wrong == 0);
-	/* not UTF-8, which mwt's own selection never is: no read past the end */
-	s = to_latin1("\xc3");
-	CHECK(s && strlen(s) == 1);
-	free(s);
-	s = to_latin1("\xf0\x9f");
-	CHECK(s && strlen(s) == 1);
-	free(s);
-}
-
 static void test_mime(void)
 {
-	/* best first: UTF-8 under its names, then text/plain, then Latin-1 */
+	/* best first: UTF-8 under its names, then text/plain; not X11's Latin-1 */
 	CHECK(mime_rank("text/plain;charset=utf-8") == 0);
 	CHECK(mime_rank("UTF8_STRING") == 1);
 	CHECK(mime_rank("text/plain") == 2);
 	CHECK(mime_rank("TEXT") == 3);
-	CHECK(mime_rank("STRING") == 4 && !strcmp(mimes[4], "STRING"));
+	CHECK(MIME_COUNT == 4 && mime_rank("STRING") == MIME_COUNT);
 	for (int i = 0; i < MIME_COUNT; i++)
 		CHECK(mime_rank(mimes[i]) == i);
 	/* exactly as named */
@@ -586,7 +537,6 @@ int main(void)
 	test_decode();
 	test_filter();
 	test_brackets();
-	test_latin1();
 	test_mime();
 	test_read();
 	printf("test_paste: %d/%d checks passed\n", checks - failures, checks);

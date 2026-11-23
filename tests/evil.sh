@@ -526,12 +526,13 @@ paste_queue_limit() {
 	T 'echo nach dem paste' -k Return
 	if try 25 'nach dem paste'; then ok "and mwt goes on after it"; else gap "after the dropped paste mwt does not go on"; fi
 }
-# Latin-1 doubles as UTF-8: 40 MB of STRING is 80 MB to send, over the limit.
+# A byte that is not UTF-8 is taken as Latin-1 and doubles: 40 MB of them is
+# 80 MB to send, over the limit.
 paste_latin1_limit() {
 	start_mwt
 	T 'stty -echo; cat >~/l1.txt; stty echo' -k Return
 	sleep 0.3
-	head -c 40000000 /dev/zero | tr '\0' '\351' | wl-copy -t STRING
+	head -c 40000000 /dev/zero | tr '\0' '\351' | wl-copy -t text/plain
 	sleep 0.8
 	K v
 	local i
@@ -1218,7 +1219,7 @@ fd_leak() {
 		K v
 		sel_screen; K c
 		timeout 2 wl-paste -n >/dev/null
-		timeout 2 wl-paste -t STRING >/dev/null
+		timeout 2 wl-paste -t text/plain >/dev/null
 		v move 100 100; v click middle
 		C u
 	done

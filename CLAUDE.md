@@ -53,7 +53,7 @@ esctest is GPL. The containers have no network, so fetch on the host first with
 | `box.c` | box drawing and block elements (U+2500 to U+259F) and the DEC scan lines (U+23BA to U+23BD) drawn to fill the cell; no FreeType |
 | `mwt.c` | Wayland (xdg-shell, xdg-decoration, viewporter, xdg-activation, wl_shm, data device, primary selection), keyboard and pointer events, the hover over a URL, pty, event loop |
 | `input.c` | what keys and the mouse send: xkbcommon with Compose, shortcuts, mouse reports; no Wayland |
-| `paste.c` | what a paste becomes: UTF-8 checks, decoding, the control filter, the brackets; the clipboard's types and Latin-1 |
+| `paste.c` | what a paste becomes: UTF-8 checks, decoding, the control filter, the brackets; the clipboard's types |
 | `sel.c` | the selection over the VT core's lines: words, lines, clicks, drags, its text |
 | `link.c` | URLs in the VT core's lines, over lines that wrap; the opener's words |
 | `shell.c` | the shell on its pty: what waits to be written, its output read in turns, the paste dropped for a signal; spawn, reap, hang up; the opener of a link |

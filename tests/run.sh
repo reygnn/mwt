@@ -215,16 +215,16 @@ at 30 1
 v up left
 K c
 if [ "$(timeout 2 wl-paste -n)" = 'äöü-string' ]; then echo "ok: Ctrl+Shift+C copies"; else fail "Ctrl+Shift+C does not copy"; fi
-if timeout 2 wl-paste -t STRING | iconv -f latin1 -t utf-8 | grep -qx 'äöü-string'; then
-	echo "ok: STRING is Latin-1"
+if timeout 2 wl-paste -l | grep -qx 'STRING'; then
+	fail "STRING, X11's Latin-1, is offered"
 else
-	fail "STRING is not Latin-1"
+	echo "ok: only UTF-8 types are offered"
 fi
-printf 'echo caf\xe9' | wl-copy -t STRING
+printf 'echo caf\xe9' | wl-copy -t text/plain
 sleep 0.3
 K v
 T -k Return
-expect "a Latin-1 paste is converted" 'café'
+expect "a byte that is not UTF-8 is pasted as Latin-1" 'café'
 
 T 'printf "%080d\bX\n" 0' -k Return
 expect "backspace on a full row" '0\{78\}X0'

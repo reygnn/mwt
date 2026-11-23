@@ -45,15 +45,14 @@ bool put_utf8(char **buf, size_t *len, size_t *cap, uint32_t cp)
 	return true;
 }
 
-int paste_decode(const char *in, size_t n, bool latin1, size_t max, char **out,
-		 size_t *len)
+int paste_decode(const char *in, size_t n, size_t max, char **out, size_t *len)
 {
 	char *buf = NULL;
 	size_t cap = 0;
 	*len = 0;
 	for (size_t i = 0; i < n;) {
 		const unsigned char *p = (const unsigned char *)in + i;
-		int k = latin1 ? 0 : utf8_seq(p, n - i);
+		int k = utf8_seq(p, n - i);
 		uint32_t cp = *p;
 		if (k > 1) {
 			cp &= 0x3f >> (k - 1);
@@ -65,7 +64,7 @@ int paste_decode(const char *in, size_t n, bool latin1, size_t max, char **out,
 			free(buf);
 			return PASTE_NOMEM;
 		}
-		if (*len > max) { /* Latin-1 grows */
+		if (*len > max) { /* a byte that is not UTF-8 grows to two */
 			free(buf);
 			return PASTE_TOO_LARGE;
 		}
@@ -118,7 +117,7 @@ void track_brackets(struct brackets *b, const char *s, size_t n)
 }
 
 const char *const mimes[MIME_COUNT] = {
-	"text/plain;charset=utf-8", "UTF8_STRING", "text/plain", "TEXT", "STRING",
+	"text/plain;charset=utf-8", "UTF8_STRING", "text/plain", "TEXT",
 };
 
 int mime_rank(const char *mime)
@@ -127,26 +126,6 @@ int mime_rank(const char *mime)
 		if (!strcmp(mime, mimes[i]))
 			return i;
 	return MIME_COUNT;
-}
-
-char *to_latin1(const char *s)
-{
-	char *out = malloc(strlen(s) + 1);
-	if (!out)
-		return NULL;
-	size_t o = 0;
-	for (const unsigned char *p = (const unsigned char *)s; *p;) {
-		uint32_t cp = *p;
-		int more = cp >= 0xf0 ? 3 : cp >= 0xe0 ? 2 : cp >= 0xc0 ? 1 : 0;
-		if (more)
-			cp &= 0x3f >> more;
-		p++;
-		for (; more && (*p & 0xc0) == 0x80; more--)
-			cp = cp << 6 | (*p++ & 0x3f);
-		out[o++] = cp < 0x80 || (cp >= 0xa0 && cp < 0x100) ? (char)cp : '?';
-	}
-	out[o] = 0;
-	return out;
 }
 
 int paste_read(int fd, char **buf, size_t *len, size_t *cap, size_t max, size_t turn)

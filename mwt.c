@@ -171,7 +171,6 @@ static struct {
 	int paste_fd;
 	char *paste_buf;
 	size_t paste_len, paste_cap;
-	bool paste_latin1;
 	struct xfer xfers[MAX_XFERS];
 	int nxfers;
 
@@ -398,10 +397,9 @@ static void xfers_run(void)
  * change a transfer under way, and the rest goes out from the event loop. When
  * all slots hang on readers that do not read, the oldest is cut off.
  */
-static void send_text(const char *text, const char *mime, int fd)
+static void send_text(const char *text, int fd)
 {
-	char *data = text && !strcmp(mime, "STRING") ? to_latin1(text) :
-		     strdup(text ? text : "");
+	char *data = strdup(text ? text : ""); /* every type mwt offers is UTF-8 */
 	if (!data || fcntl(fd, F_SETFL, fcntl(fd, F_GETFL) | O_NONBLOCK) < 0) {
 		free(data);
 		close(fd);
@@ -421,8 +419,8 @@ static void send_text(const char *text, const char *mime, int fd)
 static void ds_target(void *d, struct wl_data_source *s, const char *m) { (void)d; (void)s; (void)m; }
 static void ds_send(void *d, struct wl_data_source *s, const char *m, int fd)
 {
-	(void)d; (void)s;
-	send_text(t.clip_text, m, fd);
+	(void)d; (void)s; (void)m;
+	send_text(t.clip_text, fd);
 }
 static void ds_cancelled(void *d, struct wl_data_source *s)
 {
@@ -439,8 +437,8 @@ static const struct wl_data_source_listener ds_listener = {
 
 static void ps_send(void *d, struct zwp_primary_selection_source_v1 *s, const char *m, int fd)
 {
-	(void)d; (void)s;
-	send_text(t.prim_text, m, fd);
+	(void)d; (void)s; (void)m;
+	send_text(t.prim_text, fd);
 }
 static void ps_cancelled(void *d, struct zwp_primary_selection_source_v1 *s)
 {
@@ -515,8 +513,9 @@ static void select_all(void)
 static void paste_text(const char *s, size_t n)
 {
 	bool br = t.vt->mode & MODE_BRACKETED;
-	/* Counted as UTF-8, which Latin-1 doubles, and with what still waits for the
-	 * program: pasting again into one that does not read would grow without end.
+	/* Counted as UTF-8, where a byte that was none takes two, and with what
+	 * still waits for the program: pasting again into one that does not read
+	 * would grow without end.
 	 * mwt's own selection comes here without passing read_paste. */
 	if (n > PASTE_MAX || t.out.len + n > PASTE_MAX) {
 		if (n > PASTE_MAX)
@@ -656,7 +655,6 @@ static void paste(bool primary)
 		close(t.paste_fd);
 	t.paste_fd = fds[0];
 	t.paste_len = 0;
-	t.paste_latin1 = !strcmp(mimes[*rank], "STRING");
 	wl_display_flush(t.display);
 }
 
@@ -673,7 +671,7 @@ static void read_paste(void)
 	char *buf = NULL;
 	size_t len;
 	if (r == PASTE_OK)
-		r = paste_decode(t.paste_buf, t.paste_len, t.paste_latin1, PASTE_MAX, &buf, &len);
+		r = paste_decode(t.paste_buf, t.paste_len, PASTE_MAX, &buf, &len);
 	paste_free();
 	if (r == PASTE_NOMEM) {
 		fprintf(stderr, "mwt: paste dropped: out of memory\n");

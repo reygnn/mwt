@@ -49,9 +49,14 @@ sets the tab stops back to every eighth column.
 The selected text reaches only as far as the scrollback, 5000 lines (`config.h`).
 
 A paste over 64 MiB is dropped whole, with a message on stderr. It counts as UTF-8,
-which Latin-1 doubles, and together with what still waits for the program: a program
-that does not read takes 64 MiB of pastes at most. Of the controls only tab, CR and LF
-are pasted, LF and CR LF as CR; C1 controls are dropped as well, also as UTF-8.
+where a byte that was none is taken as Latin-1 and takes two, and together with what
+still waits for the program: a program that does not read takes 64 MiB of pastes at
+most. Of the controls only tab, CR and LF are pasted, LF and CR LF as CR; C1 controls
+are dropped as well, also as UTF-8.
+
+The clipboard and the primary selection are offered and taken as UTF-8 only
+(`text/plain;charset=utf-8`, `UTF8_STRING`, `text/plain`, `TEXT`). X11's `STRING`,
+which is Latin-1, is left out: a client that has only that cannot paste into mwt.
 
 With Ctrl+Shift+letter on non-Latin layouts without a Latin second layout, the key's
 QWERTY position counts.

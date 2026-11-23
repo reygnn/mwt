@@ -1,5 +1,5 @@
 /* paste.h - what a paste becomes on its way to the program, and the clipboard's
- * Latin-1, without Wayland: mwt.c reads and writes the pipes, test_paste checks
+ * types, without Wayland: mwt.c reads and writes the pipes, test_paste checks
  * the rest headless. */
 #ifndef PASTE_H
 #define PASTE_H
@@ -24,12 +24,11 @@ enum { PASTE_OK, PASTE_NOMEM, PASTE_TOO_LARGE, PASTE_MORE };
  * bytes came, PASTE_NOMEM when buf could not grow. A paste of max bytes fits. */
 int paste_read(int fd, char **buf, size_t *len, size_t *cap, size_t max, size_t turn);
 
-/* What a source sent, as UTF-8 without C1 controls. latin1 for STRING; what is
- * not valid UTF-8 is taken as Latin-1 too, whatever its label says. More than
- * max bytes of it is PASTE_TOO_LARGE. On PASTE_OK *out is NULL for no text, and
- * the caller frees it. */
-int paste_decode(const char *in, size_t n, bool latin1, size_t max, char **out,
-		 size_t *len);
+/* What a source sent, as UTF-8 without C1 controls. A byte that is not part of
+ * valid UTF-8 is taken as the Latin-1 character of its value, so nothing pasted
+ * is lost; it grows to two bytes. More than max bytes of it is PASTE_TOO_LARGE.
+ * On PASTE_OK *out is NULL for no text, and the caller frees it. */
+int paste_decode(const char *in, size_t n, size_t max, char **out, size_t *len);
 
 /* Text as it goes to the program, written to out, which takes n + 12 bytes: of
  * the controls only tab and CR stay, a line feed becomes CR, CR LF one CR. With
@@ -45,15 +44,12 @@ struct brackets {
 };
 void track_brackets(struct brackets *b, const char *s, size_t n);
 
-/* The text types mwt offers and takes, best first; STRING is Latin-1. */
-#define MIME_COUNT 5
+/* The text types mwt offers and takes, best first, all of them UTF-8. STRING,
+ * X11's Latin-1, is neither offered nor taken: who has it has UTF-8 as well. */
+#define MIME_COUNT 4
 extern const char *const mimes[MIME_COUNT];
 
 /* Its place in mimes, MIME_COUNT for one that is not there. */
 int mime_rank(const char *mime);
-
-/* UTF-8 as Latin-1, for STRING: what it cannot hold becomes "?". NULL when out
- * of memory. */
-char *to_latin1(const char *s);
 
 #endif

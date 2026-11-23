@@ -21,7 +21,7 @@ def wl_copy(text):
 
 def wl_paste():
     subprocess.run(["timeout", "3", "wl-paste", "-n"], capture_output=True)
-    subprocess.run(["timeout", "3", "wl-paste", "-t", "STRING"], capture_output=True)
+    subprocess.run(["timeout", "3", "wl-paste", "-t", "text/plain"], capture_output=True)
 
 
 def exercise(win, mouse):
