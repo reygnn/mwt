@@ -1140,7 +1140,7 @@ static bool toast_stale(void)
 /* Draws it for the window as it is now and puts it in place, both shown with the
  * window's next commit. Where not one cell fits, or there is no memory, it is
  * taken off until the window changes again, its time running on; with both
- * buffers held, it is drawn again once one comes back. */
+ * buffers held, taken off until one comes back. */
 static void toast_draw(void)
 {
 	t.toast.width = t.width;
@@ -1159,6 +1159,9 @@ static void toast_draw(void)
 	struct buffer *b = !t.toast.bufs[0].busy ? &t.toast.bufs[0] :
 			   !t.toast.bufs[1].busy ? &t.toast.bufs[1] : NULL;
 	if (!b) {
+		/* off meanwhile: one drawn and cached for the old size would show
+		 * at the new size's commit */
+		toast_unmap();
 		t.toast.pending = true;
 		return;
 	}

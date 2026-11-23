@@ -344,9 +344,12 @@ bool opener_spawn(char *const argv[], const char *token)
 		/* the pipe as 3, still closed by exec, and nothing above it */
 		if (p[1] != 3 && dup3(p[1], 3, O_CLOEXEC) < 0) {
 			int e = errno;
+			ssize_t w;
 			signal(SIGPIPE, SIG_IGN); /* mwt may have stopped waiting */
-			while (write(p[1], &e, sizeof e) < 0 && errno == EINTR)
+			while ((w = write(p[1], &e, sizeof e)) < 0 && errno == EINTR)
 				;
+			if (w != sizeof e)
+				fprintf(stderr, "mwt: %s: %s\n", argv[0], strerror(e));
 			_exit(127);
 		}
 		close_from(4);

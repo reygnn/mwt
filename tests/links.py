@@ -345,8 +345,12 @@ def test_missing_opener():
             if edges:
                 x0, y0, _, _ = rect()
                 at(30, 1)
-                inside = left < mouse_xy[0] - x0 < right and TOAST_MARGIN < mouse_xy[1] - y0
+                bottom = TOAST_MARGIN + 2 * TOAST_PAD + (img.h - 2 * mwtlib.PAD) // 24
+                inside = (left < mouse_xy[0] - x0 < right and
+                          TOAST_MARGIN < mouse_xy[1] - y0 < bottom)
                 check(inside, "(column 30 of row 1 is under the toast)", f"{mouse_xy} {edges}")
+                # still there: a click after it went would reach the window anyway
+                check(toast_edges(mwtlib.shot()), "(the toast still shows for the click)")
                 mouse.send("hold", "ctrl")
                 mouse.send("click", "left")
                 mouse.send("release", "ctrl")
