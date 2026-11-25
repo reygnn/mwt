@@ -1522,6 +1522,18 @@ static void test_wrap_flag_esc(void)
 	CHECK(vt->pri[0][9].cp == '9' && vt->pri[1][0].cp == 'y');
 	w(vt, "\033c0123456789\033Zy");
 	CHECK(vt->pri[0][9].cp == '9' && vt->pri[1][0].cp == 'y');
+	/* a tab forward leaves the wrap pending, as xterm 407: the cursor is in
+	 * the last column and stays there; a tab back takes it, moving */
+	w(vt, "\033c0123456789\ty");
+	CHECK(vt->pri[0][9].cp == '9' && vt->pri[1][0].cp == 'y');
+	w(vt, "\033c0123456789\033[2Iy");
+	CHECK(vt->pri[0][9].cp == '9' && vt->pri[1][0].cp == 'y');
+	w(vt, "\033c0123456789\033[Zy");
+	CHECK(vt->pri[0][8].cp == 'y' && vt->pri[0][9].cp == '9' && vt->pri[1][0].cp == ' ');
+	CHECK(vt->c.x == 9 && vt->c.y == 0 && !vt->c.wrapnext);
+	/* one that reaches the last column leaves none pending */
+	w(vt, "\033c\033[1;9H\ty");
+	CHECK(vt->pri[0][9].cp == 'y' && vt->pri[1][0].cp == ' ' && vt->c.wrapnext);
 	vt_free(vt);
 }
 

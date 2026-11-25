@@ -442,16 +442,19 @@ static void reset_tabs(struct vt *vt)
 static void tab(struct vt *vt, int n)
 {
 	int x = vt->c.x;
-	if (n > 0)
+	if (n > 0) {
 		while (n-- && x < vt->cols - 1)
 			while (++x < vt->cols - 1 && !vt->tabs[x])
 				;
-	else
+	} else {
 		while (n++ && x > 0)
 			while (--x > 0 && !vt->tabs[x])
 				;
+		vt->c.wrapnext = false;
+	}
+	/* forward, a wrap that is pending stays so, as in xterm 407: the cursor
+	 * is in the last column and goes nowhere */
 	vt->c.x = x;
-	vt->c.wrapnext = false;
 }
 
 /* ---- screens and reset ------------------------------------------------ */
