@@ -323,6 +323,22 @@ def check_rin():
     eq(s.rows()[:4], ["", "", "a" * 10, "b" * 10])
 
 
+def check_rep():
+    # The character, then REP for the rest. One copy sends no REP: CSI 0 b
+    # would repeat once more, as CSI 1 b.
+    for n in (1, 2, 7):
+        s = Screen(b"ab" + S("rep", ord("x"), n))
+        eq(s.row(0), "ab" + "x" * n)
+        eq((s.cy, s.cx), (0, 2 + n))
+    # the attributes and DEC graphics of the character go with the copies
+    s = Screen(S("bold") + S("smacs") + S("rep", ord("q"), 3))
+    eq([s.cells[0][x][0] for x in range(4)], [0x2500] * 3 + [ord(" ")])
+    yes(all(s.attr(0, x, "bold") for x in range(3)), "copies lost bold")
+    # a full row wraps as the characters would
+    s = Screen(S("rep", ord("y"), COLS + 2))
+    eq(s.rows()[:2], ["y" * COLS, "yy"])
+
+
 def check_sc_rc():
     s = Screen(S("smul") + at(2, 3) + S("sc") + S("sgr0") + at(0, 0) + S("rc") + b"x")
     eq((s.cy, s.cx), (2, 4))
@@ -469,7 +485,7 @@ CHECKS = {
     "il": lines_op("il", (2,), 1, ["a" * 10, "", "", "b" * 10]),
     "il1": lines_op("il1", (), 1, ["a" * 10, "", "b" * 10, "c" * 10]),
     "ed": check_ed, "el": check_el, "el1": check_el1, "ind": check_ind, "indn": check_indn,
-    "ri": check_ri, "rin": check_rin, "op": check_op, "sc": check_sc_rc, "rc": check_sc_rc,
+    "rep": check_rep, "ri": check_ri, "rin": check_rin, "op": check_op, "sc": check_sc_rc, "rc": check_sc_rc,
     "is2": check_is2, "rs1": check_rs1, "rmacs": check_smacs, "smacs": check_smacs,
     "rmam": check_smam, "smam": check_smam, "rmcup": check_alt, "smcup": check_alt,
     "rmir": check_smir, "smir": check_smir, "smkx": mode_set("smkx", "appcursor", "appkeypad"),
