@@ -85,10 +85,17 @@ char *sel_text(const struct vt *vt, const struct sel *s)
 		if (c0 > 0 && c0 < n && (l[c0].attr & ATTR_WDUMMY))
 			c0--;
 		size_t start = len;
-		for (int c = c0; c <= c1; c++)
-			if (!(l[c].attr & ATTR_WDUMMY) &&
-			    !put_utf8(&buf, &len, &cap, l[c].cp ? l[c].cp : ' '))
+		for (int c = c0; c <= c1; c++) {
+			if (l[c].attr & ATTR_WDUMMY)
+				continue;
+			if (!put_utf8(&buf, &len, &cap, l[c].cp ? l[c].cp : ' '))
 				goto nomem;
+			/* and the marks on it, which are not drawn */
+			const uint32_t *ext;
+			for (int k = 0, n = vt_cell_ext(vt, &l[c], &ext); k < n; k++)
+				if (!put_utf8(&buf, &len, &cap, ext[k]))
+					goto nomem;
+		}
 		if (!wrapped) {
 			while (len > start && buf[len - 1] == ' ')
 				len--;

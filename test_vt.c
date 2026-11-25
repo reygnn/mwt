@@ -1620,6 +1620,168 @@ static void test_abs_line_range(void)
 	vt_free(vt);
 }
 
+/* the code points a cell holds after its own, as "301 302"; "" for none */
+static const char *marks(const struct vt *vt, const struct cell *c)
+{
+	static char buf[128];
+	const uint32_t *e;
+	int n = vt_cell_ext(vt, c, &e), o = 0;
+	buf[0] = 0;
+	for (int i = 0; i < n; i++)
+		o += snprintf(buf + o, sizeof buf - (size_t)o, "%s%x", i ? " " : "", (unsigned)e[i]);
+	return buf;
+}
+
+/* What has no width goes into the cell of the character before it, to be copied
+ * with it; nothing of it is drawn or counted. */
+static void test_marks(void)
+{
+	struct vt *vt = mk(4, 3, 5);
+	w(vt, "e\u0301x");
+	CHECK(vt->pri[0][0].cp == 'e' && vt->pri[0][1].cp == 'x' && vt->c.x == 2);
+	CHECK_STR(marks(vt, &vt->pri[0][0]), "301");
+	CHECK_STR(marks(vt, &vt->pri[0][1]), "");
+	/* in their order, and each sequence kept once */
+	w(vt, "\ra\u0301\u0302b\u0301");
+	CHECK_STR(marks(vt, &vt->pri[0][0]), "301 302");
+	CHECK_STR(marks(vt, &vt->pri[0][1]), "301");
+	CHECK(vt->ext_n == 2);
+	/* on a wide character: its left half */
+	w(vt, "\r\033[2K\u4e16\u0301");
+	CHECK_STR(marks(vt, &vt->pri[0][0]), "301");
+	CHECK(!vt->pri[0][1].ext && (vt->pri[0][1].attr & ATTR_WDUMMY));
+	/* with the wrap pending the character is the one under the cursor, also
+	 * a wide one, whose right half is there */
+	w(vt, "\r\033[2Kabcd\u0301");
+	CHECK_STR(marks(vt, &vt->pri[0][3]), "301");
+	CHECK(!vt->pri[0][2].ext && vt->c.y == 0);
+	w(vt, "\r\033[2Kab\u4e16\u0301");
+	CHECK_STR(marks(vt, &vt->pri[0][2]), "301");
+	CHECK(!vt->pri[0][1].ext && !vt->pri[0][3].ext);
+	/* without autowrap the cursor stays on the last column, after a character
+	 * written there and after one written before it */
+	w(vt, "\033[?7l\r\033[2Kabcd\u0301");
+	CHECK_STR(marks(vt, &vt->pri[0][3]), "301");
+	CHECK(!vt->pri[0][2].ext);
+	w(vt, "\r\033[2Kabc\u0301");
+	CHECK_STR(marks(vt, &vt->pri[0][2]), "301");
+	CHECK(vt->c.x == 3 && !vt->pri[0][3].ext);
+	w(vt, "\033[?7h");
+
+	/* only while the cursor is where the character left it: not at the
+	 * start, after a control, a movement, a sequence that is not SGR, a C1 */
+	static const char *const gone[] = {
+		"\u0301", "e\033[C\u0301", "e\r\u0301", "e\b\u0301", "e\a\u0301",
+		"e\033[D\033[C\u0301", "e\033[?25h\u0301", "e\033[>4m\u0301",
+		"e\033]0;t\a\u0301", "e\0337\u0301", "e\x18\u0301", "e\xc2\x85\u0301",
+		"e\033[1 q\u0301", "e\033[1;1H\033[m\u0301",
+	};
+	for (size_t i = 0; i < sizeof gone / sizeof gone[0]; i++) {
+		w(vt, "\033[H\033[2J");
+		w(vt, gone[i]);
+		checks++;
+		for (int x = 0; x < 4; x++)
+			if (vt->pri[0][x].ext) {
+				failures++;
+				fprintf(stderr, "%s:%d: FAIL: case %zu keeps the mark\n",
+					__FILE__, __LINE__, i);
+				break;
+			}
+	}
+	/* SGR leaves the cursor: the mark goes on, as in xterm 407, and the cell
+	 * keeps the colors it was written with */
+	w(vt, "\033[H\033[2Je\033[31m\033[1;4m\u0301x");
+	CHECK_STR(marks(vt, &vt->pri[0][0]), "301");
+	CHECK(vt->pri[0][0].fg == COL_DEFAULT_FG && !vt->pri[0][0].attr);
+	CHECK(vt->pri[0][1].fg == 1 && !vt->pri[0][1].ext);
+	w(vt, "\033[m");
+
+	/* a variation selector and the joiners are kept; the other format
+	 * characters, bidi controls among them, are not, as if they were not
+	 * there: a mark after one is its character's */
+	w(vt, "\033[H\033[2J\u2764\ufe0f\u200d\r\na\u200c\r\nb\u200b\u0301c\u202e\u2066\ufeff");
+	CHECK_STR(marks(vt, &vt->pri[0][0]), "fe0f 200d");
+	CHECK_STR(marks(vt, &vt->pri[1][0]), "200c");
+	CHECK_STR(marks(vt, &vt->pri[2][0]), "301");
+	CHECK(!vt->pri[2][1].ext && vt->c.x == 2);
+
+	/* a cell holds VT_EXT_MAX of them, more are dropped */
+	w(vt, "\033[H\033[2Jz\u0300\u0301\u0302\u0303\u0304\u0305\u0306\u0307\u0308\u0309");
+	CHECK_STR(marks(vt, &vt->pri[0][0]), "300 301 302 303 304 305 306 307");
+
+	/* they go where the cell goes and end with it: insert, scroll into the
+	 * history, resize; overwritten, erased; REP repeats the character alone */
+	w(vt, "\033[H\033[2Je\u0301\r\033[@");
+	CHECK_STR(marks(vt, &vt->pri[0][1]), "301");
+	CHECK(!vt->pri[0][0].ext);
+	w(vt, "\033[3;1H\n");
+	int len;
+	const struct cell *l = vt_abs_line(vt, 0, &len);
+	CHECK(l && len == 2 && l[1].cp == 'e');
+	CHECK_STR(marks(vt, &l[1]), "301");
+	w(vt, "\033[He\u0302");
+	CHECK(vt_resize(vt, 6, 2));
+	CHECK(vt->pri[0][0].cp == 'e');
+	CHECK_STR(marks(vt, &vt->pri[0][0]), "302");
+	w(vt, "\033[Hx");
+	CHECK(!vt->pri[0][0].ext);
+	w(vt, "\033[H \u0301\033[2K");
+	CHECK(!vt->pri[0][0].ext && vt->pri[0][0].cp == ' ');
+	w(vt, "\033[He\u0301\033[2b");
+	CHECK_STR(row(vt, 0), "eee");
+	CHECK(vt->pri[0][0].ext && !vt->pri[0][1].ext && !vt->pri[0][2].ext);
+	/* a resize leaves the character where the cursor is, in a row that may
+	 * have moved up, as in xterm 407; a mark is dropped only when its
+	 * column is cut off */
+	w(vt, "\033[H\033[2J\r\n\r\nab");
+	CHECK(vt_resize(vt, 8, 2) && vt->c.y == 1);
+	w(vt, "\u0301");
+	CHECK_STR(marks(vt, &vt->pri[1][1]), "301");
+	CHECK(!vt->pri[1][0].ext);
+	w(vt, "cdef");
+	CHECK(vt_resize(vt, 3, 2));
+	w(vt, "\u0302");
+	CHECK_STR(row(vt, 1), "abc");
+	CHECK_STR(marks(vt, &vt->pri[1][1]), "301");
+	CHECK(!vt->pri[1][0].ext && !vt->pri[1][2].ext);
+	/* and REP still repeats after one */
+	w(vt, "\033[H\033[2Jx");
+	CHECK(vt_resize(vt, 6, 2));
+	w(vt, "\033[2b");
+	CHECK_STR(row(vt, 0), "xxx");
+	vt_free(vt);
+
+	/* nothing to go on in a new terminal, nor after a character too wide
+	 * for the grid, which is not printed */
+	vt = mk(1, 1, 0);
+	w(vt, "\u0301");
+	CHECK(!vt->pri[0][0].ext);
+	w(vt, "a\u4e16\u0301");
+	CHECK(vt->pri[0][0].cp == 'a' && !vt->pri[0][0].ext);
+	vt_free(vt);
+
+	/* 65535 sequences are kept, as many as a cell can name: then one not
+	 * seen before is dropped, the cell keeping what it had, and those kept
+	 * still go on cells */
+	vt = mk(4, 1, 0);
+	for (uint32_t i = 0; vt->ext_n < UINT16_MAX && i < 200000; i++) {
+		char b[16] = "\rx", *o = b + 2;
+		enc(&o, 0x300 + i % 100);
+		enc(&o, 0x300 + i / 100 % 100);
+		enc(&o, 0x300 + i / 10000);
+		vt_write(vt, b, (size_t)(o - b));
+	}
+	CHECK(vt->ext_n == UINT16_MAX && vt->ext_cap == UINT16_MAX);
+	w(vt, "\rx\u0363\u0364");
+	CHECK_STR(marks(vt, &vt->pri[0][0]), "363");
+	w(vt, "\ry\u0364");
+	CHECK(vt->pri[0][0].cp == 'y' && !vt->pri[0][0].ext);
+	w(vt, "\rx\u0300\u0300\u0300");
+	CHECK_STR(marks(vt, &vt->pri[0][0]), "300 300 300");
+	CHECK(vt->ext_n == UINT16_MAX);
+	vt_free(vt);
+}
+
 static void test_alloc_failures(void)
 {
 	/* vt_new: any one allocation failing gives NULL and leaks nothing */
@@ -1683,6 +1845,26 @@ static void test_alloc_failures(void)
 		CHECK(l && len == 1 && l[0].cp == 'b');
 		vt_free(vt);
 	}
+	/* no memory for a mark: it is dropped, its character stays, the next goes on */
+	fails = 0;
+	for (long n = 0;; n++) {
+		struct vt *vt = mk(10, 2, 0);
+		injected = false;
+		countdown = n;
+		w(vt, "e\u0301");
+		countdown = -1;
+		CHECK(vt->pri[0][0].cp == 'e' && vt->c.x == 1);
+		if (injected) {
+			fails++;
+			CHECK(!vt->pri[0][0].ext && vt->ext_n == 0);
+			w(vt, "a\u0301");
+		}
+		CHECK_STR(marks(vt, &vt->pri[0][injected ? 1 : 0]), "301");
+		vt_free(vt);
+		if (!injected)
+			break;
+	}
+	CHECK(fails == 2);
 	/* sizes are clamped, the largest grid still works */
 	struct vt *vt = mk(INT_MAX, INT_MAX, 0);
 	CHECK(vt && vt->cols == VT_MAX_COLS && vt->rows == VT_MAX_ROWS);
@@ -1729,6 +1911,7 @@ int main(void)
 	test_sgr_details();
 	test_cnl_cpl_1048_decom();
 	test_abs_line_range();
+	test_marks();
 	test_alloc_failures();
 	test_history_slots();
 	test_rep();

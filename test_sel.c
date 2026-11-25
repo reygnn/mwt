@@ -227,6 +227,26 @@ static void test_covers(void)
 /* A window grown wider keeps the wrap where the line ended, blanks after it:
  * the lines are still one, on the screen as in the history; a cleared screen
  * no longer goes on from the history. */
+/* What a cell holds after its character is copied with it, though not drawn */
+static void test_text_marks(void)
+{
+	struct vt *vt = mk(10, 3, 5);
+	w(vt, "e\u0301 \u4e16\ufe0f\u200d\u4e16\r\nzwei\u0308");
+	struct sel s = sel_of(SEL_CHAR, line(vt, 0), 0, line(vt, 1), 9);
+	TEXT(vt, s, "e\u0301 \u4e16\ufe0f\u200d\u4e16\nzwei\u0308");
+	/* by the cell: its marks come with either half of a wide character, and
+	 * not with the cell after it */
+	TEXT(vt, sel_of(SEL_CHAR, line(vt, 0), 3, line(vt, 0), 3), "\u4e16\ufe0f\u200d");
+	TEXT(vt, sel_of(SEL_CHAR, line(vt, 0), 1, line(vt, 0), 1), "");
+	/* a mark on a blank is not a trailing blank */
+	w(vt, "\r\n \u0301");
+	TEXT(vt, sel_of(SEL_CHAR, line(vt, 2), 0, line(vt, 2), 9), " \u0301");
+	/* and from the history */
+	w(vt, "\r\n\r\n");
+	TEXT(vt, sel_of(SEL_CHAR, line(vt, -2), 0, line(vt, -2), 9), "e\u0301 \u4e16\ufe0f\u200d\u4e16");
+	vt_free(vt);
+}
+
 static void test_text_wider(void)
 {
 	struct vt *vt = mk(10, 4, 10);
@@ -588,6 +608,7 @@ int main(void)
 	test_range_wide();
 	test_covers();
 	test_text();
+	test_text_marks();
 	test_text_wider();
 	test_text_nomem();
 	test_mark();

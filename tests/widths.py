@@ -13,7 +13,8 @@ tools tests/width.sh uses to measure and check them.
   widths.py vim-check BEFORE AFTER  rows before and after `:%normal $rX`
   widths.py prompt-visible    the prompt as mwt shows it
 
-What mwt counts is glibc's wcwidth(), with zero width characters dropped.
+What mwt counts is glibc's wcwidth(); zero width characters count nothing and
+are not drawn, but are copied with the character before them.
 bash's readline counts the same way, so bash and mwt agree by construction.
 """
 import ctypes
@@ -61,8 +62,13 @@ def mwt_width(s):
 
 
 def visible(s):
-    """s as mwt shows and copies it: zero width characters are dropped."""
-    return "".join(c for c in s if ord(c) < 0x300 or libc.wcwidth(c) != 0)
+    """s as mwt copies it: of the zero width characters the format characters
+    are dropped but for the two joiners, as format_char() in vt.c has them;
+    marks and variation selectors stay with their character."""
+    def dropped(cp):
+        return (0x200b <= cp <= 0x200f or 0x202a <= cp <= 0x202e or
+                0x2060 <= cp <= 0x206f or cp == 0xfeff) and cp not in (0x200c, 0x200d)
+    return "".join(c for c in s if not dropped(ord(c)))
 
 
 def probe(out):
