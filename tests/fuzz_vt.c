@@ -101,6 +101,9 @@ static void check(const struct vt *vt)
 		die("GL is neither G0 nor G1", vt);
 	if (vt->view < 0 || vt->view > vt->hist_count)
 		die("view outside the history", vt);
+	/* the row a resize keeps on the main screen while the alternate one shows */
+	if ((vt->mode & MODE_ALTSCREEN) && (vt->pri_y < 0 || vt->pri_y >= vt->rows))
+		die("the main screen's cursor row outside the screen", vt);
 	/* a history line wraps within what it has */
 	for (int i = 0; i < vt->hist_count; i++) {
 		int slot = (vt->hist_head - 1 - i + vt->hist_cap) % vt->hist_cap;
@@ -159,6 +162,8 @@ static void compare(const struct vt *a, const struct vt *b,
 		die("cursor differs between whole and chunked", b);
 	if (!same_cursor(&a->saved_pri, &b->saved_pri) || !same_cursor(&a->saved_alt, &b->saved_alt))
 		die("saved cursor differs between whole and chunked", b);
+	if ((a->mode & MODE_ALTSCREEN) && a->pri_y != b->pri_y)
+		die("the main screen's cursor row differs between whole and chunked", b);
 	if (a->top != b->top || a->bot != b->bot)
 		die("scroll region differs between whole and chunked", b);
 	if (a->cursor_style != b->cursor_style)

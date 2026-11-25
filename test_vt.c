@@ -536,6 +536,8 @@ static bool fuzz_same(const struct vt *a, const struct vt *b,
 	    a->cursor_style != b->cursor_style || a->hist_count != b->hist_count ||
 	    a->scrolled != b->scrolled || memcmp(a->tabs, b->tabs, (size_t)a->cols * sizeof *a->tabs))
 		return false;
+	if ((a->mode & MODE_ALTSCREEN) && a->pri_y != b->pri_y)
+		return false;
 	for (int r = 0; r < a->rows; r++)
 		if (!fuzz_rows(a->pri[r], b->pri[r], a->cols) || !fuzz_rows(a->alt[r], b->alt[r], a->cols))
 			return false;
@@ -1220,6 +1222,42 @@ static void test_resize(void)
 	CHECK_STR(row(vt, 5), "");
 	w(vt, "\033[6;12Hx");
 	CHECK(vt->pri[5]->c[11].cp == 'x');
+	vt_free(vt);
+
+	/* Behind the alternate screen the main one keeps the row its cursor was in
+	 * when that one took over, also with 47 and 1047, which save no cursor:
+	 * going by saved_pri, the top row then, it lost its last lines instead. */
+	static const char *const enter[] = { "\033[?47h", "\033[?1047h", "\033[?1049h" };
+	static const char *const leave[] = { "\033[?47l", "\033[?1047l", "\033[?1049l" };
+	for (int i = 0; i < 3; i++) {
+		vt = mk(10, 6, 10);
+		w(vt, "1\r\n2\r\n3\r\n4\r\n5\r\n6");
+		w(vt, enter[i]);
+		w(vt, "\033[H"); /* the alternate screen's own cursor asks for no shift */
+		vt_resize(vt, 10, 4);
+		CHECK(vt->hist_count == 2);
+		/* again: the row counts from where the first resize left it */
+		vt_resize(vt, 10, 2);
+		CHECK(vt->hist_count == 4);
+		CHECK_STR(hist_line(vt, 1), "4");
+		CHECK_STR(hist_line(vt, 4), "1");
+		w(vt, leave[i]);
+		CHECK_STR(row(vt, 0), "5");
+		CHECK_STR(row(vt, 1), "6");
+		/* 1049 brings the cursor back to its line, 47 and 1047 leave it be */
+		CHECK(vt->c.y == (i == 2 ? 1 : 0));
+		vt_free(vt);
+	}
+
+	/* a cursor DECSC saved further down than the one left behind moves with
+	 * the screen and stays on it */
+	vt = mk(10, 6, 10);
+	w(vt, "1\r\n2\r\n3\r\n4\r\n5\r\n6\0337\033[4;1H\033[?47h\033[H");
+	vt_resize(vt, 10, 3);
+	CHECK(vt->hist_count == 1 && vt->saved_pri.y == 2);
+	w(vt, "\033[?47l");
+	CHECK_STR(row(vt, 0), "2");
+	CHECK_STR(row(vt, 2), "4");
 	vt_free(vt);
 }
 

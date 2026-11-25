@@ -100,6 +100,8 @@ struct vt {
 	bool *tabs;
 
 	struct vt_cursor c, saved_pri, saved_alt;
+	int pri_y;                /* behind the alternate screen: the row the main
+	                           * screen's cursor was in when that one took over */
 	int top, bot;             /* scroll region, inclusive */
 	unsigned mode;
 	enum cursor_style cursor_style;
