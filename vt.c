@@ -80,50 +80,65 @@ static void fill(struct cell *l, int from, int to, struct cell b)
 		l[i] = b;
 }
 
-/* Each screen row has a cell more than cols. Its cp says how many cells from the
- * left may differ from a default blank; every cell from there on is one. Scrolling
- * and erasing then only touch what was written, so a short line costs the same
- * on a wide screen as on a narrow one. It is an upper bound: writing raises it,
- * erasing to the end of the row with a default blank lowers it. The extra cell
- * goes along when rows are rotated, as it is part of the row. */
-#define USED(vt, l) ((l)[(vt)->cols].cp)
-
+/* A row counts the cells from its left that may differ from a default blank
+ * (row.used); every cell from there on is one. Scrolling and erasing then only
+ * touch what was written, so a short line costs the same on a wide screen as on a
+ * narrow one. It is an upper bound: writing raises it, erasing to the end of the
+ * row with a default blank lowers it. It is never below row.wrap. */
 static bool is_default_blank(struct cell c)
 {
 	return c.cp == ' ' && c.fg == COL_DEFAULT_FG && c.bg == COL_DEFAULT_BG && !c.attr;
 }
 
 /* the row has been written up to end (exclusive) */
-static void touch(const struct vt *vt, struct cell *l, int end)
+static void touch(struct row *l, int end)
 {
-	if (USED(vt, l) < (uint32_t)end)
-		USED(vt, l) = (uint32_t)end;
+	if (l->used < end)
+		l->used = end;
+}
+
+/* Cells [from, to) of the row are written or erased. With the last one before
+ * the wrap among them the line ends in this row, as for a program that fills the
+ * last column and then moves the cursor: only put() running into the end of the
+ * row makes a line go on. */
+static void unwrap(struct row *l, int from, int to)
+{
+	if (from < l->wrap && l->wrap <= to)
+		l->wrap = 0;
+}
+
+/* cells [from, to) of the row have been written */
+static void wrote(struct row *l, int from, int to)
+{
+	unwrap(l, from, to);
+	touch(l, to);
 }
 
 /* one cell, for wide-glyph repairs and the like */
-static void set_cell(const struct vt *vt, struct cell *l, int x, struct cell c)
+static void set_cell(struct row *l, int x, struct cell c)
 {
-	l[x] = c;
+	l->c[x] = c;
+	unwrap(l, x, x + 1);
 	if (!is_default_blank(c))
-		touch(vt, l, x + 1);
+		touch(l, x + 1);
 }
 
 /* fill() for a screen row: a default blank is only written where the row was
  * written, the rest is blank already */
-static void fill_row(const struct vt *vt, struct cell *l, int from, int to, struct cell b)
+static void fill_row(struct row *l, int from, int to, struct cell b)
 {
-	int used = (int)USED(vt, l);
+	unwrap(l, from, to);
 	if (!is_default_blank(b)) {
-		fill(l, from, to, b);
-		touch(vt, l, to);
+		fill(l->c, from, to, b);
+		touch(l, to);
 		return;
 	}
-	fill(l, from, MIN(to, used), b);
-	if (to >= used && from < used)
-		USED(vt, l) = (uint32_t)from;
+	fill(l->c, from, MIN(to, l->used), b);
+	if (to >= l->used && from < l->used)
+		l->used = from;
 }
 
-static void free_screen(struct cell **s, int rows)
+static void free_screen(struct row **s, int rows)
 {
 	if (!s)
 		return;
@@ -133,20 +148,20 @@ static void free_screen(struct cell **s, int rows)
 }
 
 /* a blank screen, or NULL with nothing left allocated */
-static struct cell **alloc_screen(int cols, int rows)
+static struct row **alloc_screen(int cols, int rows)
 {
-	struct cell **s = calloc(rows, sizeof *s);
+	struct row **s = calloc(rows, sizeof *s);
 	if (!s)
 		return NULL;
 	struct cell b = { ' ', COL_DEFAULT_FG, COL_DEFAULT_BG, 0 };
 	for (int r = 0; r < rows; r++) {
-		s[r] = malloc(((size_t)cols + 1) * sizeof **s);
+		s[r] = malloc(sizeof **s + (size_t)cols * sizeof *s[r]->c);
 		if (!s[r]) {
 			free_screen(s, rows);
 			return NULL;
 		}
-		fill(s[r], 0, cols, b);
-		s[r][cols] = (struct cell){ 0 }; /* USED: nothing written */
+		s[r]->used = s[r]->wrap = 0; /* nothing written, and it ends here */
+		fill(s[r]->c, 0, cols, b);
 	}
 	return s;
 }
@@ -173,23 +188,39 @@ void vt_mark_all(struct vt *vt)
 }
 
 /* break up wide glyphs that are partially overwritten in [x0, x1] */
-static void fix_wide(struct vt *vt, struct cell *l, int x0, int x1)
+static void fix_wide(struct vt *vt, struct row *l, int x0, int x1)
 {
-	if (x0 > 0 && (l[x0].attr & ATTR_WDUMMY))
-		set_cell(vt, l, x0 - 1, blank(vt));
-	if (x1 + 1 < vt->cols && (l[x1].attr & ATTR_WIDE))
-		set_cell(vt, l, x1 + 1, blank(vt));
+	if (x0 > 0 && (l->c[x0].attr & ATTR_WDUMMY))
+		set_cell(l, x0 - 1, blank(vt));
+	if (x1 + 1 < vt->cols && (l->c[x1].attr & ATTR_WIDE))
+		set_cell(l, x1 + 1, blank(vt));
 }
 
 /* Before cells shift right from x: a glyph with x as its right half is split, so
  * both halves go. One with x as its left half moves as a whole, nothing to do. */
-static void split_wide(struct vt *vt, struct cell *l, int x)
+static void split_wide(struct vt *vt, struct row *l, int x)
 {
-	if (!(l[x].attr & ATTR_WDUMMY))
+	if (!(l->c[x].attr & ATTR_WDUMMY))
 		return;
 	if (x > 0)
-		set_cell(vt, l, x - 1, blank(vt));
-	set_cell(vt, l, x, blank(vt));
+		set_cell(l, x - 1, blank(vt));
+	set_cell(l, x, blank(vt));
+}
+
+/* The row's cells from x on move n to the right, and those pushed past its end
+ * are lost; the n cells at x are the caller's to write. A line that went on in
+ * the next row still does: what is put in is part of it, and its wrap moves
+ * along, to the end of the row at most. Half a wide glyph left in the last
+ * column goes. */
+static void shift_right(struct vt *vt, struct row *l, int x, int n)
+{
+	split_wide(vt, l, x);
+	int wrap = l->wrap;
+	memmove(&l->c[x + n], &l->c[x], (size_t)(vt->cols - x - n) * sizeof *l->c);
+	touch(l, MIN(l->used + n, vt->cols));
+	if (l->c[vt->cols - 1].attr & ATTR_WIDE)
+		set_cell(l, vt->cols - 1, blank(vt));
+	l->wrap = x < wrap ? MIN(wrap + n, vt->cols) : wrap;
 }
 
 static void clear_line(struct vt *vt, int y, int x0, int x1)
@@ -199,12 +230,11 @@ static void clear_line(struct vt *vt, int y, int x0, int x1)
 	if (x0 > x1)
 		return;
 	fix_wide(vt, vt->line[y], x0, x1);
-	fill_row(vt, vt->line[y], x0, x1 + 1, blank(vt));
-	/* erased to the end, the line ends: also a wrap left in its middle by a
-	 * window grown wider, which vt_abs_wraps would still find */
+	fill_row(vt->line[y], x0, x1 + 1, blank(vt));
+	/* erased to the end, the line ends: also one whose wrap is left of x0,
+	 * where a window grown wider left it */
 	if (x1 == vt->cols - 1)
-		for (int x = 0; x < x0; x++)
-			vt->line[y][x].attr &= ~ATTR_WRAP;
+		vt->line[y]->wrap = 0;
 	mark_row(vt, y);
 }
 
@@ -219,22 +249,20 @@ static void hist_unwrap(struct vt *vt)
 	if ((vt->mode & MODE_ALTSCREEN) || vt->hist_count == 0)
 		return;
 	int slot = (vt->hist_head - 1 + vt->hist_cap) % vt->hist_cap;
-	if (vt->hist_len[slot] > 0)
-		vt->hist[slot][vt->hist_len[slot] - 1].attr &= ~ATTR_WRAP;
+	vt->hist_wrap[slot] = 0;
 }
 
-static void push_hist(struct vt *vt, const struct cell *l, int len)
+static void push_hist(struct vt *vt, const struct row *row)
 {
 	if (vt->hist_cap <= 0)
 		return;
-	/* trim trailing default blanks unless the line wraps; a screen row is blank
-	 * from USED on, so the search starts there */
-	if (!(l[len - 1].attr & ATTR_WRAP)) {
-		len = MIN(len, (int)USED(vt, l));
-		while (len > 0 && l[len - 1].cp == ' ' &&
-		       l[len - 1].bg == COL_DEFAULT_BG && !l[len - 1].attr)
-			len--;
-	}
+	/* trim trailing default blanks, but none of the cells before a wrap; a
+	 * screen row is blank from row.used on, so the search starts there */
+	const struct cell *l = row->c;
+	int len = row->used;
+	while (len > row->wrap && l[len - 1].cp == ' ' &&
+	       l[len - 1].bg == COL_DEFAULT_BG && !l[len - 1].attr)
+		len--;
 	int slot = vt->hist_head;
 	struct cell *dst = vt->hist[slot];
 	/* a slot keeps its cells: once the history is full, a line that fits
@@ -251,6 +279,7 @@ static void push_hist(struct vt *vt, const struct cell *l, int len)
 	if (dst)
 		memcpy(dst, l, len * sizeof *dst);
 	vt->hist_len[slot] = dst ? len : 0;
+	vt->hist_wrap[slot] = dst ? row->wrap : 0;
 	vt->hist_head = (slot + 1) % vt->hist_cap;
 	if (vt->hist_count < vt->hist_cap)
 		vt->hist_count++;
@@ -263,24 +292,33 @@ static void push_hist(struct vt *vt, const struct cell *l, int len)
 	}
 }
 
-const struct cell *vt_abs_line(const struct vt *vt, int64_t abs, int *len)
+/* vt_abs_line, and in *wrap the cells before the line's wrap, as row.wrap */
+static const struct cell *abs_line(const struct vt *vt, int64_t abs, int *len, int *wrap)
 {
 	int64_t rel = abs - (int64_t)vt->scrolled;
 	if (rel >= 0) {
 		if (rel >= vt->rows)
 			goto none;
 		*len = vt->cols;
-		return vt->line[rel];
+		*wrap = vt->line[rel]->wrap;
+		return vt->line[rel]->c;
 	}
 	int64_t i = -rel - 1;
 	if (i >= vt->hist_count)
 		goto none;
 	int slot = (int)((vt->hist_head - 1 - i + vt->hist_cap) % vt->hist_cap);
 	*len = vt->hist_len[slot];
+	*wrap = vt->hist_wrap[slot];
 	return vt->hist[slot];
 none:
-	*len = 0;
+	*len = *wrap = 0;
 	return NULL;
+}
+
+const struct cell *vt_abs_line(const struct vt *vt, int64_t abs, int *len)
+{
+	int wrap;
+	return abs_line(vt, abs, len, &wrap);
 }
 
 const struct cell *vt_view_line(const struct vt *vt, int r, int *len)
@@ -290,15 +328,12 @@ const struct cell *vt_view_line(const struct vt *vt, int r, int *len)
 
 int vt_abs_wraps(const struct vt *vt, int64_t abs)
 {
-	int n;
-	const struct cell *l = vt_abs_line(vt, abs, &n);
-	for (int k = n - 1; l && k >= 0; k--) {
-		if (l[k].attr & ATTR_WRAP)
-			return k + 1;
+	int n, wrap;
+	const struct cell *l = abs_line(vt, abs, &n, &wrap);
+	for (int k = wrap; wrap && k < n; k++)
 		if ((l[k].cp != ' ' && l[k].cp != 0) || l[k].bg != COL_DEFAULT_BG || l[k].attr)
 			return 0;
-	}
-	return 0;
+	return wrap;
 }
 
 int64_t vt_abs_first(const struct vt *vt)
@@ -329,14 +364,14 @@ static void scroll_up(struct vt *vt, int orig, int n)
 	bool hist = orig == 0 && !(vt->mode & MODE_ALTSCREEN);
 	if (hist)
 		for (int i = 0; i < n; i++)
-			push_hist(vt, vt->line[i], vt->cols);
-	struct cell *tmp[n];
+			push_hist(vt, vt->line[i]);
+	struct row *tmp[n];
 	memcpy(tmp, &vt->line[orig], n * sizeof *tmp);
 	memmove(&vt->line[orig], &vt->line[orig + n],
 		(vt->bot - orig + 1 - n) * sizeof *tmp);
 	memcpy(&vt->line[vt->bot - n + 1], tmp, n * sizeof *tmp);
 	for (int r = vt->bot - n + 1; r <= vt->bot; r++)
-		fill_row(vt, vt->line[r], 0, vt->cols, blank(vt));
+		fill_row(vt->line[r], 0, vt->cols, blank(vt));
 	/* scrolled back, push_hist moved the view: the rows below the region
 	 * did not change, but they are shown n rows lower now */
 	dirty_range(vt, orig, hist && vt->view > 0 ? vt->rows - 1 : vt->bot);
@@ -349,13 +384,13 @@ static void scroll_down(struct vt *vt, int orig, int n)
 	n = CLAMP(n, 0, vt->bot - orig + 1);
 	if (!n)
 		return;
-	struct cell *tmp[n];
+	struct row *tmp[n];
 	memcpy(tmp, &vt->line[vt->bot - n + 1], n * sizeof *tmp);
 	memmove(&vt->line[orig + n], &vt->line[orig],
 		(vt->bot - orig + 1 - n) * sizeof *tmp);
 	memcpy(&vt->line[orig], tmp, n * sizeof *tmp);
 	for (int r = orig; r < orig + n; r++)
-		fill_row(vt, vt->line[r], 0, vt->cols, blank(vt));
+		fill_row(vt->line[r], 0, vt->cols, blank(vt));
 	dirty_range(vt, orig, vt->bot);
 }
 
@@ -468,7 +503,7 @@ static void set_altscreen(struct vt *vt, bool on, bool clear)
 		vt->line = vt->alt;
 		if (clear)
 			for (int r = 0; r < vt->rows; r++)
-				fill_row(vt, vt->alt[r], 0, vt->cols, blank(vt));
+				fill_row(vt->alt[r], 0, vt->cols, blank(vt));
 	} else {
 		vt->mode &= ~MODE_ALTSCREEN;
 		vt->line = vt->pri;
@@ -513,8 +548,8 @@ void vt_reset(struct vt *vt)
 	vt->lastcp = 0;
 	reset_tabs(vt);
 	for (int r = 0; r < vt->rows; r++) {
-		fill_row(vt, vt->pri[r], 0, vt->cols, blank(vt));
-		fill_row(vt, vt->alt[r], 0, vt->cols, blank(vt));
+		fill_row(vt->pri[r], 0, vt->cols, blank(vt));
+		fill_row(vt->alt[r], 0, vt->cols, blank(vt));
 	}
 	vt->view = 0;
 	vt_mark_all(vt);
@@ -537,9 +572,10 @@ struct vt *vt_new(int cols, int rows, int histsize, const struct vt_callbacks *c
 		vt->hist = calloc(vt->hist_cap, sizeof *vt->hist);
 		vt->hist_len = calloc(vt->hist_cap, sizeof *vt->hist_len);
 		vt->hist_room = calloc(vt->hist_cap, sizeof *vt->hist_room);
+		vt->hist_wrap = calloc(vt->hist_cap, sizeof *vt->hist_wrap);
 	}
 	if (!vt->pri || !vt->alt || !vt->dirty || !vt->tabs ||
-	    (vt->hist_cap && (!vt->hist || !vt->hist_len || !vt->hist_room))) {
+	    (vt->hist_cap && (!vt->hist || !vt->hist_len || !vt->hist_room || !vt->hist_wrap))) {
 		vt_free(vt);
 		return NULL;
 	}
@@ -560,26 +596,28 @@ void vt_free(struct vt *vt)
 	free(vt->hist);
 	free(vt->hist_len);
 	free(vt->hist_room);
+	free(vt->hist_wrap);
 	free(vt->dirty);
 	free(vt->tabs);
 	free(vt);
 }
 
 /* a new screen holding what fits of old, which is left as it is */
-static struct cell **copy_screen(const struct vt *vt, struct cell **old, int shift,
-				 int cols, int rows)
+static struct row **copy_screen(const struct vt *vt, struct row **old, int shift,
+				int cols, int rows)
 {
-	struct cell **s = alloc_screen(cols, rows);
+	struct row **s = alloc_screen(cols, rows);
 	if (!s)
 		return NULL;
 	struct cell b = { ' ', COL_DEFAULT_FG, COL_DEFAULT_BG, 0 };
 	for (int r = 0; r < rows && r + shift < vt->rows; r++) {
-		const struct cell *o = old[r + shift];
-		int used = MIN((int)o[vt->cols].cp, cols);
-		memcpy(s[r], o, used * sizeof **s);
-		s[r][cols].cp = (uint32_t)used; /* USED, with the new width */
-		if (cols < vt->cols && (s[r][cols - 1].attr & ATTR_WIDE))
-			s[r][cols - 1] = b;
+		const struct row *o = old[r + shift];
+		s[r]->used = MIN(o->used, cols);
+		memcpy(s[r]->c, o->c, s[r]->used * sizeof *o->c);
+		/* no reflow: a line cut before its wrap ends there */
+		s[r]->wrap = o->wrap <= cols ? o->wrap : 0;
+		if (cols < vt->cols && (s[r]->c[cols - 1].attr & ATTR_WIDE))
+			s[r]->c[cols - 1] = b;
 	}
 	return s;
 }
@@ -606,8 +644,8 @@ bool vt_resize(struct vt *vt, int cols, int rows)
 	int ashift = MAX(0, ac->y - (rows - 1));
 
 	/* everything new first, so a failure leaves the terminal as it was */
-	struct cell **npri = copy_screen(vt, vt->pri, pshift, cols, rows);
-	struct cell **nalt = copy_screen(vt, vt->alt, ashift, cols, rows);
+	struct row **npri = copy_screen(vt, vt->pri, pshift, cols, rows);
+	struct row **nalt = copy_screen(vt, vt->alt, ashift, cols, rows);
 	bool *ndirty = calloc(rows, sizeof *ndirty);
 	bool *ntabs = calloc(cols, sizeof *ntabs);
 	if (!npri || !nalt || !ndirty || !ntabs) {
@@ -618,7 +656,7 @@ bool vt_resize(struct vt *vt, int cols, int rows)
 		return false;
 	}
 	for (int i = 0; i < pshift; i++)
-		push_hist(vt, vt->pri[i], vt->cols);
+		push_hist(vt, vt->pri[i]);
 	free_screen(vt->pri, vt->rows);
 	free_screen(vt->alt, vt->rows);
 	vt->pri = npri;
@@ -681,8 +719,8 @@ static bool put(struct vt *vt, uint32_t cp)
 
 	bool wrap = vt->mode & MODE_AUTOWRAP;
 	if (wrap && (c->wrapnext || c->x + w > vt->cols)) {
-		vt->line[c->y][vt->cols - 1].attr |= ATTR_WRAP;
-		touch(vt, vt->line[c->y], vt->cols);
+		vt->line[c->y]->wrap = vt->cols;
+		touch(vt->line[c->y], vt->cols);
 		c->x = 0;
 		index_down(vt);
 	} else if (c->x + w > vt->cols) {
@@ -690,17 +728,13 @@ static bool put(struct vt *vt, uint32_t cp)
 	}
 	c->wrapnext = false;
 
-	struct cell *l = vt->line[c->y];
-	if (vt->mode & MODE_INSERT) {
-		split_wide(vt, l, c->x);
-		memmove(&l[c->x + w], &l[c->x], (vt->cols - c->x - w) * sizeof *l);
-		touch(vt, l, MIN((int)USED(vt, l) + w, vt->cols));
-		if (l[vt->cols - 1].attr & ATTR_WIDE)
-			set_cell(vt, l, vt->cols - 1, blank(vt));
-	} else {
-		fix_wide(vt, l, c->x, c->x + w - 1);
-	}
-	uint16_t base = (c->tmpl.attr & ~(ATTR_WIDE | ATTR_WDUMMY | ATTR_WRAP)) | gfx;
+	struct row *row = vt->line[c->y];
+	if (vt->mode & MODE_INSERT)
+		shift_right(vt, row, c->x, w);
+	else
+		fix_wide(vt, row, c->x, c->x + w - 1);
+	struct cell *l = row->c;
+	uint16_t base = (c->tmpl.attr & ~(ATTR_WIDE | ATTR_WDUMMY)) | gfx;
 	l[c->x] = c->tmpl;
 	l[c->x].cp = cp;
 	l[c->x].attr = base | (w == 2 ? ATTR_WIDE : 0);
@@ -709,7 +743,7 @@ static bool put(struct vt *vt, uint32_t cp)
 		l[c->x + 1].cp = 0;
 		l[c->x + 1].attr = base | ATTR_WDUMMY;
 	}
-	touch(vt, l, c->x + w);
+	wrote(row, c->x, c->x + w);
 	mark_row(vt, c->y);
 	vt->lastcp = orig;
 	advance(vt, c->x + w, wrap);
@@ -733,22 +767,18 @@ static void rep_row(struct vt *vt, uint32_t cp, int w, int n)
 		 * x - w; not after a wrap */
 		if (!n || c->wrapnext || c->y != y0 || c->x != x0 + w)
 			continue;
-		struct cell *l = vt->line[c->y];
+		struct row *l = vt->line[c->y];
 		int x = c->x, k = MIN(n, (vt->cols - x) / w);
 		if (!k)
 			continue;
-		struct cell cell[2] = { l[x - w], l[x - 1] }; /* put() mended the edges */
-		if (vt->mode & MODE_INSERT) {
-			memmove(&l[x + k * w], &l[x], (size_t)(vt->cols - x - k * w) * sizeof *l);
-			if (l[vt->cols - 1].attr & ATTR_WIDE)
-				set_cell(vt, l, vt->cols - 1, blank(vt));
-		} else {
+		struct cell cell[2] = { l->c[x - w], l->c[x - 1] }; /* put() mended the edges */
+		if (vt->mode & MODE_INSERT)
+			shift_right(vt, l, x, k * w); /* put() left no half glyph at x */
+		else
 			fix_wide(vt, l, x, x + k * w - 1); /* as put_ascii */
-		}
 		for (int i = 0; i < k * w; i++)
-			l[x + i] = cell[i % w == 0 ? 0 : 1];
-		touch(vt, l, (vt->mode & MODE_INSERT) ? MIN((int)USED(vt, l) + k * w, vt->cols) :
-						      x + k * w);
+			l->c[x + i] = cell[i % w == 0 ? 0 : 1];
+		wrote(l, x, x + k * w);
 		n -= k;
 		advance(vt, c->x + k * w, vt->mode & MODE_AUTOWRAP);
 	}
@@ -978,7 +1008,7 @@ static void set_private_mode(struct vt *vt, int m, bool on)
 	case 1047: /* as xterm: the alternate screen is cleared on leaving it */
 		if (!on && (vt->mode & MODE_ALTSCREEN))
 			for (int r = 0; r < vt->rows; r++)
-				fill_row(vt, vt->alt[r], 0, vt->cols, blank(vt));
+				fill_row(vt->alt[r], 0, vt->cols, blank(vt));
 		set_altscreen(vt, on, false);
 		return;
 	case 1048:
@@ -1100,7 +1130,7 @@ static void decrqcra(struct vt *vt)
 	if (e[0] <= e[2] && e[1] <= e[3])
 		for (int r = e[0] - 1; r < e[2]; r++)
 			for (int x = e[1] - 1; x < e[3]; x++)
-				sum += checksum_cell(&vt->line[r][x]);
+				sum += checksum_cell(&vt->line[r]->c[x]);
 	reply(vt, "\033P%d!~%04X\033\\", arg(vt, 0, 0), -sum & 0xffff);
 }
 
@@ -1167,16 +1197,12 @@ static void csi_dispatch(struct vt *vt, uint32_t f)
 		return;
 	}
 
-	struct cell *l = vt->line[c->y];
+	struct row *l = vt->line[c->y];
 	switch (f) {
 	case '@': /* ICH */
 		n = MIN(n, vt->cols - c->x);
-		split_wide(vt, l, c->x);
-		memmove(&l[c->x + n], &l[c->x], (vt->cols - c->x - n) * sizeof *l);
-		touch(vt, l, MIN((int)USED(vt, l) + n, vt->cols));
-		fill_row(vt, l, c->x, c->x + n, blank(vt));
-		if (l[vt->cols - 1].attr & ATTR_WIDE)
-			set_cell(vt, l, vt->cols - 1, blank(vt));
+		shift_right(vt, l, c->x, n);
+		fill_row(l, c->x, c->x + n, blank(vt));
 		mark_row(vt, c->y);
 		c->wrapnext = false;
 		break;
@@ -1247,11 +1273,13 @@ static void csi_dispatch(struct vt *vt, uint32_t f)
 	case 'P': /* DCH */
 		n = MIN(n, vt->cols - c->x);
 		fix_wide(vt, l, c->x, c->x + n - 1);
-		/* the last column is emptied: the line no longer goes on, and its
-		 * wrap moved left would look like one of a window grown wider */
-		l[vt->cols - 1].attr &= ~ATTR_WRAP;
-		memmove(&l[c->x], &l[c->x + n], (vt->cols - c->x - n) * sizeof *l);
-		fill_row(vt, l, vt->cols - n, vt->cols, blank(vt));
+		/* cells before the wrap go and blanks come in at the end: the line no
+		 * longer goes on, also where a window grown wider left the wrap in
+		 * the middle of the row; moved left it would look like one of those */
+		if (c->x < l->wrap)
+			l->wrap = 0;
+		memmove(&l->c[c->x], &l->c[c->x + n], (size_t)(vt->cols - c->x - n) * sizeof *l->c);
+		fill_row(l, vt->cols - n, vt->cols, blank(vt));
 		mark_row(vt, c->y);
 		c->wrapnext = false;
 		break;
@@ -1625,11 +1653,12 @@ static size_t put_ascii(struct vt *vt, const unsigned char *s, size_t n)
 		k++;
 	if (!k)
 		return 0;
-	struct cell *l = vt->line[c->y];
+	struct row *row = vt->line[c->y];
 	int x0 = c->x, x1 = c->x + (int)k - 1;
-	fix_wide(vt, l, x0, x1);
+	fix_wide(vt, row, x0, x1);
+	struct cell *l = row->c;
 	struct cell tm = c->tmpl;
-	tm.attr &= ~(ATTR_WIDE | ATTR_WDUMMY | ATTR_WRAP);
+	tm.attr &= ~(ATTR_WIDE | ATTR_WDUMMY);
 	if (gfx) {
 		uint16_t attr = tm.attr;
 		for (size_t i = 0; i < k; i++) {
@@ -1644,7 +1673,7 @@ static size_t put_ascii(struct vt *vt, const unsigned char *s, size_t n)
 			l[x0 + i] = tm;
 		}
 	}
-	touch(vt, l, x1 + 1);
+	wrote(row, x0, x1 + 1);
 	mark_row(vt, c->y);
 	vt->lastcp = s[k - 1];
 	advance(vt, x1 + 1, vt->mode & MODE_AUTOWRAP);

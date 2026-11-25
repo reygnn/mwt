@@ -115,7 +115,7 @@ static void test_wrap(void)
 	w(vt, "hello world!");
 	CHECK_STR(row(vt, 0), "hello worl");
 	CHECK_STR(row(vt, 1), "d!");
-	CHECK(vt->pri[0][9].attr & ATTR_WRAP);
+	CHECK(vt->pri[0]->wrap == 10 && vt_abs_wraps(vt, 0) == 10);
 	CHECK(vt->c.x == 2 && vt->c.y == 1);
 	/* exactly filling a line defers the wrap */
 	w(vt, "\r\n0123456789");
@@ -219,17 +219,17 @@ static void test_history_slots(void)
 	vt_free(vt);
 }
 
-/* The count of written cells per row (USED in vt.c): whatever changes a row must
+/* The count of written cells per row (row.used): whatever changes a row must
  * keep it at or above the last cell that is not a default blank, and the history
  * must come out as before it existed. */
-static int used(const struct vt *vt, int r) { return (int)vt->line[r][vt->cols].cp; }
+static int used(const struct vt *vt, int r) { return vt->line[r]->used; }
 static bool used_ok(const struct vt *vt)
 {
-	struct cell **sc[2] = { vt->pri, vt->alt };
+	struct row **sc[2] = { vt->pri, vt->alt };
 	for (int s = 0; s < 2; s++)
 		for (int r = 0; r < vt->rows; r++)
-			for (int x = (int)sc[s][r][vt->cols].cp; x < vt->cols; x++) {
-				struct cell c = sc[s][r][x];
+			for (int x = sc[s][r]->used; x < vt->cols; x++) {
+				struct cell c = sc[s][r]->c[x];
 				if (c.cp != ' ' || c.fg != COL_DEFAULT_FG || c.bg != COL_DEFAULT_BG || c.attr)
 					return false;
 			}
@@ -260,7 +260,7 @@ static void test_row_extent(void)
 	w(vt, "\033[3;1H\033[4h\xe6\xbc\xa2\033[4l");
 	CHECK(used(vt, 2) == 4 && used_ok(vt));
 	w(vt, "\033[3;12Hzq"); /* the wrap scrolls: z's row is full, q's new */
-	CHECK(used(vt, 1) == 12 && used(vt, 2) == 1 && vt->line[2][0].cp == 'q');
+	CHECK(used(vt, 1) == 12 && used(vt, 2) == 1 && vt->line[2]->c[0].cp == 'q');
 	/* the history is trimmed the same as before: short lines, colored ones not */
 	w(vt, "\033[2J\033[H1\r\n22\r\n\033[42m\033[K\033[m\r\n\n\n\n");
 	int len;
@@ -321,7 +321,7 @@ static void test_sgr(void)
 	struct vt *vt = mk(20, 2, 0);
 	w(vt, "\033[1;4;31ma\033[38;2;1;2;3mb\033[38:2::4:5:6mc\033[48;5;100;39md"
 	      "\033[38:5:200m\033[22;24me\033[0mf\033[58:2::1:2:3;3mg\033[m\033[94;103mh");
-	struct cell *l = vt->pri[0];
+	struct cell *l = vt->pri[0]->c;
 	CHECK(l[0].fg == 1 && (l[0].attr & ATTR_BOLD) && (l[0].attr & ATTR_UNDERLINE));
 	CHECK(l[1].fg == (COL_RGB | 0x010203));
 	CHECK(l[2].fg == (COL_RGB | 0x040506));
@@ -332,7 +332,7 @@ static void test_sgr(void)
 	CHECK(l[7].fg == 12 && l[7].bg == 11);
 	/* background color erase */
 	w(vt, "\033[44m\033[2;1H\033[K");
-	CHECK(vt->pri[1][10].bg == 4);
+	CHECK(vt->pri[1]->c[10].bg == 4);
 	vt_free(vt);
 }
 
@@ -340,16 +340,16 @@ static void test_wide(void)
 {
 	struct vt *vt = mk(6, 2, 0);
 	w(vt, "a\xe7\x95\x8c" "b"); /* a 界 b */
-	CHECK(vt->pri[0][1].cp == 0x754c && (vt->pri[0][1].attr & ATTR_WIDE));
-	CHECK(vt->pri[0][2].attr & ATTR_WDUMMY);
-	CHECK(vt->pri[0][3].cp == 'b' && vt->c.x == 4);
+	CHECK(vt->pri[0]->c[1].cp == 0x754c && (vt->pri[0]->c[1].attr & ATTR_WIDE));
+	CHECK(vt->pri[0]->c[2].attr & ATTR_WDUMMY);
+	CHECK(vt->pri[0]->c[3].cp == 'b' && vt->c.x == 4);
 	/* overwrite right half: left half becomes blank */
 	w(vt, "\033[1;3Hx");
-	CHECK(vt->pri[0][1].cp == ' ' && !(vt->pri[0][1].attr & ATTR_WIDE));
-	CHECK(vt->pri[0][2].cp == 'x');
+	CHECK(vt->pri[0]->c[1].cp == ' ' && !(vt->pri[0]->c[1].attr & ATTR_WIDE));
+	CHECK(vt->pri[0]->c[2].cp == 'x');
 	/* wide char at the last column wraps */
 	w(vt, "\033[1;6H\xe7\x95\x8c");
-	CHECK(vt->pri[1][0].cp == 0x754c && vt->c.y == 1 && vt->c.x == 2);
+	CHECK(vt->pri[1]->c[0].cp == 0x754c && vt->c.y == 1 && vt->c.x == 2);
 	vt_free(vt);
 }
 
@@ -359,7 +359,7 @@ static const char *shape(struct vt *vt)
 	static char buf[64];
 	int x = 0;
 	for (; x < vt->cols && x < (int)sizeof buf - 1; x++) {
-		const struct cell *l = &vt->line[0][x];
+		const struct cell *l = &vt->line[0]->c[x];
 		buf[x] = l->attr & ATTR_WIDE ? 'W' : l->attr & ATTR_WDUMMY ? 'd' : (char)l->cp;
 	}
 	buf[x] = 0;
@@ -478,16 +478,19 @@ static size_t fuzz_gen(char *o, size_t cap)
 }
 
 /* NULL when all is well, otherwise what is not */
-static const char *fuzz_broken_grid(struct cell **s, int cols, int rows)
+static const char *fuzz_broken_grid(struct row **s, int cols, int rows)
 {
-	for (int r = 0; r < rows; r++)
+	for (int r = 0; r < rows; r++) {
+		if (s[r]->wrap < 0 || s[r]->wrap > s[r]->used || s[r]->used > cols)
+			return "a row's wrap or its count of written cells out of range";
 		for (int x = 0; x < cols; x++) {
-			unsigned a = s[r][x].attr;
-			if ((a & ATTR_WIDE) && (x + 1 >= cols || !(s[r][x + 1].attr & ATTR_WDUMMY)))
+			unsigned a = s[r]->c[x].attr;
+			if ((a & ATTR_WIDE) && (x + 1 >= cols || !(s[r]->c[x + 1].attr & ATTR_WDUMMY)))
 				return "left half of a wide character without its right half";
-			if ((a & ATTR_WDUMMY) && (x == 0 || !(s[r][x - 1].attr & ATTR_WIDE)))
+			if ((a & ATTR_WDUMMY) && (x == 0 || !(s[r]->c[x - 1].attr & ATTR_WIDE)))
 				return "right half of a wide character without its left half";
 		}
+	}
 	return NULL;
 }
 
@@ -510,6 +513,12 @@ static bool fuzz_cells(const struct cell *a, const struct cell *b, int n)
 	return true;
 }
 
+/* a row's cells and where its line goes on */
+static bool fuzz_rows(const struct row *a, const struct row *b, int cols)
+{
+	return a->wrap == b->wrap && fuzz_cells(a->c, b->c, cols);
+}
+
 static bool fuzz_cursor(const struct vt_cursor *a, const struct vt_cursor *b)
 {
 	return a->x == b->x && a->y == b->y && a->wrapnext == b->wrapnext &&
@@ -528,12 +537,13 @@ static bool fuzz_same(const struct vt *a, const struct vt *b,
 	    a->scrolled != b->scrolled || memcmp(a->tabs, b->tabs, (size_t)a->cols * sizeof *a->tabs))
 		return false;
 	for (int r = 0; r < a->rows; r++)
-		if (!fuzz_cells(a->pri[r], b->pri[r], a->cols) || !fuzz_cells(a->alt[r], b->alt[r], a->cols))
+		if (!fuzz_rows(a->pri[r], b->pri[r], a->cols) || !fuzz_rows(a->alt[r], b->alt[r], a->cols))
 			return false;
 	for (int64_t i = vt_abs_first(a); i < vt_abs_first(a) + a->hist_count; i++) {
 		int la, lb;
 		const struct cell *ca = vt_abs_line(a, i, &la), *cb = vt_abs_line(b, i, &lb);
-		if (!ca || !cb || la != lb || !fuzz_cells(ca, cb, la))
+		if (!ca || !cb || la != lb || !fuzz_cells(ca, cb, la) ||
+		    vt_abs_wraps(a, i) != vt_abs_wraps(b, i))
 			return false;
 	}
 	return sa->replies == sb->replies && sa->reply_bytes == sb->reply_bytes &&
@@ -595,8 +605,8 @@ static void test_rep(void)
 	w(vt, "\033(0q\033[3b");
 	bool gfx = true;
 	for (int x = 0; x < 4; x++)
-		gfx &= vt->pri[0][x].cp == 0x2500 && (vt->pri[0][x].attr & ATTR_DECGFX);
-	CHECK(gfx && vt->pri[0][4].cp == ' ');
+		gfx &= vt->pri[0]->c[x].cp == 0x2500 && (vt->pri[0]->c[x].attr & ATTR_DECGFX);
+	CHECK(gfx && vt->pri[0]->c[4].cp == ' ');
 	vt_free(vt);
 	/* across the end of a row */
 	vt = mk(12, 3, 0);
@@ -624,7 +634,7 @@ static void test_rep(void)
 	/* the last copy takes the left half of a wide one: its right half goes */
 	vt = mk(4, 1, 0);
 	w(vt, "\033[1;3H\xe7\x95\x8c\033[Hx\033[2b");
-	CHECK(vt->pri[0][2].cp == 'x' && vt->pri[0][3].cp == ' ' && !vt->pri[0][3].attr);
+	CHECK(vt->pri[0]->c[2].cp == 'x' && vt->pri[0]->c[3].cp == ' ' && !vt->pri[0]->c[3].attr);
 	vt_free(vt);
 
 	/* c ESC [ n b leaves the screen as c n + 1 times does, in any state: insert
@@ -683,14 +693,15 @@ static void test_rep(void)
 			w(b, c);
 		bool same = fuzz_cursor(&a->c, &b->c) && a->hist_count <= b->hist_count;
 		for (int y = 0; y < rows; y++)
-			same &= fuzz_cells(a->line[y], b->line[y], cols + 1) && /* with USED */
-				a->dirty[y] >= b->dirty[y];
+			same &= fuzz_rows(a->line[y], b->line[y], cols) &&
+				a->line[y]->used == b->line[y]->used && a->dirty[y] >= b->dirty[y];
 		if (n <= limit) { /* the history too, line by line */
 			same &= a->hist_count == b->hist_count;
 			for (int64_t i = vt_abs_first(a); same && i < vt_abs_first(a) + a->hist_count; i++) {
 				int la, lb;
 				const struct cell *ca = vt_abs_line(a, i, &la), *cb = vt_abs_line(b, i, &lb);
-				same = ca && cb && la == lb && fuzz_cells(ca, cb, la);
+				same = ca && cb && la == lb && fuzz_cells(ca, cb, la) &&
+				       vt_abs_wraps(a, i) == vt_abs_wraps(b, i);
 			}
 		}
 		bad += !same;
@@ -724,14 +735,14 @@ static void test_xterm_resets(void)
 	/* DECSTR keeps a pending wrap, and resets only this screen's saved cursor */
 	vt = mk(10, 4, 0);
 	w(vt, "\033[1;10HZ\033[!pY");
-	CHECK(vt->pri[0][9].cp == 'Z' && vt->pri[1][0].cp == 'Y');
+	CHECK(vt->pri[0]->c[9].cp == 'Z' && vt->pri[1]->c[0].cp == 'Y');
 	w(vt, "\033[2;5H\0337\033[?1049h\033[!p\033[?1049l\033[4;1H\0338X");
-	CHECK(vt->c.y == 1 && vt->c.x == 5 && vt->pri[1][4].cp == 'X');
+	CHECK(vt->c.y == 1 && vt->c.x == 5 && vt->pri[1]->c[4].cp == 'X');
 	vt_free(vt);
 	/* the saved cursor it resets keeps a pending wrap, as xterm */
 	vt = mk(10, 4, 0);
 	w(vt, "\033[1;10HZ\033[!p\0338Y");
-	CHECK(vt->pri[0][0].cp == ' ' && vt->pri[1][0].cp == 'Y');
+	CHECK(vt->pri[0]->c[0].cp == ' ' && vt->pri[1]->c[0].cp == 'Y');
 	vt_free(vt);
 }
 
@@ -1106,12 +1117,12 @@ static void test_charset_and_misc(void)
 {
 	struct vt *vt = mk(10, 3, 0);
 	w(vt, "\033(0lqk\033(Bq");
-	CHECK(vt->pri[0][0].cp == 0x250c && vt->pri[0][1].cp == 0x2500);
-	CHECK(vt->pri[0][3].cp == 'q');
+	CHECK(vt->pri[0]->c[0].cp == 0x250c && vt->pri[0]->c[1].cp == 0x2500);
+	CHECK(vt->pri[0]->c[3].cp == 'q');
 	w(vt, "\r\nab\033[3b");
 	CHECK_STR(row(vt, 1), "abbbb");
 	w(vt, "\033[1;1H\033[2P");
-	CHECK(vt->pri[0][0].cp == 0x2510 && vt->pri[0][1].cp == 'q');
+	CHECK(vt->pri[0]->c[0].cp == 0x2510 && vt->pri[0]->c[1].cp == 'q');
 	w(vt, "\033[2;2H\033[2@");
 	CHECK_STR(row(vt, 1), "a  bbbb");
 	w(vt, "\033[4h\033[2;1HZ\033[4l");
@@ -1120,17 +1131,17 @@ static void test_charset_and_misc(void)
 	CHECK_STR(row(vt, 1), "    bbbb");
 	/* tabs */
 	w(vt, "\033[3;1H\tT\033[Z\033[Z");
-	CHECK(vt->pri[2][8].cp == 'T' && vt->c.x == 0);
+	CHECK(vt->pri[2]->c[8].cp == 'T' && vt->c.x == 0);
 	/* split UTF-8 across writes */
 	vt_write(vt, "\xe2\x82", 2);
 	vt_write(vt, "\xac", 1);
-	CHECK(vt->pri[2][0].cp == 0x20ac);
+	CHECK(vt->pri[2]->c[0].cp == 0x20ac);
 	/* invalid UTF-8 shows a replacement char */
 	w(vt, "\xff");
-	CHECK(vt->pri[2][1].cp == 0xfffd);
+	CHECK(vt->pri[2]->c[1].cp == 0xfffd);
 	/* unknown sequences are ignored cleanly */
 	w(vt, "\033[?1234;5h\033[>4;2m\033[=5uX");
-	CHECK(vt->pri[2][2].cp == 'X');
+	CHECK(vt->pri[2]->c[2].cp == 'X');
 	vt_free(vt);
 
 	/* Overlong UTF-8 is refused: E0 80 9B and F0 80 80 9B would be ESC, and the
@@ -1138,13 +1149,13 @@ static void test_charset_and_misc(void)
 	 * three- and four-byte forms still pass. */
 	vt = mk(10, 3, 0);
 	w(vt, "\xe0\x80\x9b[31mX");
-	CHECK(vt->pri[0][0].cp == 0xfffd && vt->pri[0][1].cp == '[');
-	CHECK(vt->pri[0][5].cp == 'X' && vt->pri[0][5].fg == COL_DEFAULT_FG);
+	CHECK(vt->pri[0]->c[0].cp == 0xfffd && vt->pri[0]->c[1].cp == '[');
+	CHECK(vt->pri[0]->c[5].cp == 'X' && vt->pri[0]->c[5].fg == COL_DEFAULT_FG);
 	w(vt, "\r\n\xf0\x80\x80\x9b[31mX\xe0\x81\x81");
-	CHECK(vt->pri[1][0].cp == 0xfffd && vt->pri[1][1].cp == '[');
-	CHECK(vt->pri[1][5].fg == COL_DEFAULT_FG && vt->pri[1][6].cp == 0xfffd);
+	CHECK(vt->pri[1]->c[0].cp == 0xfffd && vt->pri[1]->c[1].cp == '[');
+	CHECK(vt->pri[1]->c[5].fg == COL_DEFAULT_FG && vt->pri[1]->c[6].cp == 0xfffd);
 	w(vt, "\r\n\xe0\xa0\x80\xf0\x90\x80\x80");
-	CHECK(vt->pri[2][0].cp == 0x800 && vt->pri[2][1].cp == 0x10000);
+	CHECK(vt->pri[2]->c[0].cp == 0x800 && vt->pri[2]->c[1].cp == 0x10000);
 	vt_free(vt);
 
 	/* REP writes about a screenful, so a few bytes cannot ask for 65535
@@ -1173,7 +1184,7 @@ static void test_unsupported_vt100(void)
 	CHECK(vt->cols == 10 && vt->mode == mode && vt->c.x == 8);
 	/* blink is no attribute: the cell is as one written without it */
 	w(vt, "\r\n\033[5;6mB\033[25m\033[m");
-	CHECK(vt->pri[1][0].cp == 'B' && vt->pri[1][0].attr == 0);
+	CHECK(vt->pri[1]->c[0].cp == 'B' && vt->pri[1]->c[0].attr == 0);
 	/* DECREQTPARM, LEDs, ENQ, DECID: no answer, nothing written */
 	replybuf[0] = 0;
 	w(vt, "\033[x\033[1x\033[1;2q\005\033ZC");
@@ -1185,10 +1196,10 @@ static void test_unsupported_vt100(void)
 	CHECK(vt->c.charset[0] == 0 && vt->c.charset[1] == 0 && vt->c.gl == 0);
 	/* VT52 mode is not entered: ESC A afterwards is not "cursor up" */
 	w(vt, "\033[?2l\033Az");
-	CHECK(vt->c.y == 1 && vt->pri[1][6].cp == 'z');
+	CHECK(vt->c.y == 1 && vt->pri[1]->c[6].cp == 'z');
 	/* nor newline mode: a line feed stays in its column */
 	w(vt, "\033[20h\033[1;3H\nL");
-	CHECK(vt->c.y == 1 && vt->c.x == 3 && vt->pri[1][2].cp == 'L');
+	CHECK(vt->c.y == 1 && vt->c.x == 3 && vt->pri[1]->c[2].cp == 'L');
 	/* the alignment pattern (DECALN) is not drawn */
 	w(vt, "\033#8");
 	CHECK_STR(row(vt, 0), "abcdefgh");
@@ -1208,7 +1219,7 @@ static void test_resize(void)
 	CHECK_STR(row(vt, 2), "5");
 	CHECK_STR(row(vt, 5), "");
 	w(vt, "\033[6;12Hx");
-	CHECK(vt->pri[5][11].cp == 'x');
+	CHECK(vt->pri[5]->c[11].cp == 'x');
 	vt_free(vt);
 }
 
@@ -1217,7 +1228,7 @@ static void test_index_and_charsets(void)
 	struct vt *vt = mk(5, 3, 10);
 	/* IND keeps the column, and scrolls at the bottom */
 	w(vt, "a\033Db");
-	CHECK(vt->pri[1][1].cp == 'b' && vt->c.y == 1 && vt->c.x == 2);
+	CHECK(vt->pri[1]->c[1].cp == 'b' && vt->c.y == 1 && vt->c.x == 2);
 	w(vt, "\033[3;2H\033D");
 	CHECK(vt->c.y == 2 && vt->c.x == 1 && vt->hist_count == 1);
 	CHECK_STR(row(vt, 0), " b");
@@ -1231,18 +1242,18 @@ static void test_index_and_charsets(void)
 	vt = mk(10, 3, 0);
 	/* G1 is ASCII until it is set: SO alone changes nothing */
 	w(vt, "\016q\017");
-	CHECK(vt->pri[0][0].cp == 'q');
+	CHECK(vt->pri[0]->c[0].cp == 'q');
 	/* with G1 as line drawing SO and SI switch, and G0 stays */
 	w(vt, "\033)0q\016q\017q");
-	CHECK(vt->pri[0][1].cp == 'q' && vt->pri[0][2].cp == 0x2500 && vt->pri[0][3].cp == 'q');
+	CHECK(vt->pri[0]->c[1].cp == 'q' && vt->pri[0]->c[2].cp == 0x2500 && vt->pri[0]->c[3].cp == 'q');
 	/* G0 as line drawing does not touch G1 */
 	w(vt, "\033)B\033(0q\016q\017q\033(B");
-	CHECK(vt->pri[0][4].cp == 0x2500 && vt->pri[0][5].cp == 'q' && vt->pri[0][6].cp == 0x2500);
+	CHECK(vt->pri[0]->c[4].cp == 0x2500 && vt->pri[0]->c[5].cp == 'q' && vt->pri[0]->c[6].cp == 0x2500);
 	/* DECSC and DECRC take the charsets along, and the position */
 	w(vt, "\033[2;1H\033)0\016\0337\017\033)Bq");
-	CHECK(vt->pri[1][0].cp == 'q' && vt->c.gl == 0);
+	CHECK(vt->pri[1]->c[0].cp == 'q' && vt->c.gl == 0);
 	w(vt, "\0338q");
-	CHECK(vt->pri[1][0].cp == 0x2500 && vt->c.gl == 1 && vt->c.x == 1);
+	CHECK(vt->pri[1]->c[0].cp == 0x2500 && vt->c.gl == 1 && vt->c.x == 1);
 	vt_free(vt);
 }
 
@@ -1261,8 +1272,8 @@ static void test_origin(void)
 {
 	struct vt *vt = mk(10, 6, 0);
 	w(vt, "\033[3;5r\033[?6h\033[1;1Ho\033[10;1Hp");
-	CHECK(vt->pri[2][0].cp == 'o');
-	CHECK(vt->pri[4][0].cp == 'p');
+	CHECK(vt->pri[2]->c[0].cp == 'o');
+	CHECK(vt->pri[4]->c[0].cp == 'p');
 	w(vt, "\033[6n");
 	CHECK_STR(replybuf, "\033[3;2R");
 	vt_free(vt);
@@ -1275,7 +1286,7 @@ static void test_xterm_details(void)
 	/* parameters past the 24th are dropped, digits included: 0;x24 3;1 was red.
 	 * xterm keeps 30, so there it is bold italic; dropping is DEC's rule */
 	w(vt, "\033[0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;3;1mX");
-	CHECK(vt->pri[0][0].fg == COL_DEFAULT_FG);
+	CHECK(vt->pri[0]->c[0].fg == COL_DEFAULT_FG);
 	w(vt, "\033[1;3;1;1;1;1;1;1;1;1;1;1;1;1;1;1;1;1;1;1;1;1;1;1;1;1;1;1;1;5H");
 	CHECK(vt->c.y == 0 && vt->c.x == 2);
 
@@ -1325,10 +1336,10 @@ static void test_ascii_runs(void)
 	/* a run starting on a wide glyph's right half, one ending on a left half */
 	w(vt, "\xe4\xb8\x80xy\033[1;2Hab");
 	CHECK_STR(row(vt, 0), " aby");
-	CHECK(!(vt->pri[0][0].attr & (ATTR_WIDE | ATTR_WDUMMY)));
+	CHECK(!(vt->pri[0]->c[0].attr & (ATTR_WIDE | ATTR_WDUMMY)));
 	w(vt, "\033[2;4H\xe4\xb8\x80\033[2;1Habcd");
 	CHECK_STR(row(vt, 1), "abcd");
-	CHECK(!(vt->pri[1][4].attr & (ATTR_WIDE | ATTR_WDUMMY)));
+	CHECK(!(vt->pri[1]->c[4].attr & (ATTR_WIDE | ATTR_WDUMMY)));
 	/* a run to the end of the row defers the wrap, the next byte takes it */
 	w(vt, "\033[3;1Habcde");
 	CHECK(vt->c.x == 4 && vt->c.wrapnext);
@@ -1344,19 +1355,19 @@ static void test_ascii_runs(void)
 	w(vt, "\033[2J\033[1;1Habc\033[1;1H\033[4hXY\033[4l");
 	CHECK_STR(row(vt, 0), "XYabc");
 	w(vt, "\033(0q\033(B");
-	CHECK(vt->pri[0][2].cp == 0x2500 && (vt->pri[0][2].attr & ATTR_DECGFX));
+	CHECK(vt->pri[0]->c[2].cp == 0x2500 && (vt->pri[0]->c[2].attr & ATTR_DECGFX));
 	/* DEC graphics in a run: from 0x5f mapped and marked, below as they are,
 	 * with the template's attributes; REP repeats the byte, mapped again */
 	w(vt, "\033[2J\033[1;1H\033[1m\033(0Aqx_\033(B\033[0m");
-	CHECK(vt->pri[0][0].cp == 'A' && !(vt->pri[0][0].attr & ATTR_DECGFX) &&
-	      (vt->pri[0][0].attr & ATTR_BOLD));
-	CHECK(vt->pri[0][1].cp == 0x2500 && vt->pri[0][2].cp == 0x2502 && vt->pri[0][3].cp == 0xa0);
-	CHECK((vt->pri[0][1].attr & (ATTR_DECGFX | ATTR_BOLD)) == (ATTR_DECGFX | ATTR_BOLD));
+	CHECK(vt->pri[0]->c[0].cp == 'A' && !(vt->pri[0]->c[0].attr & ATTR_DECGFX) &&
+	      (vt->pri[0]->c[0].attr & ATTR_BOLD));
+	CHECK(vt->pri[0]->c[1].cp == 0x2500 && vt->pri[0]->c[2].cp == 0x2502 && vt->pri[0]->c[3].cp == 0xa0);
+	CHECK((vt->pri[0]->c[1].attr & (ATTR_DECGFX | ATTR_BOLD)) == (ATTR_DECGFX | ATTR_BOLD));
 	w(vt, "\033[1;1H\033(0q\033[b\033(B");
-	CHECK(vt->pri[0][1].cp == 0x2500 && (vt->pri[0][1].attr & ATTR_DECGFX));
+	CHECK(vt->pri[0]->c[1].cp == 0x2500 && (vt->pri[0]->c[1].attr & ATTR_DECGFX));
 	/* attributes and colour from the template, on every cell of the run */
 	w(vt, "\033[2;1H\033[1;31mabc\033[0m");
-	CHECK(vt->pri[1][0].fg == 1 && vt->pri[1][2].fg == 1 && (vt->pri[1][2].attr & ATTR_BOLD));
+	CHECK(vt->pri[1]->c[0].fg == 1 && vt->pri[1]->c[2].fg == 1 && (vt->pri[1]->c[2].attr & ATTR_BOLD));
 	vt_free(vt);
 }
 
@@ -1370,11 +1381,11 @@ static void test_csi_params(void)
 		vt_write(vt, seq, cut);
 		vt_write(vt, seq + cut, strlen(seq) - cut);
 		CHECK(vt->c.y == 4 && vt->c.x == 12);
-		CHECK(vt->pri[4][11].cp == 'x' && vt->pri[4][11].fg == (COL_RGB | 0x010203));
+		CHECK(vt->pri[4]->c[11].cp == 'x' && vt->pri[4]->c[11].fg == (COL_RGB | 0x010203));
 	}
 	/* a private marker after the parameters makes the sequence ignored */
 	w(vt, "\033[?25l\033[H\033[1;?25hA");
-	CHECK((vt->mode & MODE_HIDECURSOR) && vt->pri[0][0].cp == 'A');
+	CHECK((vt->mode & MODE_HIDECURSOR) && vt->pri[0]->c[0].cp == 'A');
 	w(vt, "\033[?25h");
 	/* parameters clamp at 65535 however they come */
 	w(vt, "\033[H\033[99999999999");
@@ -1417,7 +1428,7 @@ static void test_malformed_sequences(void)
 	/* DEL does not */
 	w(vt, "\033[2K\r\033[6 \x7fq\033(\x7f" "0q\033(B");
 	CHECK(vt->cursor_style == CURSOR_BAR);
-	CHECK(vt->pri[0][0].cp == 0x2500 && vt->pri[0][1].cp == ' ');
+	CHECK(vt->pri[0]->c[0].cp == 0x2500 && vt->pri[0]->c[1].cp == ' ');
 
 	/* sub-parameters are SGR's alone: with a ':' anything else is ignored, also
 	 * when it comes after the last parameter that is kept */
@@ -1430,7 +1441,7 @@ static void test_malformed_sequences(void)
 	/* the next sequence is not held to it, and SGR keeps them */
 	w(vt, "\033[2;3H\033[4:3mU");
 	CHECK(vt->c.y == 1 && vt->c.x == 3);
-	CHECK(vt->pri[1][2].cp == 'U' && (vt->pri[1][2].attr & ATTR_UNDERLINE));
+	CHECK(vt->pri[1]->c[2].cp == 'U' && (vt->pri[1]->c[2].attr & ATTR_UNDERLINE));
 	vt_free(vt);
 }
 
@@ -1520,27 +1531,150 @@ static void test_wrap_flag_esc(void)
 {
 	struct vt *vt = mk(10, 4, 0);
 	w(vt, "0123456789\033Dy");
-	CHECK(vt->pri[1][9].cp == 'y' && vt->pri[2][0].cp == ' ');
+	CHECK(vt->pri[1]->c[9].cp == 'y' && vt->pri[2]->c[0].cp == ' ');
 	w(vt, "\033c0123456789\033Ey");
-	CHECK(vt->pri[1][0].cp == 'y' && vt->pri[2][0].cp == ' ');
+	CHECK(vt->pri[1]->c[0].cp == 'y' && vt->pri[2]->c[0].cp == ' ');
 	w(vt, "\033c\033[2;1H0123456789\033My");
-	CHECK(vt->pri[0][9].cp == 'y' && vt->pri[1][9].cp == '9');
+	CHECK(vt->pri[0]->c[9].cp == 'y' && vt->pri[1]->c[9].cp == '9');
 	w(vt, "\033c0123456789\033Hy");
-	CHECK(vt->pri[0][9].cp == '9' && vt->pri[1][0].cp == 'y');
+	CHECK(vt->pri[0]->c[9].cp == '9' && vt->pri[1]->c[0].cp == 'y');
 	w(vt, "\033c0123456789\033Zy");
-	CHECK(vt->pri[0][9].cp == '9' && vt->pri[1][0].cp == 'y');
+	CHECK(vt->pri[0]->c[9].cp == '9' && vt->pri[1]->c[0].cp == 'y');
 	/* a tab forward leaves the wrap pending, as xterm 407: the cursor is in
 	 * the last column and stays there; a tab back takes it, moving */
 	w(vt, "\033c0123456789\ty");
-	CHECK(vt->pri[0][9].cp == '9' && vt->pri[1][0].cp == 'y');
+	CHECK(vt->pri[0]->c[9].cp == '9' && vt->pri[1]->c[0].cp == 'y');
 	w(vt, "\033c0123456789\033[2Iy");
-	CHECK(vt->pri[0][9].cp == '9' && vt->pri[1][0].cp == 'y');
+	CHECK(vt->pri[0]->c[9].cp == '9' && vt->pri[1]->c[0].cp == 'y');
 	w(vt, "\033c0123456789\033[Zy");
-	CHECK(vt->pri[0][8].cp == 'y' && vt->pri[0][9].cp == '9' && vt->pri[1][0].cp == ' ');
+	CHECK(vt->pri[0]->c[8].cp == 'y' && vt->pri[0]->c[9].cp == '9' && vt->pri[1]->c[0].cp == ' ');
 	CHECK(vt->c.x == 9 && vt->c.y == 0 && !vt->c.wrapnext);
 	/* one that reaches the last column leaves none pending */
 	w(vt, "\033c\033[1;9H\ty");
-	CHECK(vt->pri[0][9].cp == 'y' && vt->pri[1][0].cp == ' ' && vt->c.wrapnext);
+	CHECK(vt->pri[0]->c[9].cp == 'y' && vt->pri[1]->c[0].cp == ' ' && vt->c.wrapnext);
+	vt_free(vt);
+}
+
+/* That a line goes on in the next row is the row's, not a cell's. Cells put in
+ * before its end (ICH, insert mode, REP in it) push that end off the row and
+ * leave the line going on, in the history too; it ends when its last cell is
+ * written or erased, and with DCH before it, which empties that cell. After a
+ * wider window the wrap is left of the end, and moves with what is inserted. */
+static void test_wrap_row(void)
+{
+	struct vt *vt = mk(10, 4, 5);
+	w(vt, "abcdefghijKLM\033[1;3H\033[@");
+	CHECK_STR(row(vt, 0), "ab cdefghi");
+	CHECK(vt_abs_wraps(vt, 0) == 10 && vt_abs_wraps(vt, 1) == 0);
+	w(vt, "\033[4hX\033[4l");
+	CHECK_STR(row(vt, 0), "abX cdefgh");
+	CHECK(vt_abs_wraps(vt, 0) == 10);
+	w(vt, "\033[4hq\033[3b\033[4l");
+	CHECK_STR(row(vt, 0), "abXqqqq cd");
+	CHECK(vt_abs_wraps(vt, 0) == 10 && vt->pri[0]->used == 10);
+	w(vt, "\033[4;1H\r\n");
+	int len;
+	const struct cell *l = vt_abs_line(vt, vt_abs_first(vt), &len);
+	CHECK(l && len == 10 && l[9].cp == 'd' && vt_abs_wraps(vt, vt_abs_first(vt)) == 10);
+	vt_free(vt);
+
+	/* half a wide glyph pushed off the end: what is left of it goes, the line
+	 * goes on */
+	vt = mk(10, 4, 0);
+	w(vt, "abcdefgh\xe6\xbc\xa2K\033[1;1H\033[@");
+	CHECK_STR(row(vt, 0), " abcdefgh");
+	CHECK(vt->pri[0]->c[9].cp == ' ' && !vt->pri[0]->c[9].attr && vt_abs_wraps(vt, 0) == 10);
+	vt_free(vt);
+
+	/* a blank before the wrap, where a wide glyph did not fit, is the line's
+	 * in the history too */
+	vt = mk(10, 2, 5);
+	w(vt, "abcdefghi\xe6\xbc\xa2\r\n");
+	l = vt_abs_line(vt, vt_abs_first(vt), &len);
+	CHECK(l && len == 10 && l[9].cp == ' ' && vt_abs_wraps(vt, vt_abs_first(vt)) == 10);
+	vt_free(vt);
+
+	static const struct { const char *seq; int wraps; } cases[] = {
+		{ "\033[1;3HZ", 10 },                  /* written before the end */
+		{ "\033[1;3H\033[2X", 10 },            /* erased there */
+		{ "\033[1;5H\033[1K", 10 },
+		{ "\033[1;3H\033[2@", 10 },
+		{ "\033[1;9H\033[4hX\033[4l", 10 },
+		{ "\033[1;3H\033[8@", 0 },             /* ICH to the end erases to it */
+		{ "\033[1;10H\033[@", 0 },
+		{ "\033[1;10H\033[4hX\033[4l", 0 },    /* the last cell written */
+		{ "\033[1;10HX", 0 },
+		{ "\033[1;10HXY", 10 },                /* and running into the end again */
+		{ "\033[1;10H\033[X", 0 },             /* erased */
+		{ "\033[1;5H\033[K", 0 },
+		{ "\033[1;10H\033[1K", 0 },
+		{ "\033[1;3H\033[P", 0 },              /* DCH */
+		{ "\033[1;1H\033[M", 0 },              /* the row gone: KLM is the first */
+		{ "\033[1;1H\033[L", 0 },              /* a new row above it */
+		{ "\033[2J", 0 },
+	};
+	for (size_t i = 0; i < sizeof cases / sizeof *cases; i++) {
+		vt = mk(10, 4, 0);
+		w(vt, "abcdefghijKLM");
+		w(vt, cases[i].seq);
+		checks++;
+		if (vt_abs_wraps(vt, 0) != cases[i].wraps) {
+			failures++;
+			fprintf(stderr, "%s:%d: FAIL: case %zu: wraps %d, expected %d\n", __FILE__,
+				__LINE__, i, vt_abs_wraps(vt, 0), cases[i].wraps);
+		}
+		vt_free(vt);
+	}
+
+	/* a wider window: the line still ends after 10 cells, 12 with two put in
+	 * before them; blanks put in after them change nothing, text there ends
+	 * it, and a window narrower than the line cuts it */
+	vt = mk(10, 4, 0);
+	w(vt, "abcdefghijKLM");
+	CHECK(vt_resize(vt, 20, 4) && vt_abs_wraps(vt, 0) == 10);
+	w(vt, "\033[1;13H\033[P");
+	CHECK(vt_abs_wraps(vt, 0) == 10);
+	w(vt, "\033[1;3H\033[P");
+	CHECK(vt_abs_wraps(vt, 0) == 0);
+	w(vt, "\033[2J\033[H");
+	vt_resize(vt, 10, 4);
+	w(vt, "abcdefghijKLM");
+	CHECK(vt_resize(vt, 20, 4) && vt_abs_wraps(vt, 0) == 10);
+	w(vt, "\033[1;3H\033[2@");
+	CHECK_STR(row(vt, 0), "ab  cdefghij");
+	CHECK(vt_abs_wraps(vt, 0) == 12);
+	w(vt, "\033[1;15H\033[2@");
+	CHECK(vt_abs_wraps(vt, 0) == 12);
+	w(vt, "\033[1;15H\033[4hX\033[4l");
+	CHECK(vt_abs_wraps(vt, 0) == 0);
+	w(vt, "\033[1;15H\033[X");
+	CHECK(vt_abs_wraps(vt, 0) == 12);
+	w(vt, "\033[1;3H\033[19@");
+	CHECK(vt_abs_wraps(vt, 0) == 0);
+	w(vt, "\033[2J\033[H0123456789abcdefghijK\033[1;1H\033[@");
+	CHECK(vt_abs_wraps(vt, 0) == 20);
+	CHECK(vt_resize(vt, 19, 4) && vt_abs_wraps(vt, 0) == 0);
+	vt_free(vt);
+
+	/* the first cell after the wrap is not the line's: written, the line ends
+	 * in its row, and erased again it goes on as before */
+	vt = mk(10, 4, 0);
+	w(vt, "abcdefghijKLM");
+	CHECK(vt_resize(vt, 20, 4));
+	w(vt, "\033[1;11HZ");
+	CHECK(vt->pri[0]->wrap == 10 && vt_abs_wraps(vt, 0) == 0);
+	w(vt, "\033[1;11H\033[X");
+	CHECK(vt_abs_wraps(vt, 0) == 10);
+	vt_free(vt);
+
+	/* a wide glyph before the wrap with its left half overwritten: the right
+	 * half, the last cell of the line, goes, and the line ends there */
+	vt = mk(10, 4, 0);
+	w(vt, "abcdefgh\xe6\xbc\xa2KLM");
+	CHECK(vt_abs_wraps(vt, 0) == 10);
+	w(vt, "\033[1;9Hz");
+	CHECK_STR(row(vt, 0), "abcdefghz");
+	CHECK(vt_abs_wraps(vt, 0) == 0);
 	vt_free(vt);
 }
 
@@ -1576,7 +1710,7 @@ static void test_sgr_details(void)
 	struct vt *vt = mk(20, 2, 0);
 	w(vt, "\033[1;2ma\033[22mb\033[4mc\033[4:0md\033[4:3me\033[m"
 	      "\033[5mf\033[25mg\033[m\033[1:2:3;31mh\033[m\033[73:2:3mi");
-	struct cell *l = vt->pri[0];
+	struct cell *l = vt->pri[0]->c;
 	CHECK((l[0].attr & ATTR_DIM) && !(l[1].attr & (ATTR_BOLD | ATTR_DIM)));
 	CHECK((l[2].attr & ATTR_UNDERLINE) && !(l[3].attr & ATTR_UNDERLINE));
 	CHECK(l[4].attr & ATTR_UNDERLINE);
@@ -1690,11 +1824,25 @@ static void test_alloc_failures(void)
 		CHECK(l && len == 1 && l[0].cp == 'b');
 		vt_free(vt);
 	}
+	/* and one that wrapped does not go on: it has no cells before a wrap */
+	{
+		struct vt *vt = mk(10, 3, 10);
+		w(vt, "0123456789ab\r\nc");
+		injected = false;
+		countdown = 0;
+		w(vt, "\r\nd");
+		countdown = -1;
+		CHECK(injected && vt->hist_count == 1);
+		int len;
+		vt_abs_line(vt, 0, &len);
+		CHECK(len == 0 && vt_abs_wraps(vt, 0) == 0);
+		vt_free(vt);
+	}
 	/* sizes are clamped, the largest grid still works */
 	struct vt *vt = mk(INT_MAX, INT_MAX, 0);
 	CHECK(vt && vt->cols == VT_MAX_COLS && vt->rows == VT_MAX_ROWS);
 	w(vt, "\033[2048;4096Hz");
-	CHECK(vt->pri[VT_MAX_ROWS - 1][VT_MAX_COLS - 1].cp == 'z');
+	CHECK(vt->pri[VT_MAX_ROWS - 1]->c[VT_MAX_COLS - 1].cp == 'z');
 	CHECK(vt_resize(vt, -5, INT_MIN) && vt->cols == 1 && vt->rows == 1);
 	vt_free(vt);
 }
@@ -1732,6 +1880,7 @@ int main(void)
 	test_cursor_style_redraw();
 	test_index_and_charsets();
 	test_wrap_flag_esc();
+	test_wrap_row();
 	test_resize_alt_and_view();
 	test_sgr_details();
 	test_cnl_cpl_1048_decom();

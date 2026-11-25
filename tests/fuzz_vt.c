@@ -101,15 +101,17 @@ static void check(const struct vt *vt)
 		die("GL is neither G0 nor G1", vt);
 	if (vt->view < 0 || vt->view > vt->hist_count)
 		die("view outside the history", vt);
-	struct cell **screens[2] = { vt->pri, vt->alt };
+	struct row **screens[2] = { vt->pri, vt->alt };
 	for (int s = 0; s < 2; s++)
 		for (int r = 0; r < vt->rows; r++) {
-			const struct cell *l = screens[s][r];
-			/* the extra cell: from its count on, only default blanks */
-			uint32_t used = l[vt->cols].cp;
-			if (used > (uint32_t)vt->cols)
+			const struct cell *l = screens[s][r]->c;
+			/* from the row's count on, only default blanks */
+			int used = screens[s][r]->used, wrap = screens[s][r]->wrap;
+			if (used < 0 || used > vt->cols)
 				die("row written past its end", vt);
-			for (int x = (int)used; x < vt->cols; x++)
+			if (wrap < 0 || wrap > used)
+				die("row wraps past what was written", vt);
+			for (int x = used; x < vt->cols; x++)
 				if (l[x].cp != ' ' || l[x].fg != COL_DEFAULT_FG ||
 				    l[x].bg != COL_DEFAULT_BG || l[x].attr)
 					die("cell after the written part of a row is not blank", vt);
@@ -158,15 +160,17 @@ static void compare(const struct vt *a, const struct vt *b,
 	if (memcmp(a->tabs, b->tabs, (size_t)a->cols * sizeof *a->tabs))
 		die("tab stops differ between whole and chunked", b);
 	for (int r = 0; r < a->rows; r++)
-		if (!same_cells(a->pri[r], b->pri[r], a->cols) ||
-		    !same_cells(a->alt[r], b->alt[r], a->cols))
+		if (!same_cells(a->pri[r]->c, b->pri[r]->c, a->cols) ||
+		    !same_cells(a->alt[r]->c, b->alt[r]->c, a->cols) ||
+		    a->pri[r]->wrap != b->pri[r]->wrap || a->alt[r]->wrap != b->alt[r]->wrap)
 			die("screen differs between whole and chunked", b);
 	if (a->hist_count != b->hist_count || a->scrolled != b->scrolled)
 		die("history differs between whole and chunked", b);
 	for (int64_t i = vt_abs_first(a); i < vt_abs_first(a) + a->hist_count; i++) {
 		int la, lb;
 		const struct cell *ca = vt_abs_line(a, i, &la), *cb = vt_abs_line(b, i, &lb);
-		if (!ca || !cb || la != lb || !same_cells(ca, cb, la))
+		if (!ca || !cb || la != lb || !same_cells(ca, cb, la) ||
+		    vt_abs_wraps(a, i) != vt_abs_wraps(b, i))
 			die("history lines differ between whole and chunked", b);
 	}
 	if (sa->replies != sb->replies || sa->reply_bytes != sb->reply_bytes)

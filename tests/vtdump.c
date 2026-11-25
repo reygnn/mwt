@@ -74,11 +74,14 @@ int main(int argc, char **argv)
 	for (int r = 0; r < vt->rows; r++) {
 		printf("%s[", r ? "," : "");
 		for (int x = 0; x < vt->cols; x++) {
-			const struct cell *c = &vt->line[r][x];
+			const struct cell *c = &vt->line[r]->c[x];
 			printf("%s[%u,%u,%u,%u]", x ? "," : "", c->cp, c->fg, c->bg, c->attr);
 		}
 		printf("]");
 	}
+	printf("],\"wrap\":[");
+	for (int r = 0; r < vt->rows; r++)
+		printf("%s%d", r ? "," : "", vt->line[r]->wrap);
 	printf("]}\n");
 	vt_free(vt);
 	return 0;

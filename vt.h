@@ -25,7 +25,7 @@ enum {
 	ATTR_STRIKE    = 1 << 7,
 	ATTR_WIDE      = 1 << 8,  /* left half of a double-width glyph */
 	ATTR_WDUMMY    = 1 << 9,  /* right half, cp is 0 */
-	ATTR_WRAP      = 1 << 10, /* set on last cell: line continues on next */
+	/* 1 << 10 free: that a line goes on in the next row is the row's, row.wrap */
 	ATTR_DECGFX    = 1 << 11, /* cp came from DEC special graphics, for DECRQCRA */
 };
 
@@ -33,6 +33,18 @@ struct cell {
 	uint32_t cp;
 	uint32_t fg, bg;
 	uint16_t attr;
+};
+
+/* A row of a screen: what is the row's own, then its cells, vt.cols of them. */
+struct row {
+	/* the cells from the left that may differ from a default blank: every
+	 * cell from there on is one. An upper bound, and never below wrap. */
+	int used;
+	/* The line goes on in the next row after this many cells; 0 when it ends
+	 * in this one. vt.cols when autowrap set it, fewer once the window grew
+	 * wider: there is no reflow, the line still ends where it did. */
+	int wrap;
+	struct cell c[];
 };
 
 enum {
@@ -82,10 +94,8 @@ struct vt_callbacks {
 
 struct vt {
 	int cols, rows;
-	struct cell **line;       /* current screen (points to pri or alt) */
-	/* rows of cols + 1 cells: the last is vt.c's own, the cp of it counts the
-	 * cells that may differ from a default blank (USED in vt.c) */
-	struct cell **pri, **alt;
+	struct row **line;        /* current screen (points to pri or alt) */
+	struct row **pri, **alt;
 	bool *dirty;              /* by rows shown: with the view back, screen row + view */
 	bool *tabs;
 
@@ -99,6 +109,7 @@ struct vt {
 	struct cell **hist;
 	int *hist_len;
 	int *hist_room;            /* cells each slot holds; it only grows */
+	int *hist_wrap;            /* as row.wrap, never above hist_len */
 	int hist_cap, hist_count, hist_head; /* head: index of next slot */
 	int view;                 /* lines scrolled back, 0 = live */
 	uint64_t scrolled;        /* total lines pushed into history */
@@ -139,9 +150,9 @@ const struct cell *vt_view_line(const struct vt *vt, int r, int *len);
 /* absolute line addressing for selections: abs = row + scrolled - view */
 const struct cell *vt_abs_line(const struct vt *vt, int64_t abs, int *len);
 int64_t vt_abs_first(const struct vt *vt); /* oldest abs line in history */
-/* Whether line abs goes on in the next: the cells up to the one with
- * ATTR_WRAP, or 0. Only default blanks may follow that cell, as after the
- * window grew wider: there is no reflow, the flag stays where the line ended. */
+/* Whether line abs goes on in the next: the cells it has before its wrap
+ * (row.wrap), or 0. Only default blanks may follow them, as after the window
+ * grew wider; with anything else there the line ends in its row. */
 int vt_abs_wraps(const struct vt *vt, int64_t abs);
 void vt_scroll_view(struct vt *vt, int delta); /* +up into history */
 void vt_mark_all(struct vt *vt);

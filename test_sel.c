@@ -316,6 +316,14 @@ static void test_text(void)
 	TEXT(vt, sel_of(SEL_LINE, l0 + 2, 0, l0 + 3, 0), "ab  cd ef");
 	vt_free(vt);
 
+	/* a blank and a character inserted into one: its end is pushed off the
+	 * row, and it still joins the next */
+	vt = mk(5, 4, 10);
+	w(vt, "abcdefgh\033[1;2H\033[@\033[4hX\033[4l");
+	l0 = line(vt, 0);
+	TEXT(vt, sel_of(SEL_LINE, l0, 0, l0 + 1, 0), "aX bcfgh");
+	vt_free(vt);
+
 	/* wide characters once, and cells never written as blanks */
 	vt = mk(12, 3, 10);
 	w(vt, "\xe6\x97\xa5\xe6\x9c\xac" "a\033[3Cb");

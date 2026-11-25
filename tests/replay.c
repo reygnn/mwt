@@ -91,14 +91,16 @@ static const char *grid_problem(const struct vt *vt)
 		return "scroll region outside the screen";
 	if (vt->c.gl < 0 || vt->c.gl > 1)
 		return "GL is neither G0 nor G1";
-	struct cell **screens[2] = { vt->pri, vt->alt };
+	struct row **screens[2] = { vt->pri, vt->alt };
 	for (int s = 0; s < 2; s++)
 		for (int r = 0; r < vt->rows; r++) {
-			const struct cell *l = screens[s][r];
-			uint32_t used = l[vt->cols].cp; /* blank from here on */
-			if (used > (uint32_t)vt->cols)
+			const struct cell *l = screens[s][r]->c;
+			int used = screens[s][r]->used, wrap = screens[s][r]->wrap;
+			if (used < 0 || used > vt->cols) /* blank from here on */
 				return "row written past its end";
-			for (int x = (int)used; x < vt->cols; x++)
+			if (wrap < 0 || wrap > used)
+				return "row wraps past what was written";
+			for (int x = used; x < vt->cols; x++)
 				if (l[x].cp != ' ' || l[x].fg != COL_DEFAULT_FG ||
 				    l[x].bg != COL_DEFAULT_BG || l[x].attr)
 					return "cell after the written part of a row is not blank";
@@ -129,6 +131,12 @@ static bool same_cells(const struct cell *a, const struct cell *b, int n)
 	return true;
 }
 
+/* a row's cells and where its line goes on */
+static bool same_row(const struct row *a, const struct row *b, int cols)
+{
+	return a->wrap == b->wrap && same_cells(a->c, b->c, cols);
+}
+
 static bool same_cursor(const struct vt_cursor *a, const struct vt_cursor *b)
 {
 	return a->x == b->x && a->y == b->y && a->wrapnext == b->wrapnext &&
@@ -154,9 +162,9 @@ static const char *difference(const struct vt *a, const struct vt *b)
 	if (memcmp(a->tabs, b->tabs, a->cols * sizeof *a->tabs))
 		return "tab stops";
 	for (int r = 0; r < a->rows; r++) {
-		if (!same_cells(a->pri[r], b->pri[r], a->cols))
+		if (!same_row(a->pri[r], b->pri[r], a->cols))
 			return "main screen";
-		if (!same_cells(a->alt[r], b->alt[r], a->cols))
+		if (!same_row(a->alt[r], b->alt[r], a->cols))
 			return "alternate screen";
 	}
 	if (a->hist_count != b->hist_count || a->scrolled != b->scrolled)
@@ -165,7 +173,8 @@ static const char *difference(const struct vt *a, const struct vt *b)
 		int la, lb;
 		const struct cell *ca = vt_abs_line(a, i, &la);
 		const struct cell *cb = vt_abs_line(b, i, &lb);
-		if (!ca || !cb || la != lb || !same_cells(ca, cb, la))
+		if (!ca || !cb || la != lb || !same_cells(ca, cb, la) ||
+		    vt_abs_wraps(a, i) != vt_abs_wraps(b, i))
 			return "history";
 	}
 	return NULL;
@@ -181,10 +190,12 @@ static uint64_t fnv(uint64_t h, const void *p, size_t n)
 	return h;
 }
 
-static uint64_t fnv_cells(uint64_t h, const struct cell *c, int n)
+/* A line's wrap goes into the hash as the sums have it, from when it was a bit
+ * of the last cell before it: 1 << 10 of that cell's attributes. */
+static uint64_t fnv_cells(uint64_t h, const struct cell *c, int n, int wrap)
 {
 	for (int i = 0; i < n; i++) {
-		uint32_t v[4] = { c[i].cp, c[i].fg, c[i].bg, c[i].attr };
+		uint32_t v[4] = { c[i].cp, c[i].fg, c[i].bg, c[i].attr | (i + 1 == wrap) << 10 };
 		h = fnv(h, v, sizeof v);
 	}
 	return h;
@@ -193,7 +204,7 @@ static uint64_t fnv_cells(uint64_t h, const struct cell *c, int n)
 static uint64_t fnv_cursor(uint64_t h, const struct vt_cursor *c)
 {
 	int v[7] = { c->x, c->y, c->wrapnext, c->charset[0], c->charset[1], c->gl, c->origin };
-	return fnv_cells(fnv(h, v, sizeof v), &c->tmpl, 1);
+	return fnv_cells(fnv(h, v, sizeof v), &c->tmpl, 1, 0);
 }
 
 /* what difference() compares, and the replies and bells */
@@ -207,13 +218,14 @@ static uint64_t state_hash(const struct vt *vt, const struct run *run)
 	for (int x = 0; x < vt->cols; x++)
 		h = fnv(h, &(char){ vt->tabs[x] }, 1);
 	for (int r = 0; r < vt->rows; r++)
-		h = fnv_cells(fnv_cells(h, vt->pri[r], vt->cols), vt->alt[r], vt->cols);
+		h = fnv_cells(fnv_cells(h, vt->pri[r]->c, vt->cols, vt->pri[r]->wrap),
+			      vt->alt[r]->c, vt->cols, vt->alt[r]->wrap);
 	for (int64_t i = vt_abs_first(vt); i < vt_abs_first(vt) + vt->hist_count; i++) {
 		int n;
 		const struct cell *l = vt_abs_line(vt, i, &n);
 		h = fnv(h, &n, sizeof n);
 		if (l)
-			h = fnv_cells(h, l, n);
+			h = fnv_cells(h, l, n, vt_abs_wraps(vt, i));
 	}
 	return fnv(h, run->reply ? run->reply : "", run->reply_len);
 }
