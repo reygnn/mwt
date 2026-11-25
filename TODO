@@ -8,9 +8,9 @@ TODO
   Abnahme: tests/width.sh schaltet den Modus ein, und die tmux-Fälle laufen
   ohne GAP. Die vim-Fälle (Flaggen, Jamo) zählen nicht: vim zählt selbst.
 
-* mwtrc: bisher nur die Farben (fünf und color0 bis color15) und
-  minimumContrast. Wenn nötig die Schrift und padding; Farbnamen wie in mwc
-  nur mit einer eigenen Tabelle, mwt hat kein pango.
+* mwtrc: bisher nur die Farben (fünf und color0 bis color15),
+  minimumContrast und urlLauncher. Wenn nötig die Schrift und padding;
+  Farbnamen wie in mwc nur mit einer eigenen Tabelle, mwt hat kein pango.
 
 Performance, aus der Review vom 2026-11-17 (docs/history/Review-2026-11-17.md):
 
@@ -41,9 +41,9 @@ Zu entscheiden, aus der dritten Review (docs/history/Review-2026-11-08.md):
   Tasten und Maus sind in input.c (test_input), der Paste in paste.c
   (test_paste, mit Zufallseingaben statt eines Fuzz-Harness), die Selektion
   in sel.c (test_sel), Shell und pty in shell.c (test_shell, mit echten
-  ptys, Pipes und Prozessen), parse_geometry und menu_key in util.c
-  (test_util), mime_rank in paste.c. Noch offen, wenn sie sich ändern:
-  snap_size, buffer_fits, cursor_size.
+  ptys, Pipes und Prozessen), die URLs in link.c (test_link),
+  parse_geometry, menu_key und snap_size in util.c (test_util), mime_rank in
+  paste.c. Noch offen, wenn sie sich ändern: buffer_fits, cursor_size.
   Die Wayland-Callbacks bleiben bei den Black-Box-Tests unter sway.
 
 Tests, die noch fehlen, als Kür:
@@ -62,13 +62,14 @@ Tests, die noch fehlen, als Kür:
   den die Aufrufer prüfen.
 * make rediwm: keys.py, mouse.py, keyboard.py und pixel.py unter RediWM
   (github.com/oxydizer/rediwm), headless in einem eigenen Podman-Image wie
-  make oldwayland. RediWM baut auf wlroots 0.20, sway und mwc auf 0.19; es hat
+  make oldwayland. RediWM baut wie sway 1.12 und mwc auf wlroots 0.20; es hat
   virtual-keyboard, virtual-pointer und screencopy. Es braucht Zig 0.17 und
-  wlroots 0.20 aus scripts/build-wlroots.sh, beides nicht in Ubuntu 26.04, und
-  in mwtlib.py eine Schicht, die die Fenstergröße über rediwm-msg statt
-  swaymsg liest. Fälle mit sway-Befehlen (floating_maximum_size, input,
-  seat) entfallen dort. Zu sehen: ob ein abgezogenes Gerät dort Release und
-  Leave schickt (mouse.py test_device_gone).
+  wlroots 0.20, beides Pakete in Arch (zig, wlroots0.20), wie das Image von
+  make evil, und in mwtlib.py eine Schicht, die die Fenstergröße über
+  rediwm-msg statt swaymsg liest. Fälle mit sway-Befehlen
+  (floating_maximum_size, input, seat) entfallen dort. Zu sehen: ob ein
+  abgezogenes Gerät dort Release und Leave schickt (mouse.py
+  test_device_gone).
 * Andere Compositoren als sway und mwc, etwa labwc. Weston und GNOME nicht:
   ohne xdg-decoration hat mwt dort keinen Rahmen, mit Absicht (CAVEATS). vttest.
   Bildschirmvergleich gegen tmux capture-pane mit aufgezeichneten Sitzungen von

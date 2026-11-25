@@ -144,15 +144,16 @@ the like in the terminfo no program would understand it. `kb2` in `mwt.info` is 
 keypad's 5 without NumLock, ESC O E under `smkx` as cursor keys go; xterm's entries have
 the keypad mode's ESC O u. With NumLock a keypad key is a cursor key only with Shift, so
 `kUP5` and the like come from it only without NumLock; Ctrl+8 there sends DEL, Alt+8
-ESC 8.
+ESC 8. From xkeyboard-config 2.49 on Shift leaves the digit as well, unless the keymap
+has the option `numpad:microsoft` or `numpad:pc`.
 
 
 ## Character widths
 
 mwt counts as glibc and bash do, code point by code point with `wcwidth()`. Characters
-without width (ZWJ, VS16, combining accents) are dropped, also when copying. tmux 3.6
-counts ❤️ (with VS16) and ZWJ sequences such as 👨‍👩‍👧 differently, vim 9.1 flags and
-Hangul jamo; there the cursor drifts. `make width` shows where. To a query for mode 2027
+without width (ZWJ, VS16, combining accents) are dropped, also when copying. tmux 3.8
+counts ❤️ (with VS16), skin tones such as 👍🏽 and ZWJ sequences such as 👨‍👩‍👧
+differently, vim 9.2 flags and Hangul jamo; there the cursor drifts. `make width` shows where. To a query for mode 2027
 (CSI ? 2027 $ p) mwt answers "unknown"; see TODO.
 
 
