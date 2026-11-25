@@ -144,7 +144,13 @@ def test_flood_frames(log):
     with open(slog, errors="replace") as f:
         f.seek(start)
         lines = f.readlines()
-    stamp = lambda line: float(re.match(r"\[\s*(\d+\.\d+)\]", line).group(1))
+
+    def stamp(line):
+        """In ms: libwayland 1.26 logs the time of day, 1.24 ms."""
+        if m := re.match(r"\[(\d+):(\d+):(\d+\.\d+)\]", line):
+            return (int(m[1]) * 3600 + int(m[2]) * 60 + float(m[3])) * 1000
+        return float(re.match(r"\[\s*(\d+\.\d+)\]", line).group(1))
+
     frames, waits, done = set(), [], None
     for line in lines:
         if m := re.search(rf"wl_surface#{sid}\.frame\(new id wl_callback#(\d+)\)", line):

@@ -35,14 +35,14 @@ else
 fi
 build "-O2 -g" ""
 echo "=== make test ==="
-tests/run.sh 2>&1 | grep -E '^(FAIL|PASS|info|=== )'
+tests/run.sh 2>&1 | grep -E '^(FAIL|PASS|info|=== |Traceback)'
 [ "${PIPESTATUS[0]}" = 0 ] || fail=1
 echo "=== evil: timing, without sanitizers ==="
 ONLY="flood_ctrl_c flood_rss rep_flood paste_integrity paste_over_16mb low_memory soak" tests/evil.sh || fail=1
 build "$SAN" "-fsanitize=address,undefined"
 export ASAN_OPTIONS=detect_leaks=0
 echo "=== make test, sanitizers ==="
-tests/run.sh 2>&1 | grep -E '^(FAIL|PASS|info|=== )'
+tests/run.sh 2>&1 | grep -E '^(FAIL|PASS|info|=== |Traceback)'
 [ "${PIPESTATUS[0]}" = 0 ] || fail=1
 echo "=== evil under sway, sanitizers ==="
 tests/evil.sh || fail=1
@@ -51,26 +51,26 @@ tests/evil-mwc.sh || fail=1
 echo "=== terminfo, keys, bell, links, wayland, pixel, mouse, keyboard, leaks, sanitizers ==="
 make terminfo 2>&1 | grep -E '^(FAIL|PASS|=== )'
 [ "${PIPESTATUS[0]}" = 0 ] || fail=1
-tests/headless.sh tests/keys.py 2>&1 | grep -E '^(FAIL|PASS|info|=== )'
+tests/headless.sh tests/keys.py 2>&1 | grep -E '^(FAIL|PASS|info|=== |Traceback)'
 [ "${PIPESTATUS[0]}" = 0 ] || fail=1
-tests/headless.sh tests/bell.py 2>&1 | grep -E '^(FAIL|PASS|info|=== )'
+tests/headless.sh tests/bell.py 2>&1 | grep -E '^(FAIL|PASS|info|=== |Traceback)'
 [ "${PIPESTATUS[0]}" = 0 ] || fail=1
-tests/headless.sh tests/links.py 2>&1 | grep -E '^(FAIL|PASS|info|=== )'
+tests/headless.sh tests/links.py 2>&1 | grep -E '^(FAIL|PASS|info|=== |Traceback)'
 [ "${PIPESTATUS[0]}" = 0 ] || fail=1
-SWAY_WAYLAND_DEBUG=1 tests/headless.sh tests/wayland.py 2>&1 | grep -E '^(FAIL|PASS|info|=== )'
+SWAY_WAYLAND_DEBUG=1 tests/headless.sh tests/wayland.py 2>&1 | grep -E '^(FAIL|PASS|info|=== |Traceback)'
 [ "${PIPESTATUS[0]}" = 0 ] || fail=1
-tests/headless.sh tests/pixel.py 2>&1 | grep -E '^(FAIL|PASS|info|=== )'
+tests/headless.sh tests/pixel.py 2>&1 | grep -E '^(FAIL|PASS|info|=== |Traceback)'
 [ "${PIPESTATUS[0]}" = 0 ] || fail=1
-tests/headless.sh tests/mouse.py 2>&1 | grep -E '^(FAIL|PASS|info|=== )'
+tests/headless.sh tests/mouse.py 2>&1 | grep -E '^(FAIL|PASS|info|=== |Traceback)'
 [ "${PIPESTATUS[0]}" = 0 ] || fail=1
-tests/headless.sh tests/keyboard.py 2>&1 | grep -E '^(FAIL|PASS|info|=== )'
+tests/headless.sh tests/keyboard.py 2>&1 | grep -E '^(FAIL|PASS|info|=== |Traceback)'
 [ "${PIPESTATUS[0]}" = 0 ] || fail=1
-tests/headless.sh tests/leaks.py 2>&1 | grep -E '^(FAIL|PASS|info|=== )'
+tests/headless.sh tests/leaks.py 2>&1 | grep -E '^(FAIL|PASS|info|=== |Traceback)'
 [ "${PIPESTATUS[0]}" = 0 ] || fail=1
 # A build that checks each frame against a full redraw, see check_redraw in mwt.c.
 echo "=== pixel, each frame against a full redraw ==="
 build "-O2 -g -DMWT_CHECK_REDRAW" ""
-tests/headless.sh tests/pixel.py 2>&1 | grep -E '^(FAIL|PASS|info|=== )'
+tests/headless.sh tests/pixel.py 2>&1 | grep -E '^(FAIL|PASS|info|=== |Traceback)'
 [ "${PIPESTATUS[0]}" = 0 ] || fail=1
 # A report: much of what esctest covers mwt leaves out. Fails only if it did not
 # run. Like the replay, it needs `tests/esctest.sh --fetch` on the host first.

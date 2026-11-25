@@ -643,7 +643,7 @@ snippet_results() {
 	if grep -q 'command not found\|syntax error' "$DIR/shown"; then gap "$1: shell errors: $(grep -m1 'command not found\|syntax error' "$DIR/shown" | cut -c1-70)"; fi
 	local a b c
 	a=$(grep -n -m1 -F 'LOGO=' "$DIR/shown" | cut -d: -f1)
-	b=$(grep -n -m1 -F ':/bin/bash' "$DIR/shown" | cut -d: -f1)
+	b=$(grep -n -m1 ':\(/usr\)\?/bin/bash' "$DIR/shown" | cut -d: -f1) # Arch has it in /usr
 	c=$(grep -n -m1 -F "$(tail -5 "$DIR/snippet.out" | head -1)" "$DIR/shown" | cut -d: -f1)
 	[ "${a:-0}" -lt "${b:-0}" ] && [ "${b:-0}" -lt "${c:-0}" ] || gap "$1: the output is out of order: $a $b $c"
 }

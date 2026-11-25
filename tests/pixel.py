@@ -566,8 +566,10 @@ def cursor_state(log):
     held, states = None, []
     for line in lines:
         if " -> " not in line:
-            if "preferred_buffer_scale(" in line:
-                states.append(("scale", int(re.search(r"\((\d+)\)", line)[1])))
+            # the window's: sway 1.12 tells the cursor surface its scale too
+            if m := re.search(r"wl_surface#(\d+)\.preferred_buffer_scale\((\d+)\)", line):
+                if m[1] != cursor:
+                    states.append(("scale", int(m[2])))
             elif m := re.search(r"wl_pointer#\d+\.(enter|leave)\(", line):
                 states.append((m[1],))
             continue
@@ -608,6 +610,9 @@ def test_cursor_scale():
     cursor_theme("squares", ["text"])
     log = os.path.join(mwtlib.DIR, "wayland-debug")
     mouse = Mouse()
+    # sway 1.12 sends a leave when it hides the cursor, as headless.sh has it
+    # do after 100 ms, and no enter until it moves: here the pointer stays inside
+    swaymsg("seat", "*", "hide_cursor", "0")
     with Window(geometry="30x8", env=cursor_env("squares"), stderr=log):
         x, y, w, h = rect()
         mouse.send("move", x + w // 2, y + h // 2)
@@ -623,6 +628,7 @@ def test_cursor_scale():
         settle()
     mouse.close()
     swaymsg("output", "HEADLESS-1", "scale", "1")
+    swaymsg("seat", "*", "hide_cursor", "100")
     states = cursor_state(log)
     commits = [st for st in states if st[0] == "commit"]
     bad = [st for st in commits if st[1] and st[3] is None and (st[1][0] % st[2] or st[1][1] % st[2])]

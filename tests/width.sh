@@ -90,10 +90,11 @@ report < <($W vim-check "$DIR/vim-before" "$DIR/vim-after")
 stop_mwt
 
 echo "=== tmux: each sample filled with dots to the edge of the left pane"
-# The left pane waits for its text, which needs the pane width first.
+# The left pane waits for its text, which needs the pane width first. The mouse
+# stays mwt's, for the screen read back: tmux 3.8 has it on by itself.
 start_mwt -e tmux -L width -f /dev/null new-session \
 	"while [ ! -s '$DIR/padded.txt' ]; do sleep 0.1; done; cat '$DIR/padded.txt'; exec sleep 600" \; \
-	split-window -h "exec sleep 600" \; select-pane -L
+	split-window -h "exec sleep 600" \; select-pane -L \; set -g mouse off
 sleep 1
 pw=$(tmux -L width display -p -t '{left}' '#{pane_width}' 2>/dev/null)
 if [ -n "$pw" ]; then
