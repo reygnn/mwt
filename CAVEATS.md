@@ -204,7 +204,7 @@ DECSCL, and the DECDSR reports for printer, keyboard and locator.
 DA2 answers `CSI > 1 ; 10 ; 0 c`, a VT220 as DA does, with a version below xterm's:
 esctest wants xterm's 41 and 314 or more, and programs like vim would take mwt for xterm.
 
-Combining characters are discarded, see Character widths. Setting colors through OSC is
+Combining characters are not drawn, see Character widths. Setting colors through OSC is
 ignored; queries are answered.
 
 REP past a screenful and a row leaves the screen as all the copies would, but puts fewer
