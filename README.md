@@ -116,6 +116,8 @@ them with `mwt -a indigo3`.
   configured in `config.h` and the mwtrc
 * DECRQCRA only with `allow_checksum` in `config.h`, off by default as in xterm
 * Wide characters, and emoji as outlines if a fallback font has them
+* Reflow: a window of another width wraps the lines of the screen and of the
+  scrollback anew, and a taller one takes lines back from the scrollback
 * Box drawing and block elements (U+2500 to U+259F) and the DEC scan lines (U+23BA to
   U+23BD) drawn to fill the cell, so lines join between rows whatever the font
 * The launcher's xdg-activation token, taken for the window and kept from the shell
@@ -129,10 +131,10 @@ COMPAT.md goes through the VT100's sequences, and those after it, one by one.
 
 ## Deliberately left out
 
-Tektronix, VT52, Sixel and ReGIS, DCS queries, OSC 8 hyperlinks, reflow on resize,
-ligatures, bidi, combining characters, color emoji bitmaps, subpixel antialiasing,
-fractional scaling, drag and drop, OSC 52, and most VT420 and xterm extensions that
-esctest checks. The list and other limits are in CAVEATS.md.
+Tektronix, VT52, Sixel and ReGIS, DCS queries, OSC 8 hyperlinks, ligatures, bidi,
+combining characters, color emoji bitmaps, subpixel antialiasing, fractional scaling,
+drag and drop, OSC 52, and most VT420 and xterm extensions that esctest checks. The
+list and other limits are in CAVEATS.md.
 
 
 ## How this is built

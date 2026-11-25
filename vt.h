@@ -41,8 +41,10 @@ struct row {
 	 * cell from there on is one. An upper bound, and never below wrap. */
 	int used;
 	/* The line goes on in the next row after this many cells; 0 when it ends
-	 * in this one. vt.cols when autowrap set it, fewer once the window grew
-	 * wider: there is no reflow, the line still ends where it did. */
+	 * in this one. vt.cols when autowrap set it, one fewer where a wide glyph
+	 * did not fit in the last cell, which is not the line's then. Fewer on
+	 * the alternate screen once the window grew wider: that one is not laid
+	 * out anew, the line still ends where it did. */
 	int wrap;
 	struct cell c[];
 };
@@ -100,8 +102,9 @@ struct vt {
 	bool *tabs;
 
 	struct vt_cursor c, saved_pri, saved_alt;
-	int pri_y;                /* behind the alternate screen: the row the main
-	                           * screen's cursor was in when that one took over */
+	int pri_x, pri_y;         /* behind the alternate screen: where the main
+	                           * screen's cursor was when that one took over,
+	                           * pri_x one further with a wrap pending */
 	int top, bot;             /* scroll region, inclusive */
 	unsigned mode;
 	enum cursor_style cursor_style;
@@ -109,7 +112,7 @@ struct vt {
 
 	/* scrollback (main screen only) */
 	struct cell **hist;
-	int *hist_len;
+	int *hist_len;             /* never above cols: laid out anew with the screen */
 	int *hist_room;            /* cells each slot holds; it only grows */
 	int *hist_wrap;            /* as row.wrap, never above hist_len */
 	int hist_cap, hist_count, hist_head; /* head: index of next slot */
@@ -143,7 +146,10 @@ struct vt {
 struct vt *vt_new(int cols, int rows, int histsize, const struct vt_callbacks *cb);
 void vt_free(struct vt *vt);
 void vt_write(struct vt *vt, const char *buf, size_t len);
-/* false when out of memory, and then nothing has changed */
+/* Another width lays the lines of the main screen and of the history out
+ * anew, rows that went on in the next wrapped where the new width ends; the
+ * alternate screen is cut or padded. Another height moves lines into the
+ * history and back. False when out of memory, and then nothing has changed. */
 bool vt_resize(struct vt *vt, int cols, int rows);
 void vt_reset(struct vt *vt);
 
@@ -154,8 +160,9 @@ const struct cell *vt_view_line(const struct vt *vt, int r, int *len);
 const struct cell *vt_abs_line(const struct vt *vt, int64_t abs, int *len);
 int64_t vt_abs_first(const struct vt *vt); /* oldest abs line in history */
 /* Whether line abs goes on in the next: the cells it has before its wrap
- * (row.wrap), or 0. Only default blanks may follow them, as after the window
- * grew wider; with anything else there the line ends in its row. */
+ * (row.wrap), or 0. Only default blanks may follow them: the cell a wide glyph
+ * did not fit in, or on the alternate screen what a wider window added; with
+ * anything else there the line ends in its row. */
 int vt_abs_wraps(const struct vt *vt, int64_t abs);
 void vt_scroll_view(struct vt *vt, int delta); /* +up into history */
 void vt_mark_all(struct vt *vt);

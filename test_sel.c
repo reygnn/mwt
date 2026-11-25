@@ -224,26 +224,59 @@ static void test_covers(void)
 	CHECK(sel_covers(7, 0, 8, INT_MAX, 8, 1000, 1));
 }
 
-/* A window grown wider keeps the wrap where the line ended, blanks after it:
- * the lines are still one, on the screen as in the history; a cleared screen
- * no longer goes on from the history. */
+/* A window of another width lays the lines of the main screen and the history
+ * out anew: the text is the same, in rows as wide as the window. The alternate
+ * screen is not: grown wider it keeps the wrap where the line ended, blanks
+ * after it, and the lines are still one. A cleared screen no longer goes on
+ * from the history. */
 static void test_text_wider(void)
 {
 	struct vt *vt = mk(10, 4, 10);
 	w(vt, "0123456789abcdefghijklmno");
 	CHECK(vt_resize(vt, 20, 4));
 	int64_t l0 = line(vt, 0);
-	TEXT(vt, sel_of(SEL_LINE, l0, 0, l0 + 2, 0), "0123456789abcdefghijklmno");
-	TEXT(vt, sel_of(SEL_CHAR, l0, 5, l0 + 1, 15), "56789abcdefghij");
+	TEXT(vt, sel_of(SEL_LINE, l0, 0, l0, 0), "0123456789abcdefghij");
+	TEXT(vt, sel_of(SEL_LINE, l0, 0, l0 + 1, 0), "0123456789abcdefghijklmno");
+	TEXT(vt, sel_of(SEL_CHAR, l0, 5, l0 + 1, 2), "56789abcdefghijklm");
+	CHECK(vt_resize(vt, 7, 4));
+	l0 = line(vt, 0);
+	TEXT(vt, sel_of(SEL_LINE, l0, 0, l0 + 3, 0), "0123456789abcdefghijklmno");
 	w(vt, "\r\n\r\n\r\n\r\n");
 	int64_t h = vt_abs_first(vt);
-	TEXT(vt, sel_of(SEL_LINE, h, 0, h + 2, 0), "0123456789abcdefghijklmno");
+	TEXT(vt, sel_of(SEL_LINE, h, 0, h + 3, 0), "0123456789abcdefghijklmno");
+	CHECK(vt_resize(vt, 30, 4));
+	h = vt_abs_first(vt);
+	TEXT(vt, sel_of(SEL_LINE, h, 0, h, 0), "0123456789abcdefghijklmno");
+	vt_free(vt);
+
+	vt = mk(10, 4, 10);
+	w(vt, "\033[?47h0123456789abcdefghijklmno");
+	CHECK(vt_resize(vt, 20, 4));
+	l0 = line(vt, 0);
+	TEXT(vt, sel_of(SEL_LINE, l0, 0, l0 + 2, 0), "0123456789abcdefghijklmno");
+	TEXT(vt, sel_of(SEL_CHAR, l0, 5, l0 + 1, 15), "56789abcdefghij");
+	vt_free(vt);
+
+	/* text with wide glyphs that did not fit at the end of their rows comes
+	 * out as it went in, without the cells left over, at any width */
+	vt = mk(9, 4, 10);
+	w(vt, "\xe6\x97\xa5\xe6\x9c\xac\xe8\xaa\x9e\xe6\x97\xa5\xe6\x9c\xac\xe8\xaa\x9e"
+	      "\xe6\x97\xa5\xe6\x9c\xac\xe8\xaa\x9e");
+	static const int widths[] = { 9, 7, 2, 30, 5 };
+	for (size_t i = 0; i < sizeof widths / sizeof *widths; i++) {
+		struct sel all = { 0 };
+		CHECK(vt_resize(vt, widths[i], 4) && sel_all(vt, &all));
+		TEXT(vt, all,
+		     "\xe6\x97\xa5\xe6\x9c\xac\xe8\xaa\x9e\xe6\x97\xa5\xe6\x9c\xac\xe8\xaa\x9e"
+		     "\xe6\x97\xa5\xe6\x9c\xac\xe8\xaa\x9e");
+	}
 	vt_free(vt);
 
 	/* a wrap no longer at the end only after a wider window: DCH empties the
 	 * last column, as bash does for Delete in a line that filled the row;
 	 * erased to the end, a wrap in the middle goes too; colored blanks after
-	 * it are text, the line does not go on */
+	 * it are text, the line does not go on. On the alternate screen, where a
+	 * wider window leaves the wrap in the middle. */
 	static const char *const ends[] = {
 		"\033[1;3H\033[P",                     /* 10 columns, DCH */
 		"\033[1;3H\033[3P",
@@ -253,7 +286,7 @@ static void test_text_wider(void)
 	};
 	for (size_t i = 0; i < sizeof ends / sizeof *ends; i++) {
 		vt = mk(10, 4, 10);
-		w(vt, "0123456789abcdefghij");
+		w(vt, "\033[?47h0123456789abcdefghij");
 		const char *e = ends[i];
 		if (*e == '*') {
 			CHECK(vt_resize(vt, 20, 4));
@@ -275,7 +308,7 @@ static void test_text_wider(void)
 	}
 	/* ECH that stops before the end leaves it going on */
 	vt = mk(10, 4, 10);
-	w(vt, "0123456789abcdefghij");
+	w(vt, "\033[?47h0123456789abcdefghij");
 	CHECK(vt_resize(vt, 20, 4));
 	w(vt, "\033[1;12H\033[2X\033[2;1H\033[2Kfoo");
 	l0 = line(vt, 0);

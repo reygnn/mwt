@@ -5,6 +5,7 @@
 #include "vt.h"
 #include "version.h"
 
+#include <limits.h>
 #include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -88,6 +89,27 @@ static void fill(struct cell *l, int from, int to, struct cell b)
 static bool is_default_blank(struct cell c)
 {
 	return c.cp == ' ' && c.fg == COL_DEFAULT_FG && c.bg == COL_DEFAULT_BG && !c.attr;
+}
+
+/* The cells of a row that are text: without the blanks at its end, of which
+ * only the background would show, but none of the first min. */
+static int text_len(const struct cell *l, int len, int min)
+{
+	while (len > min && l[len - 1].cp == ' ' && l[len - 1].bg == COL_DEFAULT_BG &&
+	       !l[len - 1].attr)
+		len--;
+	return len;
+}
+
+/* Whether a row of n cells goes on in the next after wrap of them: wrap, or 0
+ * with anything but blanks behind them. Those are no text: the cell a wide glyph
+ * did not fit in, or on the alternate screen what a wider window added. */
+static int wrap_holds(const struct cell *l, int n, int wrap)
+{
+	for (int k = wrap; wrap && k < n; k++)
+		if ((l[k].cp != ' ' && l[k].cp != 0) || l[k].bg != COL_DEFAULT_BG || l[k].attr)
+			return 0;
+	return wrap;
 }
 
 /* the row has been written up to end (exclusive) */
@@ -234,7 +256,7 @@ static void clear_line(struct vt *vt, int y, int x0, int x1)
 	fix_wide(vt, vt->line[y], x0, x1);
 	fill_row(vt->line[y], x0, x1 + 1, blank(vt));
 	/* erased to the end, the line ends: also one whose wrap is left of x0,
-	 * where a window grown wider left it */
+	 * where a window grown wider left it on the alternate screen */
 	if (x1 == vt->cols - 1)
 		vt->line[y]->wrap = 0;
 	mark_row(vt, y);
@@ -261,10 +283,7 @@ static void push_hist(struct vt *vt, const struct row *row)
 	/* trim trailing default blanks, but none of the cells before a wrap; a
 	 * screen row is blank from row.used on, so the search starts there */
 	const struct cell *l = row->c;
-	int len = row->used;
-	while (len > row->wrap && l[len - 1].cp == ' ' &&
-	       l[len - 1].bg == COL_DEFAULT_BG && !l[len - 1].attr)
-		len--;
+	int len = text_len(l, row->used, row->wrap);
 	int slot = vt->hist_head;
 	struct cell *dst = vt->hist[slot];
 	/* a slot keeps its cells: once the history is full, a line that fits
@@ -332,10 +351,7 @@ int vt_abs_wraps(const struct vt *vt, int64_t abs)
 {
 	int n, wrap;
 	const struct cell *l = abs_line(vt, abs, &n, &wrap);
-	for (int k = wrap; wrap && k < n; k++)
-		if ((l[k].cp != ' ' && l[k].cp != 0) || l[k].bg != COL_DEFAULT_BG || l[k].attr)
-			return 0;
-	return wrap;
+	return wrap_holds(l, n, wrap);
 }
 
 int64_t vt_abs_first(const struct vt *vt)
@@ -501,8 +517,9 @@ static void set_altscreen(struct vt *vt, bool on, bool clear)
 	if (!!(vt->mode & MODE_ALTSCREEN) == on)
 		return;
 	if (on) {
-		/* the row vt_resize keeps on the main screen meanwhile: the cursor
+		/* the place vt_resize keeps on the main screen meanwhile: the cursor
 		 * goes on to the alternate one, and only 1049 saves it on the way */
+		vt->pri_x = vt->c.x + vt->c.wrapnext;
 		vt->pri_y = vt->c.y;
 		vt->mode |= MODE_ALTSCREEN;
 		vt->line = vt->alt;
@@ -608,7 +625,9 @@ void vt_free(struct vt *vt)
 }
 
 /* a new screen holding what fits of old, which is left as it is: its row shift
- * as the first one, or with -shift rows left blank above it for the caller */
+ * as the first one, or with -shift rows left blank above it for the caller.
+ * Cut to cols and not laid out anew: for the alternate screen, which its
+ * program draws again, and for the main one where only the rows change. */
 static struct row **copy_screen(const struct vt *vt, struct row **old, int shift,
 				int cols, int rows)
 {
@@ -620,7 +639,7 @@ static struct row **copy_screen(const struct vt *vt, struct row **old, int shift
 		const struct row *o = old[r + shift];
 		s[r]->used = MIN(o->used, cols);
 		memcpy(s[r]->c, o->c, s[r]->used * sizeof *o->c);
-		/* no reflow: a line cut before its wrap ends there */
+		/* a line cut before its wrap ends there */
 		s[r]->wrap = o->wrap <= cols ? o->wrap : 0;
 		if (cols < vt->cols && (s[r]->c[cols - 1].attr & ATTR_WIDE))
 			s[r]->c[cols - 1] = b;
@@ -634,15 +653,223 @@ static int hist_slot(const struct vt *vt, int back)
 	return (vt->hist_head - 1 - back + vt->hist_cap) % vt->hist_cap;
 }
 
-/* How many history lines a main screen n rows taller takes back, the newest
- * ones: all there are, up to one longer than cols. That one stays whole in the
- * history, as it is cut only on the screen (no reflow), and so do those above. */
-static int hist_back(const struct vt *vt, int n, int cols)
+/* ---- reflow ----------------------------------------------------------- */
+
+/* A place on the old main screen to find again on the new one: the cursor, the
+ * saved one, the first row. Rows count from the oldest history line. */
+struct mark {
+	int g, x;       /* x behind the row's text is as far behind its end */
+	int64_t row;    /* where it is now */
+	int col;
+	bool pend;      /* right behind a row that is full: a wrap is pending */
+};
+
+/* The lines of the history and the main screen laid out for another width:
+ * walked once to find the marks, and again to fill the rows in, those from top
+ * on into scr and the hist_n before them into the history. */
+struct reflow {
+	const struct vt *vt;
+	int cols, rows;
+	struct mark *m;
+	int nm;
+	int64_t row;        /* the row being filled */
+	int x;              /* cells in it */
+	bool fill;          /* the second walk */
+	int64_t top;
+	struct cell *buf;   /* the row being filled, cols cells */
+	struct row **scr;
+	struct cell **hist;
+	int *hist_len, *hist_room, *hist_wrap;
+	int hist_n;
+	bool nomem;
+};
+
+/* Old row g, the history's first: its cells, in *n how many of them are text,
+ * and in *more whether the line goes on in the next row. A row goes on where a
+ * selection would join it to the next (vt_abs_wraps), and the last one never. */
+static const struct cell *old_row(const struct vt *vt, int g, int *n, bool *more)
 {
-	int k = 0;
-	while (k < n && k < vt->hist_count && vt->hist_len[hist_slot(vt, k)] <= cols)
-		k++;
-	return k;
+	const struct cell *l;
+	int len, wrap;
+	if (g < vt->hist_count) {
+		int slot = hist_slot(vt, vt->hist_count - 1 - g);
+		l = vt->hist[slot];
+		len = vt->hist_len[slot];
+		wrap = vt->hist_wrap[slot];
+	} else {
+		const struct row *r = vt->pri[g - vt->hist_count];
+		l = r->c;
+		len = r->used;
+		wrap = r->wrap;
+	}
+	wrap = wrap_holds(l, len, wrap);
+	*n = wrap ? wrap : text_len(l, len, 0);
+	*more = wrap && g + 1 < vt->hist_count + vt->rows;
+	return l;
+}
+
+/* The row being filled is done: the line goes on after wrap cells, or ends
+ * with 0. Out of memory the walk goes on, for nothing. */
+static void reflow_row_done(struct reflow *rf, int wrap)
+{
+	int64_t r = rf->row - rf->top;
+	if (rf->fill && r >= -rf->hist_n && r < rf->rows && !rf->nomem) {
+		size_t size = (size_t)rf->x * sizeof *rf->buf;
+		if (r < 0) {
+			int k = (int)(r + rf->hist_n);
+			rf->hist[k] = malloc(size ? size : sizeof *rf->buf);
+			if (rf->hist[k]) {
+				memcpy(rf->hist[k], rf->buf, size);
+				rf->hist_len[k] = rf->x;
+				rf->hist_room[k] = MAX(rf->x, 1);
+				rf->hist_wrap[k] = wrap;
+			} else {
+				rf->nomem = true;
+			}
+		} else {
+			struct row *l = rf->scr[r];
+			memcpy(l->c, rf->buf, size);
+			l->used = rf->x;
+			l->wrap = wrap;
+		}
+	}
+	rf->row++;
+	rf->x = 0;
+}
+
+/* The marks of row g in its cells from lo up to hi are at col, counted on. */
+static void reflow_mark(struct reflow *rf, int g, int lo, int hi, int col)
+{
+	for (int k = 0; k < rf->nm; k++) {
+		struct mark *m = &rf->m[k];
+		if (m->g != g || m->x < lo || m->x >= hi)
+			continue;
+		m->row = rf->row;
+		m->col = col + (m->x - lo);
+		/* behind the last column it waits there: right behind the text, as
+		 * after the character that filled the row */
+		m->pend = m->col == rf->cols && m->x == lo;
+		m->col = MIN(m->col, rf->cols - 1);
+	}
+}
+
+static void reflow_walk(struct reflow *rf)
+{
+	static const struct cell blankc = { ' ', COL_DEFAULT_FG, COL_DEFAULT_BG, 0 };
+	const struct vt *vt = rf->vt;
+	int cols = rf->cols, total = vt->hist_count + vt->rows;
+	rf->row = 0;
+	rf->x = 0;
+	for (int g = 0; g < total && !rf->nomem; g++) {
+		/* the screen is full: what follows fell off its end */
+		if (rf->fill && rf->row >= rf->top + rf->rows)
+			break;
+		int n;
+		bool more, marked = false;
+		const struct cell *l = old_row(vt, g, &n, &more);
+		for (int k = 0; k < rf->nm; k++) {
+			marked |= rf->m[k].g == g;
+			/* in a row that goes on, what is behind its text, the cell a
+			 * wide glyph did not fit in, is its last cell's */
+			if (rf->m[k].g == g && more && rf->m[k].x >= n)
+				rf->m[k].x = n - 1;
+		}
+		for (int i = 0; i < n; i++) {
+			struct cell c = l[i];
+			int w = (c.attr & ATTR_WIDE) && i + 1 < n && (l[i + 1].attr & ATTR_WDUMMY) ? 2 : 1;
+			/* half a wide glyph alone, which nothing should leave: a blank */
+			if (w == 1 && (c.attr & (ATTR_WIDE | ATTR_WDUMMY)))
+				c = blankc;
+			/* one column has no room for a wide glyph, as put() has none: it goes */
+			bool fits = w <= cols;
+			if (fits && rf->x + w > cols)
+				reflow_row_done(rf, rf->x);
+			if (marked)
+				reflow_mark(rf, g, i, i + w, fits ? rf->x : 0);
+			if (fits && rf->fill) {
+				rf->buf[rf->x] = c;
+				if (w == 2)
+					rf->buf[rf->x + 1] = l[i + 1];
+			}
+			if (fits)
+				rf->x += w;
+			i += w - 1;
+		}
+		if (more)
+			continue;
+		if (marked)
+			reflow_mark(rf, g, n, INT_MAX, rf->x);
+		reflow_row_done(rf, 0);
+	}
+}
+
+static void reflow_free(const struct vt *vt, struct reflow *rf)
+{
+	free_screen(rf->scr, rf->rows);
+	for (int i = 0; rf->hist && i < vt->hist_cap; i++)
+		free(rf->hist[i]);
+	free(rf->hist);
+	free(rf->hist_len);
+	free(rf->hist_room);
+	free(rf->hist_wrap);
+	free(rf->buf);
+	rf->scr = NULL;
+	rf->hist = NULL;
+	rf->hist_len = rf->hist_room = rf->hist_wrap = NULL;
+	rf->buf = NULL;
+}
+
+/* The main screen and the history for cols by rows, in *rf, with vt left as it
+ * is; false when out of memory, and then nothing is allocated. m[0] is the
+ * cursor, or the place it left behind for the alternate screen, m[1] the saved
+ * cursor; m[2] is set to the first row of the screen, m[3] to the end of its
+ * text: the last row with any, the cursor's if none comes after it.
+ *
+ * Which rows the screen shows: those it showed, from its first row on. Text
+ * that reached the last row still does, as lines come back from the history
+ * where wider rows take fewer; text that ended further up moves with its rows
+ * and nothing comes back, so that what a program cleared stays cleared. A
+ * taller window takes as many lines back as it grew, as without another width.
+ * Then what no longer fits goes into the history from the top, as far as the
+ * cursor stays on the screen: past that, what is below it is lost, as it is in
+ * a shorter window. */
+static bool reflow(const struct vt *vt, int cols, int rows, struct reflow *rf, struct mark *m)
+{
+	int cy = m[0].g - vt->hist_count, e = vt->rows - 1;
+	while (e > cy && !vt->pri[e]->wrap && !text_len(vt->pri[e]->c, vt->pri[e]->used, 0))
+		e--;
+	*rf = (struct reflow){ .vt = vt, .cols = cols, .rows = rows, .m = m, .nm = 4 };
+	m[2] = (struct mark){ .g = vt->hist_count };
+	m[3] = (struct mark){ .g = vt->hist_count + e, .x = vt->cols };
+	reflow_walk(rf);
+	int64_t top = m[2].row, end = m[3].row;
+	if (e == vt->rows - 1)
+		top = MIN(top, end - e);
+	top = MAX(top - MAX(0, rows - vt->rows), 0);
+	if (end - top > rows - 1)
+		top = end - (rows - 1);
+	top = MIN(top, m[0].row);
+	rf->top = top;
+	rf->hist_n = (int)MIN(top, vt->hist_cap);
+	rf->scr = alloc_screen(cols, rows);
+	rf->buf = malloc((size_t)cols * sizeof *rf->buf);
+	if (vt->hist_cap) {
+		rf->hist = calloc(vt->hist_cap, sizeof *rf->hist);
+		rf->hist_len = calloc(vt->hist_cap, sizeof *rf->hist_len);
+		rf->hist_room = calloc(vt->hist_cap, sizeof *rf->hist_room);
+		rf->hist_wrap = calloc(vt->hist_cap, sizeof *rf->hist_wrap);
+	}
+	rf->nomem = !rf->scr || !rf->buf || (vt->hist_cap && (!rf->hist || !rf->hist_len ||
+							       !rf->hist_room || !rf->hist_wrap));
+	if (!rf->nomem) {
+		rf->fill = true;
+		reflow_walk(rf);
+	}
+	free(rf->buf);
+	rf->buf = NULL;
+	if (rf->nomem)
+		reflow_free(vt, rf);
+	return !rf->nomem;
 }
 
 static void clamp_cursor(struct vt_cursor *c, int cols, int rows)
@@ -664,54 +891,108 @@ bool vt_resize(struct vt *vt, int cols, int rows)
 	 * it holds what DECSC last left, the top row if nothing. */
 	int *py = alt ? &vt->pri_y : &vt->c.y;
 	struct vt_cursor *ac = alt ? &vt->c : &vt->saved_alt;
-
-	/* keep the cursor line visible: lines above it go into history */
-	int pshift = MAX(0, *py - (rows - 1));
 	int ashift = MAX(0, ac->y - (rows - 1));
-	/* And a taller main screen takes the newest ones back above its text, as
-	 * xterm does: what a shorter window pushed off returns with the window.
-	 * Never both: a cursor row that fit before fits a taller screen. */
-	int pull = hist_back(vt, rows - vt->rows, cols);
 
 	/* everything new first, so a failure leaves the terminal as it was */
-	struct row **npri = copy_screen(vt, vt->pri, pshift - pull, cols, rows);
+	bool anew = cols != vt->cols;
+	int pshift = 0, pull = 0;
+	struct reflow rf = { 0 };
+	struct mark m[4];
+	struct row **npri;
+	if (anew) {
+		/* Another width: the lines of the main screen and of the history are
+		 * laid out for it, behind the alternate screen too. A pending wrap
+		 * is the place behind the cursor's cell. */
+		const struct vt_cursor *s = &vt->saved_pri;
+		m[0] = (struct mark){ .g = vt->hist_count + *py,
+				      .x = alt ? vt->pri_x : vt->c.x + vt->c.wrapnext };
+		m[1] = (struct mark){ .g = vt->hist_count + s->y, .x = s->x + s->wrapnext };
+		npri = reflow(vt, cols, rows, &rf, m) ? rf.scr : NULL;
+	} else {
+		/* keep the cursor line visible: lines above it go into history */
+		pshift = MAX(0, *py - (rows - 1));
+		/* And a taller main screen takes the newest ones back above its
+		 * text, as xterm does: what a shorter window pushed off returns with
+		 * the window. They fit: the history is as wide as the screen. Never
+		 * both: a cursor row that fit before fits a taller screen. */
+		pull = CLAMP(rows - vt->rows, 0, vt->hist_count);
+		npri = copy_screen(vt, vt->pri, pshift - pull, cols, rows);
+	}
 	struct row **nalt = copy_screen(vt, vt->alt, ashift, cols, rows);
 	bool *ndirty = calloc(rows, sizeof *ndirty);
 	bool *ntabs = calloc(cols, sizeof *ntabs);
 	if (!npri || !nalt || !ndirty || !ntabs) {
-		free_screen(npri, rows);
+		if (anew)
+			reflow_free(vt, &rf);
+		else
+			free_screen(npri, rows);
 		free_screen(nalt, rows);
 		free(ndirty);
 		free(ntabs);
 		return false;
 	}
-	for (int i = 0; i < pshift; i++)
-		push_hist(vt, vt->pri[i]);
-	/* the lines taken back, the oldest in the top row: they fit, wrap and all,
-	 * and need no memory, so nothing here can fail; then out of the history */
-	for (int i = 0; i < pull; i++) {
-		int slot = hist_slot(vt, pull - 1 - i);
-		struct row *l = npri[i];
-		l->used = vt->hist_len[slot];
-		if (l->used)
-			memcpy(l->c, vt->hist[slot], l->used * sizeof *l->c);
-		l->wrap = vt->hist_wrap[slot];
-	}
-	if (pull) {
-		vt->hist_head = hist_slot(vt, pull - 1);
-		vt->hist_count -= pull;
-		vt->scrolled -= pull; /* the lines count from the same place still */
+	bool pend[2] = { false, false };
+	if (anew) {
+		/* the new history in the old one's place; the lines count on from
+		 * where they did, past those that fell off its far end */
+		int64_t first = vt_abs_first(vt);
+		for (int i = 0; i < vt->hist_cap; i++)
+			free(vt->hist[i]);
+		free(vt->hist);
+		free(vt->hist_len);
+		free(vt->hist_room);
+		free(vt->hist_wrap);
+		vt->hist = rf.hist;
+		vt->hist_len = rf.hist_len;
+		vt->hist_room = rf.hist_room;
+		vt->hist_wrap = rf.hist_wrap;
+		vt->hist_count = rf.hist_n;
+		if (vt->hist_cap) {
+			vt->hist_head = rf.hist_n % vt->hist_cap;
+			vt->scrolled = (uint64_t)(first + rf.top);
+		}
+		*py = (int)(m[0].row - rf.top);
+		if (alt) {
+			vt->pri_x = m[0].col + m[0].pend;
+		} else {
+			vt->c.x = m[0].col;
+			pend[0] = m[0].pend;
+		}
+		/* a saved cursor whose text is no longer on the screen: the nearest row */
+		int64_t sy = m[1].row - rf.top;
+		vt->saved_pri.x = m[1].col;
+		vt->saved_pri.y = (int)CLAMP(sy, 0, rows - 1);
+		pend[1] = m[1].pend && sy == vt->saved_pri.y;
+	} else {
+		for (int i = 0; i < pshift; i++)
+			push_hist(vt, vt->pri[i]);
+		/* the lines taken back, the oldest in the top row: wrap and all, and
+		 * with no memory needed, so nothing here can fail; then out of the
+		 * history */
+		for (int i = 0; i < pull; i++) {
+			int slot = hist_slot(vt, pull - 1 - i);
+			struct row *l = npri[i];
+			l->used = vt->hist_len[slot];
+			if (l->used)
+				memcpy(l->c, vt->hist[slot], l->used * sizeof *l->c);
+			l->wrap = vt->hist_wrap[slot];
+		}
+		if (pull) {
+			vt->hist_head = hist_slot(vt, pull - 1);
+			vt->hist_count -= pull;
+			vt->scrolled -= pull; /* the lines count from the same place still */
+		}
+		*py += pull - pshift;
+		/* a saved cursor moves with its screen, to the top row at most */
+		vt->saved_pri.y += pull - MIN(pshift, vt->saved_pri.y);
 	}
 	free_screen(vt->pri, vt->rows);
 	free_screen(vt->alt, vt->rows);
 	vt->pri = npri;
 	vt->alt = nalt;
 	vt->line = alt ? vt->alt : vt->pri;
-	*py += pull - pshift;
 	ac->y -= ashift;
-	/* a saved cursor moves with its screen, to the top row at most; behind
-	 * the main screen ac is the alternate one's and has moved */
-	vt->saved_pri.y += pull - MIN(pshift, vt->saved_pri.y);
+	/* behind the main screen ac is the alternate one's saved cursor and has moved */
 	if (alt)
 		vt->saved_alt.y -= MIN(ashift, vt->saved_alt.y);
 
@@ -727,6 +1008,12 @@ bool vt_resize(struct vt *vt, int cols, int rows)
 	clamp_cursor(&vt->c, cols, rows);
 	clamp_cursor(&vt->saved_pri, cols, rows);
 	clamp_cursor(&vt->saved_alt, cols, rows);
+	/* a cursor right behind a row its text now fills waits there to wrap, as
+	 * after the character that filled it */
+	if (vt->mode & MODE_AUTOWRAP) {
+		vt->c.wrapnext = pend[0];
+		vt->saved_pri.wrapnext = pend[1];
+	}
 	vt->view = 0;
 	vt_mark_all(vt);
 	return true;
@@ -765,8 +1052,13 @@ static bool put(struct vt *vt, uint32_t cp)
 
 	bool wrap = vt->mode & MODE_AUTOWRAP;
 	if (wrap && (c->wrapnext || c->x + w > vt->cols)) {
-		vt->line[c->y]->wrap = vt->cols;
-		touch(vt->line[c->y], vt->cols);
+		/* A wide glyph that did not fit leaves the last cell out of the line
+		 * where that is blank: no text, so a copy, a URL and a reflow pass
+		 * over it. With anything else there the cell is the line's. */
+		struct row *l = vt->line[c->y];
+		int n = c->wrapnext ? 0 : wrap_holds(l->c, vt->cols, vt->cols - 1);
+		l->wrap = n ? n : vt->cols;
+		touch(l, l->wrap);
 		c->x = 0;
 		index_down(vt);
 	} else if (c->x + w > vt->cols) {
@@ -1321,7 +1613,8 @@ static void csi_dispatch(struct vt *vt, uint32_t f)
 		fix_wide(vt, l, c->x, c->x + n - 1);
 		/* cells before the wrap go and blanks come in at the end: the line no
 		 * longer goes on, also where a window grown wider left the wrap in
-		 * the middle of the row; moved left it would look like one of those */
+		 * the middle of the row, on the alternate screen; moved left it would
+		 * look like one of those */
 		if (c->x < l->wrap)
 			l->wrap = 0;
 		memmove(&l->c[c->x], &l->c[c->x + n], (size_t)(vt->cols - c->x - n) * sizeof *l->c);

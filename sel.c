@@ -75,8 +75,9 @@ char *sel_text(const struct vt *vt, const struct sel *s)
 			continue;
 		int c0 = a == ba ? bc : 0;
 		int c1 = a == ea ? MIN(ec, n - 1) : n - 1;
-		/* a line that goes on in the next ends at its wrap, also with the
-		 * blanks of a window grown wider after it */
+		/* a line that goes on in the next ends at its wrap: without the cell
+		 * a wide glyph did not fit in, or the blanks of a window grown wider
+		 * on the alternate screen */
 		int w = vt_abs_wraps(vt, a);
 		bool wrapped = w > 0 && c1 >= w - 1;
 		if (wrapped)

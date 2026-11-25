@@ -40,14 +40,28 @@ no border.
 HiDPI needs `wl_compositor` version 6, which tells a surface its scale. Where a
 compositor offers only an older one, mwt draws at scale 1, blurry on a HiDPI output.
 
-There is no reflow: a narrower window cuts off what no longer fits. A shorter one puts
-the lines above the cursor's that no longer fit into the history, and a taller one takes
-the newest lines of the history back onto the screen, as xterm does. They also come
-above a screen that was erased (`CSI 2 J`) while its history stayed. A line longer than
-the window is wide stays in the history, and so do those above it: on the screen it
-would be cut, as xterm cuts it. Behind the alternate screen the main one gives and
-takes lines the same way; xterm leaves it as it is there, and a shorter window loses its
-last lines. A resize also sets the tab stops back to every eighth column.
+A window of another width lays the lines of the main screen and of the history out
+anew: rows that went on in the next are one line, wrapped where the new width ends.
+Only what autowrap joined is one line; rows a program broke itself (vim, a table) stay
+rows and are wrapped each on its own. Blanks at the end of a line are no text to mwt
+and are not kept, so a line that ended in blanks on a row of its own loses that row. In
+a window one column wide, wide characters are gone, as they are when written there.
+
+Text that reached the last row of the screen still does afterwards: narrower, the rows
+that no longer fit go into the history from the top, and wider, they come back. Text
+that ended further up moves with its rows, and nothing comes back from the history, so
+a screen that was erased (`CSI 2 J`) stays so. What no longer fits below the cursor is
+lost, once the cursor's row is the first: the cursor stays on the screen.
+
+A shorter window puts the lines above the cursor's that no longer fit into the
+history, and cuts off what is below; a taller one takes the newest lines of the history
+back onto the screen, as xterm does, also above a screen that was erased while its
+history stayed. Behind the alternate screen the main one gives and takes lines the same
+way; xterm leaves it as it is there, and a shorter window loses its last lines.
+
+The alternate screen is not laid out anew: its program draws it again. A narrower
+window cuts it off, and behind it the main screen is laid out all the same. A resize
+also sets the tab stops back to every eighth column.
 
 
 ## Selection and paste
@@ -77,8 +91,9 @@ supported; their text is shown, the target is dropped. A URL without a scheme
 drawing or one of ``<>"`{}|\^``, without punctuation at its end or a closing bracket it
 did not open. Lines that wrap are joined, lines a program broke itself (vim, a table)
 are not, nor the screen with the history once it was cleared. A wide character that did
-not fit at the end of a line ends the URL before it. A URL is looked for at most 4096
-cells either way.
+not fit at the end of a line goes on with the URL, unless the cell left over has a
+colored background: that cell is text then, a blank, also in a copy and in another
+width. A URL is looked for at most 4096 cells either way.
 
 Ctrl+click opens the URL in the text at the click, which output may have changed since
 the underline was drawn. While a program has the mouse, Ctrl+click is the program's;

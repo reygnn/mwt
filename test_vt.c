@@ -280,11 +280,11 @@ static void test_row_extent(void)
 	CHECK(used(vt, 0) == 0 && used_ok(vt));
 	w(vt, "alt\033[?1049l");
 	CHECK(used(vt, 0) == 12 && used_ok(vt));
-	/* resize keeps it, cut to the new width */
+	/* a resize lays the rows out anew, and counts what it puts in each */
 	CHECK(vt_resize(vt, 5, 3));
-	CHECK(used(vt, 0) == 5 && used_ok(vt));
+	CHECK(used(vt, 0) == 5 && used(vt, 2) == 1 && used_ok(vt));
 	CHECK(vt_resize(vt, 20, 4));
-	CHECK(used(vt, 1) == 5 && used_ok(vt));
+	CHECK(vt->c.y == 3 && used(vt, 2) == 20 && used(vt, 3) == 16 && used_ok(vt));
 	w(vt, "\033c");
 	CHECK(used(vt, 0) == 0 && used_ok(vt));
 	vt_free(vt);
@@ -500,6 +500,13 @@ static const char *fuzz_broken(const struct vt *vt)
 		return "cursor outside the grid";
 	if (vt->top < 0 || vt->bot >= vt->rows || vt->top > vt->bot)
 		return "scroll region outside the grid";
+	/* the history is laid out for the screen's width, as the main screen is */
+	for (int64_t i = vt_abs_first(vt); i < (int64_t)vt->scrolled; i++) {
+		int n;
+		vt_abs_line(vt, i, &n);
+		if (n > vt->cols)
+			return "a history line longer than the screen is wide";
+	}
 	const char *why = fuzz_broken_grid(vt->pri, vt->cols, vt->rows);
 	return why ? why : fuzz_broken_grid(vt->alt, vt->cols, vt->rows);
 }
@@ -536,7 +543,7 @@ static bool fuzz_same(const struct vt *a, const struct vt *b,
 	    a->cursor_style != b->cursor_style || a->hist_count != b->hist_count ||
 	    a->scrolled != b->scrolled || memcmp(a->tabs, b->tabs, (size_t)a->cols * sizeof *a->tabs))
 		return false;
-	if ((a->mode & MODE_ALTSCREEN) && a->pri_y != b->pri_y)
+	if ((a->mode & MODE_ALTSCREEN) && (a->pri_x != b->pri_x || a->pri_y != b->pri_y))
 		return false;
 	for (int r = 0; r < a->rows; r++)
 		if (!fuzz_rows(a->pri[r], b->pri[r], a->cols) || !fuzz_rows(a->alt[r], b->alt[r], a->cols))
@@ -1335,7 +1342,6 @@ static void test_resize(void)
  * xterm does, so what a shorter one pushed off returns with it. */
 static void test_resize_back(void)
 {
-	int len;
 	/* no more than the rows it grew by, and the history goes on after them: a
 	 * ring that has gone round, its head taken back past the start */
 	struct vt *vt = mk(10, 3, 4);
@@ -1374,25 +1380,6 @@ static void test_resize_back(void)
 	CHECK_STR(row(vt, 0), "2");
 	CHECK_STR(row(vt, 1), "3");
 	CHECK(vt->c.y == 1 && vt->scrolled == 0);
-	vt_free(vt);
-
-	/* A line longer than the window stays in the history, whole, and so do
-	 * those above it: on the screen it would be cut for good. Once the window
-	 * is wide enough it comes. */
-	vt = mk(12, 2, 10);
-	w(vt, "x\r\nAAAAAAAAAAAA\r\nb\r\nc\r\nd");
-	CHECK(vt->hist_count == 3);
-	CHECK(vt_resize(vt, 8, 6));
-	CHECK_STR(row(vt, 0), "b");
-	CHECK_STR(row(vt, 2), "d");
-	CHECK(vt->c.y == 2 && vt->hist_count == 2);
-	CHECK(vt_abs_line(vt, vt_abs_first(vt) + 1, &len) && len == 12);
-	CHECK_STR(hist_line(vt, 1), "AAAAAAAAAAAA");
-	CHECK_STR(hist_line(vt, 2), "x");
-	CHECK(vt_resize(vt, 12, 7));
-	CHECK_STR(row(vt, 0), "AAAAAAAAAAAA");
-	CHECK_STR(row(vt, 1), "b");
-	CHECK(vt->c.y == 3 && vt->hist_count == 1);
 	vt_free(vt);
 
 	/* a line that goes on in the next row still does on the screen */
@@ -1468,6 +1455,378 @@ static void test_resize_back(void)
 				bad += !ca || !cb || la != lb || !fuzz_cells(ca, cb, la) ||
 				       vt_abs_wraps(a, i) != vt_abs_wraps(b, i);
 			}
+		}
+		vt_free(a);
+		vt_free(b);
+	}
+	CHECK(bad == 0);
+}
+
+/* The text of the history and the main screen, line by line as a selection
+ * would join the rows, with each cell's colours and attributes: what a reflow
+ * must leave as it was. Blank lines at the end do not count. */
+static size_t reflow_text(const struct vt *vt, uint32_t *out, size_t cap)
+{
+	size_t n = 0, text = 0;
+	for (int64_t a = vt_abs_first(vt); a < (int64_t)vt->scrolled + vt->rows; a++) {
+		int len, wraps = vt_abs_wraps(vt, a);
+		const struct cell *l = vt_abs_line(vt, a, &len);
+		if (a >= (int64_t)vt->scrolled) {
+			/* the main screen's rows, also behind the alternate screen,
+			 * by the rule of vt_abs_wraps */
+			const struct row *r = vt->pri[a - (int64_t)vt->scrolled];
+			l = r->c;
+			len = vt->cols;
+			wraps = r->wrap;
+			for (int k = wraps; wraps && k < len; k++)
+				if ((l[k].cp != ' ' && l[k].cp != 0) || l[k].bg != COL_DEFAULT_BG ||
+				    l[k].attr)
+					wraps = 0;
+		}
+		if (wraps)
+			len = wraps;
+		else
+			while (len > 0 && l[len - 1].cp == ' ' && l[len - 1].bg == COL_DEFAULT_BG &&
+			       !l[len - 1].attr)
+				len--;
+		for (int x = 0; x < len && n + 4 < cap; x++) {
+			if (l[x].attr & ATTR_WDUMMY)
+				continue;
+			out[n++] = l[x].cp;
+			out[n++] = l[x].bg;
+			out[n++] = l[x].attr;
+			text = n;
+		}
+		if (!wraps && n < cap)
+			out[n++] = '\n';
+	}
+	return text;
+}
+
+/* A line of random text for the reflow tests, ended by CR LF: letters, blanks
+ * within it, wide glyphs, background colours and underlines. No blank at its
+ * end: one there is no text to the terminal, which a reflow would not keep. */
+static void reflow_line(char *s, int cols)
+{
+	int n = 0;
+	for (int k = (int)(fuzz_rand() % (unsigned)(2 * cols)); k > 0; k--) {
+		switch (fuzz_rand() % 12) {
+		case 0: n += sprintf(s + n, "\xe6\xbc\xa2"); break;
+		case 1: n += sprintf(s + n, "\033[%um", 40 + fuzz_rand() % 8); break;
+		case 2: n += sprintf(s + n, "\033[%cm", fuzz_rand() % 2 ? '4' : '0'); break;
+		case 3: s[n++] = ' '; break;
+		default: s[n++] = (char)('a' + fuzz_rand() % 26);
+		}
+	}
+	strcpy(s + n, n ? "z\r\n" : "\r\n");
+}
+#define REFLOW_LINE (2 * 31 * 5 + 4) /* 2 * cols pieces of 5 bytes at most */
+
+/* A window of another width lays the lines of the main screen and the history
+ * out anew: rows that went on in the next are one line, wrapped where the new
+ * width ends. */
+static void test_reflow(void)
+{
+	int len;
+	/* wider and narrower, the cursor behind its text */
+	struct vt *vt = mk(10, 4, 10);
+	w(vt, "0123456789abcdefghijklmno");
+	CHECK(vt_resize(vt, 20, 4));
+	CHECK_STR(row(vt, 0), "0123456789abcdefghij");
+	CHECK_STR(row(vt, 1), "klmno");
+	CHECK_STR(row(vt, 2), "");
+	CHECK(vt_abs_wraps(vt, 0) == 20 && vt_abs_wraps(vt, 1) == 0);
+	CHECK(vt->c.x == 5 && vt->c.y == 1 && vt->hist_count == 0);
+	CHECK(vt_resize(vt, 7, 4));
+	CHECK_STR(row(vt, 0), "0123456");
+	CHECK_STR(row(vt, 3), "lmno");
+	CHECK(vt_abs_wraps(vt, 2) == 7 && vt->pri[3]->used == 4);
+	CHECK(vt->c.x == 4 && vt->c.y == 3);
+	CHECK(vt_resize(vt, 10, 4));
+	CHECK_STR(row(vt, 0), "0123456789");
+	CHECK_STR(row(vt, 2), "klmno");
+	CHECK(vt->c.x == 5 && vt->c.y == 2 && vt->hist_count == 0);
+	vt_free(vt);
+
+	/* A cursor in the last row stays there: narrower, what no longer fits above
+	 * it goes into the history, row by row of the new width, and wider it
+	 * comes back, a line that began in the history as one. */
+	vt = mk(8, 3, 10);
+	w(vt, "abcdefgh12\r\nxy\r\nz");
+	CHECK(vt->hist_count == 1);
+	CHECK(vt_resize(vt, 4, 3));
+	CHECK(vt->hist_count == 2 && vt->scrolled == 2 && vt->c.x == 1 && vt->c.y == 2);
+	CHECK_STR(hist_line(vt, 2), "abcd");
+	CHECK_STR(hist_line(vt, 1), "efgh");
+	CHECK(vt_abs_wraps(vt, 0) == 4 && vt_abs_wraps(vt, 1) == 4);
+	CHECK_STR(row(vt, 0), "12");
+	CHECK_STR(row(vt, 2), "z");
+	CHECK(vt_resize(vt, 8, 3));
+	CHECK(vt->hist_count == 1 && vt->scrolled == 1 && vt->c.x == 1 && vt->c.y == 2);
+	CHECK_STR(hist_line(vt, 1), "abcdefgh");
+	CHECK_STR(row(vt, 0), "12");
+	CHECK(vt_resize(vt, 16, 3));
+	CHECK(vt->hist_count == 0 && vt->c.x == 1 && vt->c.y == 2);
+	CHECK_STR(row(vt, 0), "abcdefgh12");
+	CHECK_STR(row(vt, 1), "xy");
+	vt_free(vt);
+
+	/* One further up moves with its text, and nothing comes back from the
+	 * history: what was cleared stays so. A taller window takes lines back as
+	 * it does without another width. */
+	vt = mk(10, 4, 10);
+	w(vt, "1\r\n2\r\n3\r\n4\r\n5\r\n6\033[2J\033[HabcdefghijKL");
+	CHECK(vt->hist_count == 2 && vt->c.y == 1);
+	CHECK(vt_resize(vt, 20, 4));
+	CHECK_STR(row(vt, 0), "abcdefghijKL");
+	CHECK_STR(row(vt, 1), "");
+	CHECK(vt->hist_count == 2 && vt->c.x == 12 && vt->c.y == 0);
+	CHECK(vt_resize(vt, 5, 4));
+	CHECK_STR(row(vt, 0), "abcde");
+	CHECK_STR(row(vt, 2), "KL");
+	CHECK(vt->hist_count == 2 && vt->c.x == 2 && vt->c.y == 2);
+	CHECK(vt_resize(vt, 7, 5));
+	CHECK_STR(row(vt, 0), "2");
+	CHECK_STR(row(vt, 1), "abcdefg");
+	CHECK_STR(row(vt, 2), "hijKL");
+	CHECK(vt->hist_count == 1 && vt->c.x == 5 && vt->c.y == 2);
+	vt_free(vt);
+
+	/* what no longer fits below the cursor is lost, as in a shorter window */
+	vt = mk(10, 3, 10);
+	w(vt, "0123456789abcde\033[1;4H");
+	CHECK(vt_resize(vt, 4, 3));
+	CHECK_STR(row(vt, 0), "0123");
+	CHECK_STR(row(vt, 2), "89ab");
+	CHECK(vt->c.x == 3 && vt->c.y == 0 && vt->hist_count == 0);
+	CHECK(vt_resize(vt, 10, 3));
+	CHECK_STR(row(vt, 0), "0123456789");
+	CHECK_STR(row(vt, 1), "ab");
+	vt_free(vt);
+
+	/* A wrap that was pending is the place behind the text: in a wider row the
+	 * cursor is there, and the next character goes beside the last. */
+	vt = mk(10, 3, 10);
+	w(vt, "0123456789");
+	CHECK(vt->c.x == 9 && vt->c.wrapnext);
+	CHECK(vt_resize(vt, 20, 3));
+	CHECK(vt->c.x == 10 && vt->c.y == 0 && !vt->c.wrapnext);
+	w(vt, "X");
+	CHECK_STR(row(vt, 0), "0123456789X");
+	vt_free(vt);
+	/* and a cursor behind text that now fills its row waits there to wrap,
+	 * rather than write over the last character; not without autowrap */
+	vt = mk(20, 3, 10);
+	w(vt, "0123456789");
+	CHECK(vt_resize(vt, 10, 3));
+	CHECK(vt->c.x == 9 && vt->c.y == 0 && vt->c.wrapnext);
+	w(vt, "X");
+	CHECK_STR(row(vt, 0), "0123456789");
+	CHECK_STR(row(vt, 1), "X");
+	CHECK(vt_abs_wraps(vt, 0) == 10);
+	vt_free(vt);
+	vt = mk(20, 3, 10);
+	w(vt, "\033[?7l0123456789");
+	CHECK(vt_resize(vt, 10, 3));
+	CHECK(vt->c.x == 9 && !vt->c.wrapnext);
+	vt_free(vt);
+	/* a cursor beyond the text keeps its distance from it, up to the last
+	 * column, and with no wrap pending there */
+	vt = mk(20, 2, 10);
+	w(vt, "$ ");
+	CHECK(vt_resize(vt, 10, 2));
+	CHECK(vt->c.x == 2 && vt->c.y == 0);
+	vt_free(vt);
+	vt = mk(20, 2, 10);
+	w(vt, "ab\033[1;18H");
+	CHECK(vt_resize(vt, 12, 2));
+	CHECK(vt->c.x == 11 && !vt->c.wrapnext);
+	CHECK(vt_resize(vt, 30, 2));
+	CHECK(vt->c.x == 11);
+	vt_free(vt);
+	/* on a cell of the text, it stays on that cell */
+	vt = mk(10, 4, 10);
+	w(vt, "0123456789abcde\033[2;3H");
+	CHECK(vt->pri[1]->c[2].cp == 'c');
+	CHECK(vt_resize(vt, 4, 4));
+	CHECK(vt->c.y == 3 && vt->c.x == 0 && vt->pri[3]->c[0].cp == 'c');
+	CHECK(vt_resize(vt, 30, 4));
+	CHECK(vt->c.y == 0 && vt->c.x == 12 && vt->pri[0]->c[12].cp == 'c');
+	vt_free(vt);
+
+	/* on the cell a wide glyph did not fit in, which is no text and gone in
+	 * another width, it is on the last cell before it */
+	vt = mk(10, 3, 10);
+	w(vt, "abcdefghi\xe6\xbc\xa2X\033[1;10H");
+	CHECK(vt->c.x == 9 && vt->c.y == 0 && vt->pri[0]->wrap == 9);
+	CHECK(vt_resize(vt, 20, 3));
+	CHECK(vt->c.x == 8 && vt->c.y == 0 && vt->pri[0]->c[8].cp == 'i');
+	CHECK(vt_resize(vt, 6, 3));
+	CHECK(vt->c.x == 2 && vt->c.y == 1 && vt->pri[1]->c[2].cp == 'i');
+	vt_free(vt);
+
+	/* Wide glyphs stay whole: one that does not fit goes to the next row, and
+	 * the cell left over is not the line's. A window one column wide has no
+	 * room for them, as it has none when they are written. */
+	vt = mk(9, 4, 10);
+	w(vt, "\xe6\x97\xa5\xe6\x9c\xac\xe8\xaa\x9e\xe6\x97\xa5\xe6\x9c\xac\xe8\xaa\x9e"
+	      "\xe6\x97\xa5\xe6\x9c\xac\xe8\xaa\x9eX");
+	CHECK(vt->pri[0]->wrap == 8 && vt->pri[1]->wrap == 8 && vt->pri[2]->used == 3);
+	CHECK(vt_resize(vt, 8, 4));
+	CHECK(vt->pri[0]->wrap == 8 && vt->pri[0]->used == 8 && vt->pri[2]->used == 3);
+	CHECK(vt_resize(vt, 7, 4));
+	CHECK(vt->pri[0]->wrap == 6 && vt->pri[0]->used == 6 && vt->pri[0]->c[6].cp == ' ');
+	CHECK((vt->pri[0]->c[4].attr & ATTR_WIDE) && (vt->pri[0]->c[5].attr & ATTR_WDUMMY));
+	CHECK(vt->pri[2]->wrap == 0 && vt->pri[2]->c[6].cp == 'X');
+	CHECK(vt->c.y == 2 && vt->c.x == 6 && vt->c.wrapnext);
+	CHECK(vt_resize(vt, 19, 4));
+	CHECK(vt->pri[0]->used == 19 && vt->pri[0]->wrap == 0 && vt->pri[0]->c[18].cp == 'X');
+	CHECK(vt_resize(vt, 1, 4));
+	CHECK_STR(row(vt, 0), "X");
+	CHECK(vt->c.x == 0 && vt->c.y == 0 && vt->c.wrapnext);
+	vt_free(vt);
+
+	/* colours and attributes go with their cells, an empty line stays one */
+	vt = mk(6, 4, 10);
+	w(vt, "ab\033[41;4mcdefgh\033[m\r\n\r\nx");
+	CHECK(vt_resize(vt, 3, 6));
+	CHECK_STR(row(vt, 0), "abc");
+	CHECK_STR(row(vt, 2), "gh");
+	CHECK_STR(row(vt, 3), "");
+	CHECK_STR(row(vt, 4), "x");
+	CHECK(vt->pri[0]->c[1].bg == COL_DEFAULT_BG && vt->pri[0]->c[2].bg == 1 &&
+	      (vt->pri[2]->c[1].attr & ATTR_UNDERLINE) && vt->pri[2]->c[1].bg == 1);
+	vt_free(vt);
+
+	/* a screen that was cleared does not go on from the history line above it,
+	 * and one that was not does */
+	vt = mk(10, 2, 10);
+	w(vt, "0123456789abcdefghijKLM");
+	CHECK(vt_resize(vt, 30, 2));
+	CHECK_STR(row(vt, 0), "0123456789abcdefghijKLM");
+	CHECK(vt->hist_count == 0 && vt->c.x == 23 && vt->c.y == 0);
+	vt_free(vt);
+	vt = mk(10, 2, 10);
+	w(vt, "0123456789abcdefghijKLM\033[2J\033[Hxyz");
+	CHECK(vt_resize(vt, 30, 2));
+	CHECK_STR(hist_line(vt, 1), "0123456789");
+	CHECK_STR(row(vt, 0), "xyz");
+	CHECK(vt->hist_count == 1 && vt->c.x == 3 && vt->c.y == 0);
+	vt_free(vt);
+
+	/* The alternate screen is cut, not laid out anew: its program draws it
+	 * again. The main screen behind it is, by the row its cursor left, and
+	 * 1049 brings the cursor back to its text. */
+	vt = mk(10, 3, 10);
+	w(vt, "0123456789abcde\033[?1049h\033[HALTSCREEN!\r\nrow two");
+	CHECK(vt_resize(vt, 5, 3));
+	CHECK_STR(row(vt, 0), "ALTSC");
+	CHECK_STR(row(vt, 1), "row t");
+	CHECK(vt->alt[0]->wrap == 0 && vt->pri_y == 2 && vt->hist_count == 0);
+	w(vt, "\033[?1049l");
+	CHECK_STR(row(vt, 0), "01234");
+	CHECK_STR(row(vt, 2), "abcde");
+	CHECK(vt->c.x == 4 && vt->c.y == 2 && vt->c.wrapnext);
+	vt_free(vt);
+	vt = mk(10, 3, 10);
+	w(vt, "0123456789abcdefghijklmnopqrstuvwxyz\033[?47h");
+	CHECK(vt->hist_count == 1 && vt->pri_x == 6 && vt->pri_y == 2);
+	CHECK(vt_resize(vt, 20, 3));
+	CHECK(vt->hist_count == 0 && vt->pri_x == 16 && vt->pri_y == 1);
+	CHECK(vt_resize(vt, 4, 3));
+	CHECK(vt->hist_count == 6 && vt->pri_x == 4 && vt->pri_y == 2);
+	w(vt, "\033[?47l");
+	CHECK_STR(hist_line(vt, 6), "0123");
+	CHECK_STR(row(vt, 2), "wxyz");
+	vt_free(vt);
+
+	/* a history too short for the rows keeps the newest, and the lines count
+	 * on past those that fell off; none at all keeps none */
+	vt = mk(10, 2, 3);
+	w(vt, "0123456789abcdefghijKLMNOPQRST");
+	CHECK(vt->hist_count == 1 && vt_abs_first(vt) == 0);
+	CHECK(vt_resize(vt, 5, 2));
+	CHECK(vt->hist_count == 3 && vt->scrolled == 4 && vt_abs_first(vt) == 1);
+	CHECK_STR(hist_line(vt, 3), "56789");
+	CHECK_STR(hist_line(vt, 1), "fghij");
+	CHECK_STR(row(vt, 0), "KLMNO");
+	CHECK(!vt_abs_line(vt, 0, &len));
+	w(vt, "\r\nu");
+	CHECK(vt->hist_count == 3 && vt->scrolled == 5);
+	CHECK_STR(hist_line(vt, 1), "KLMNO");
+	CHECK_STR(hist_line(vt, 3), "abcde");
+	vt_free(vt);
+	vt = mk(10, 2, 0);
+	w(vt, "0123456789abcdefghijKL");
+	CHECK(vt_resize(vt, 5, 2));
+	CHECK_STR(row(vt, 0), "fghij");
+	CHECK_STR(row(vt, 1), "KL");
+	CHECK(vt->hist_count == 0 && vt->scrolled == 0 && vt->c.x == 2 && vt->c.y == 1);
+	vt_free(vt);
+
+	/* Narrower or wider and back leaves a full screen and its history as they
+	 * were, cell for cell, against a second terminal that was never resized. */
+	fuzz_state = 0x243f6a8885a308d3ULL;
+	int bad = 0;
+	for (int round = 0; round < 400; round++) {
+		int cols = 2 + (int)(fuzz_rand() % 30), rows = 2 + (int)(fuzz_rand() % 8);
+		struct vt *a = mk(cols, rows, 4096), *b = mk(cols, rows, 4096);
+		for (int i = rows + (int)(fuzz_rand() % 20); i > 0; i--) {
+			char s[REFLOW_LINE];
+			reflow_line(s, cols);
+			w(a, s);
+			w(b, s);
+		}
+		/* the cursor's row blank, not filled with the colour the last
+		 * line left: text below the cursor may not fit, and is lost then */
+		w(a, "\033[m\r\n");
+		w(b, "\033[m\r\n");
+		int other = 2 + (int)(fuzz_rand() % 60);
+		if (!vt_resize(b, other, rows) || !vt_resize(b, cols, rows) || fuzz_broken(b)) {
+			bad++;
+		} else {
+			bad += a->c.x != b->c.x || a->c.y != b->c.y || a->hist_count != b->hist_count ||
+			       a->scrolled != b->scrolled;
+			for (int r = 0; r < rows; r++)
+				bad += !fuzz_rows(a->pri[r], b->pri[r], cols);
+			for (int64_t i = vt_abs_first(a); i < (int64_t)a->scrolled; i++) {
+				int la, lb;
+				const struct cell *ca = vt_abs_line(a, i, &la), *cb = vt_abs_line(b, i, &lb);
+				bad += !ca || !cb || la != lb || !fuzz_cells(ca, cb, la) ||
+				       vt_abs_wraps(a, i) != vt_abs_wraps(b, i);
+			}
+		}
+		vt_free(a);
+		vt_free(b);
+	}
+	CHECK(bad == 0);
+
+	/* Through any run of sizes the text stays what it was: every cell, its
+	 * colours and where its line ends, with the cursor behind it all, on the
+	 * main screen and behind the alternate one. */
+	enum { TEXT_MAX = 1 << 16 };
+	static uint32_t ta[TEXT_MAX], tb[TEXT_MAX];
+	bad = 0;
+	for (int round = 0; round < 300; round++) {
+		int cols = 2 + (int)(fuzz_rand() % 30), rows = 1 + (int)(fuzz_rand() % 8);
+		struct vt *a = mk(cols, rows, 4096), *b = mk(cols, rows, 4096);
+		for (int i = (int)(fuzz_rand() % 30); i > 0; i--) {
+			char s[REFLOW_LINE];
+			reflow_line(s, cols);
+			w(a, s);
+			w(b, s);
+		}
+		w(a, "\033[m\r\n");
+		w(b, "\033[m\r\n");
+		size_t na = reflow_text(a, ta, TEXT_MAX);
+		if (round % 3 == 0)
+			w(b, "\033[?1049h");
+		for (int i = 1 + (int)(fuzz_rand() % 6); i > 0; i--) {
+			bool ok = vt_resize(b, 2 + (int)(fuzz_rand() % 70), 1 + (int)(fuzz_rand() % 12));
+			size_t nb = reflow_text(b, tb, TEXT_MAX);
+			bad += !ok || fuzz_broken(b) || na != nb || memcmp(ta, tb, na * sizeof *ta);
+			if (!(b->mode & MODE_ALTSCREEN))
+				bad += b->c.x != 0 || b->c.wrapnext;
 		}
 		vt_free(a);
 		vt_free(b);
@@ -1838,12 +2197,25 @@ static void test_wrap_row(void)
 	CHECK(vt->pri[0]->c[9].cp == ' ' && !vt->pri[0]->c[9].attr && vt_abs_wraps(vt, 0) == 10);
 	vt_free(vt);
 
-	/* a blank before the wrap, where a wide glyph did not fit, is the line's
-	 * in the history too */
+	/* The cell a wide glyph did not fit in is not the line's, which goes on
+	 * after the nine before it, in the history too; put in before it, it moves
+	 * along as the wrap does. With anything but a blank there, as a colored
+	 * one, the cell is the line's as before. */
 	vt = mk(10, 2, 5);
-	w(vt, "abcdefghi\xe6\xbc\xa2\r\n");
+	w(vt, "abcdefghi\xe6\xbc\xa2");
+	CHECK(vt->pri[0]->wrap == 9 && vt->pri[0]->used == 9 && vt_abs_wraps(vt, 0) == 9);
+	w(vt, "\r\n");
 	l = vt_abs_line(vt, vt_abs_first(vt), &len);
-	CHECK(l && len == 10 && l[9].cp == ' ' && vt_abs_wraps(vt, vt_abs_first(vt)) == 10);
+	CHECK(l && len == 9 && l[8].cp == 'i' && vt_abs_wraps(vt, vt_abs_first(vt)) == 9);
+	vt_free(vt);
+	vt = mk(10, 2, 5);
+	w(vt, "abcdefghi\xe6\xbc\xa2\033[1;1H\033[@");
+	CHECK_STR(row(vt, 0), " abcdefghi");
+	CHECK(vt_abs_wraps(vt, 0) == 10);
+	vt_free(vt);
+	vt = mk(10, 2, 5);
+	w(vt, "\033[41m\033[K\033[mabcdefghi\xe6\xbc\xa2");
+	CHECK(vt->pri[0]->wrap == 10 && vt_abs_wraps(vt, 0) == 10);
 	vt_free(vt);
 
 	static const struct { const char *seq; int wraps; } cases[] = {
@@ -1878,11 +2250,12 @@ static void test_wrap_row(void)
 		vt_free(vt);
 	}
 
-	/* a wider window: the line still ends after 10 cells, 12 with two put in
-	 * before them; blanks put in after them change nothing, text there ends
-	 * it, and a window narrower than the line cuts it */
+	/* A wider window on the alternate screen, which is not laid out anew: the
+	 * line still ends after 10 cells, 12 with two put in before them; blanks
+	 * put in after them change nothing, text there ends it, and a window
+	 * narrower than the line cuts it */
 	vt = mk(10, 4, 0);
-	w(vt, "abcdefghijKLM");
+	w(vt, "\033[?47habcdefghijKLM");
 	CHECK(vt_resize(vt, 20, 4) && vt_abs_wraps(vt, 0) == 10);
 	w(vt, "\033[1;13H\033[P");
 	CHECK(vt_abs_wraps(vt, 0) == 10);
@@ -1911,28 +2284,18 @@ static void test_wrap_row(void)
 	/* the first cell after the wrap is not the line's: written, the line ends
 	 * in its row, and erased again it goes on as before */
 	vt = mk(10, 4, 0);
-	w(vt, "abcdefghijKLM");
+	w(vt, "\033[?47habcdefghijKLM");
 	CHECK(vt_resize(vt, 20, 4));
 	w(vt, "\033[1;11HZ");
-	CHECK(vt->pri[0]->wrap == 10 && vt_abs_wraps(vt, 0) == 0);
+	CHECK(vt->alt[0]->wrap == 10 && vt_abs_wraps(vt, 0) == 0);
 	w(vt, "\033[1;11H\033[X");
 	CHECK(vt_abs_wraps(vt, 0) == 10);
-	vt_free(vt);
-
-	/* in the history a wrap left in the middle by a wider window, with text
-	 * after it: the line ends in its row there too */
-	vt = mk(10, 2, 5);
-	w(vt, "abcdefghijK");
-	CHECK(vt_resize(vt, 20, 2));
-	w(vt, "\033[1;16HX\033[2;1H\r\n\r\n");
-	l = vt_abs_line(vt, vt_abs_first(vt), &len);
-	CHECK(l && len == 16 && l[15].cp == 'X' && vt_abs_wraps(vt, vt_abs_first(vt)) == 0);
 	vt_free(vt);
 
 	/* a row has one wrap: wrapped, made wider and wrapped again at the new
 	 * end, a narrower window cuts that off, and the first is not back */
 	vt = mk(4, 3, 0);
-	w(vt, "abcdEF");
+	w(vt, "\033[?47habcdEF");
 	CHECK(vt_resize(vt, 8, 3) && vt_abs_wraps(vt, 0) == 4);
 	w(vt, "\033[1;7Hxyz");
 	CHECK(vt_abs_wraps(vt, 0) == 8);
@@ -2133,6 +2496,39 @@ static void test_alloc_failures(void)
 			break;
 	}
 	CHECK(fails > 0);
+	/* and for another width, where the history is made anew as well: every
+	 * row of it and of the screen, and the terminal is as it was */
+	fails = 0;
+	for (long n = 0;; n++) {
+		struct vt *vt = mk(10, 2, 10);
+		w(vt, "0123456789abcdefghijKLM\r\nxy");
+		injected = false;
+		countdown = n;
+		bool ok = vt_resize(vt, 5, 3);
+		countdown = -1;
+		if (ok) {
+			CHECK(!injected && vt->cols == 5 && vt->rows == 3 && vt->hist_count == 3);
+			CHECK(vt->c.x == 2 && vt->c.y == 2 && vt->scrolled == 3);
+			CHECK_STR(hist_line(vt, 3), "01234");
+			CHECK_STR(row(vt, 0), "fghij");
+			CHECK_STR(row(vt, 2), "xy");
+		} else {
+			fails++;
+			CHECK(vt->cols == 10 && vt->rows == 2 && vt->hist_count == 2 && vt->scrolled == 2);
+			CHECK(vt->c.x == 2 && vt->c.y == 1);
+			CHECK_STR(hist_line(vt, 2), "0123456789");
+			CHECK(vt_abs_wraps(vt, 0) == 10 && vt_abs_wraps(vt, 1) == 10);
+			CHECK_STR(row(vt, 0), "KLM");
+			CHECK_STR(row(vt, 1), "xy");
+			w(vt, "\r\nmore");
+			CHECK_STR(row(vt, 1), "more");
+			CHECK(vt->hist_count == 3);
+		}
+		vt_free(vt);
+		if (!injected)
+			break;
+	}
+	CHECK(fails > 5);
 	/* a history line that cannot be kept goes in empty: it scrolled off all the
 	 * same, so the numbers of the lines after it stay */
 	{
@@ -2201,6 +2597,7 @@ int main(void)
 	test_unsupported_vt100();
 	test_resize();
 	test_resize_back();
+	test_reflow();
 	test_origin();
 	test_xterm_details();
 	test_ascii_runs();

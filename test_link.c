@@ -277,21 +277,40 @@ static void test_wrap(void)
 	w(vt, "\033[3;1H\033[J");
 	AT(vt, 0, 3, "http://abcdefghijklmnopq");
 	vt_free(vt);
-	/* a window grown wider: the flag stays where the line ended, blanks after
-	 * it, on the screen as in the history */
+	/* a window grown wider: the rows of the main screen are laid out anew, on
+	 * the screen as in the history */
 	vt = mk(10, 4, 10);
 	w(vt, "http://example.com/abcdef");
 	CHECK(vt_resize(vt, 20, 4));
 	AT(vt, 0, 2, "http://example.com/abcdef");
+	AT(vt, 0, 12, "http://example.com/abcdef");
 	AT(vt, 1, 3, "http://example.com/abcdef");
-	AT(vt, 2, 4, "http://example.com/abcdef");
-	AT(vt, 0, 12, NULL); /* the blanks after the wrap */
+	AT(vt, 1, 5, NULL);
+	AT(vt, 2, 4, NULL);
 	w(vt, "\r\n\r\n\r\n\r\n");
 	struct link lw;
 	char *gw = NULL;
 	CHECK(link_at(vt, vt_abs_first(vt) + 1, 3, &lw, &gw) && gw &&
 	      !strcmp(gw, "http://example.com/abcdef"));
 	free(gw);
+	vt_free(vt);
+	/* on the alternate screen, which is not, the flag stays where the line
+	 * ended, blanks after it */
+	vt = mk(10, 4, 10);
+	w(vt, "\033[?47hhttp://example.com/abcdef");
+	CHECK(vt_resize(vt, 20, 4));
+	AT(vt, 0, 2, "http://example.com/abcdef");
+	AT(vt, 1, 3, "http://example.com/abcdef");
+	AT(vt, 2, 4, "http://example.com/abcdef");
+	AT(vt, 0, 12, NULL); /* the blanks after the wrap */
+	vt_free(vt);
+	/* a wide glyph that did not fit at the end of a row does not end the URL:
+	 * the cell left over is not in it */
+	vt = mk(10, 4, 10);
+	w(vt, "http://a/\xe6\xbc\xa2\xe6\xbc\xa2 x");
+	AT(vt, 0, 2, "http://a/\xe6\xbc\xa2\xe6\xbc\xa2");
+	AT(vt, 1, 2, "http://a/\xe6\xbc\xa2\xe6\xbc\xa2");
+	AT(vt, 0, 9, NULL);
 	vt_free(vt);
 	/* the alternate screen cleared leaves the main screen's lines as they are */
 	vt = mk(10, 3, 10);

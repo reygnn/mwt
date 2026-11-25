@@ -190,8 +190,8 @@ T 'echo sichtbar'
 expect "the line shows after a row of marks" '.*~\$ echo sichtbar'
 T -k Return
 
-# mwt does not reflow: what no longer fits is cut off and the cursor stays in the
-# last column, so ESC[1K must clear the whole row.
+# Back at 80 columns the zeros are laid out anew, 80 and 20 of them, the cursor
+# behind the last: ESC[1K clears the row it is in up to there, the 20.
 size="$W $H"
 swaymsg -q '[app_id="mwt"] resize set 1000 460'
 for ((i = 0; i < 50; i++)); do [ "$(window_rect)" != "$size" ] && break; sleep 0.1; done
