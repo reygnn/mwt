@@ -1029,14 +1029,16 @@ static void test_opener(void)
 	snprintf(out, sizeof out, "%s/out", dir);
 	snprintf(tmp, sizeof tmp, "%s/tmp", dir);
 	/* stdout on the file for good: a redirection of each command would keep
-	 * the old one on an fd of the shell's while ls looks */
+	 * the old one on an fd of the shell's while ls looks. The signals are
+	 * grep's own, which it has from the shell: bash as sh blocks SIGCHLD and
+	 * ignores SIGQUIT itself while it waits for a command. */
 	snprintf(script, sizeof script,
 		 "o=$(readlink /proc/$$/fd/1); exec >%s; echo \"O=$o\"; "
 		 "echo \"T=${XDG_ACTIVATION_TOKEN-unset} U=$1 N=$#\"; "
 		 "echo \"D=${DESKTOP_STARTUP_ID-unset}\"; "
 		 "echo \"S=$(cut -d' ' -f6 /proc/$$/stat) P=$(cut -d' ' -f4 /proc/$$/stat)\"; "
 		 "ls -m /proc/$$/fd; readlink /proc/$$/fd/0; "
-		 "grep '^Sig\\(Ign\\|Blk\\)' /proc/$$/status; mv %s %s",
+		 "grep '^Sig\\(Ign\\|Blk\\)' /proc/self/status; mv %s %s",
 		 tmp, tmp, out);
 	char *argv[] = { "sh", "-c", script, "opener", "http://a.b/c?d=e&f", NULL };
 
