@@ -337,6 +337,7 @@ def check_rep():
     # a full row wraps as the characters would
     s = Screen(S("rep", ord("y"), COLS + 2))
     eq(s.rows()[:2], ["y" * COLS, "yy"])
+    eq(s.wrap[:2], [COLS, 0])
 
 
 def check_sc_rc():

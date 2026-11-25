@@ -100,7 +100,7 @@ static void touch(struct row *l, int end)
 /* Cells [from, to) of the row are written or erased. With the last one before
  * the wrap among them the line ends in this row, as for a program that fills the
  * last column and then moves the cursor: only put() running into the end of the
- * row makes a line go on. */
+ * row makes a line go on, and shift_right() keeps one that did. */
 static void unwrap(struct row *l, int from, int to)
 {
 	if (from < l->wrap && l->wrap <= to)
@@ -210,8 +210,10 @@ static void split_wide(struct vt *vt, struct row *l, int x)
 /* The row's cells from x on move n to the right, and those pushed past its end
  * are lost; the n cells at x are the caller's to write. A line that went on in
  * the next row still does: what is put in is part of it, and its wrap moves
- * along, to the end of the row at most. Half a wide glyph left in the last
- * column goes. */
+ * along, to the end of the row at most. Not when the cells put in reach the
+ * last one before the wrap: the caller writes them, and that ends the line as
+ * any write there does (unwrap); nor when x is the right half of a wide glyph
+ * that was the last one. Half a wide glyph left in the last column goes. */
 static void shift_right(struct vt *vt, struct row *l, int x, int n)
 {
 	split_wide(vt, l, x);

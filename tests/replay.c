@@ -91,6 +91,12 @@ static const char *grid_problem(const struct vt *vt)
 		return "scroll region outside the screen";
 	if (vt->c.gl < 0 || vt->c.gl > 1)
 		return "GL is neither G0 nor G1";
+	/* a history line wraps within what it has */
+	for (int i = 0; i < vt->hist_count; i++) {
+		int slot = (vt->hist_head - 1 - i + vt->hist_cap) % vt->hist_cap;
+		if (vt->hist_wrap[slot] < 0 || vt->hist_wrap[slot] > vt->hist_len[slot])
+			return "history line wraps past its end";
+	}
 	struct row **screens[2] = { vt->pri, vt->alt };
 	for (int s = 0; s < 2; s++)
 		for (int r = 0; r < vt->rows; r++) {

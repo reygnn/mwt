@@ -101,6 +101,12 @@ static void check(const struct vt *vt)
 		die("GL is neither G0 nor G1", vt);
 	if (vt->view < 0 || vt->view > vt->hist_count)
 		die("view outside the history", vt);
+	/* a history line wraps within what it has */
+	for (int i = 0; i < vt->hist_count; i++) {
+		int slot = (vt->hist_head - 1 - i + vt->hist_cap) % vt->hist_cap;
+		if (vt->hist_wrap[slot] < 0 || vt->hist_wrap[slot] > vt->hist_len[slot])
+			die("history line wraps past its end", vt);
+	}
 	struct row **screens[2] = { vt->pri, vt->alt };
 	for (int s = 0; s < 2; s++)
 		for (int r = 0; r < vt->rows; r++) {

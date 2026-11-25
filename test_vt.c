@@ -1667,6 +1667,36 @@ static void test_wrap_row(void)
 	CHECK(vt_abs_wraps(vt, 0) == 10);
 	vt_free(vt);
 
+	/* in the history a wrap left in the middle by a wider window, with text
+	 * after it: the line ends in its row there too */
+	vt = mk(10, 2, 5);
+	w(vt, "abcdefghijK");
+	CHECK(vt_resize(vt, 20, 2));
+	w(vt, "\033[1;16HX\033[2;1H\r\n\r\n");
+	l = vt_abs_line(vt, vt_abs_first(vt), &len);
+	CHECK(l && len == 16 && l[15].cp == 'X' && vt_abs_wraps(vt, vt_abs_first(vt)) == 0);
+	vt_free(vt);
+
+	/* a row has one wrap: wrapped, made wider and wrapped again at the new
+	 * end, a narrower window cuts that off, and the first is not back */
+	vt = mk(4, 3, 0);
+	w(vt, "abcdEF");
+	CHECK(vt_resize(vt, 8, 3) && vt_abs_wraps(vt, 0) == 4);
+	w(vt, "\033[1;7Hxyz");
+	CHECK(vt_abs_wraps(vt, 0) == 8);
+	CHECK(vt_resize(vt, 6, 3));
+	CHECK_STR(row(vt, 0), "abcd");
+	CHECK(vt_abs_wraps(vt, 0) == 0);
+	vt_free(vt);
+
+	/* blanks erased past what was written leave the count, and rows a taller
+	 * window adds have none written */
+	vt = mk(10, 2, 0);
+	w(vt, "ab\033[1;6H\033[K");
+	CHECK(vt->pri[0]->used == 2);
+	CHECK(vt_resize(vt, 10, 4) && vt->pri[3]->used == 0 && vt->pri[3]->wrap == 0);
+	vt_free(vt);
+
 	/* a wide glyph before the wrap with its left half overwritten: the right
 	 * half, the last cell of the line, goes, and the line ends there */
 	vt = mk(10, 4, 0);
