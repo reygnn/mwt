@@ -161,6 +161,8 @@ static const char *difference(const struct vt *a, const struct vt *b)
 	if (!same_cursor(&a->saved_pri, &b->saved_pri) ||
 	    !same_cursor(&a->saved_alt, &b->saved_alt))
 		return "saved cursor";
+	if ((a->mode & MODE_ALTSCREEN) && a->pri_y != b->pri_y)
+		return "main screen's cursor row";
 	if (a->top != b->top || a->bot != b->bot)
 		return "scroll region";
 	if (a->cursor_style != b->cursor_style)
@@ -213,7 +215,8 @@ static uint64_t fnv_cursor(uint64_t h, const struct vt_cursor *c)
 	return fnv_cells(fnv(h, v, sizeof v), &c->tmpl, 1, 0);
 }
 
-/* what difference() compares, and the replies and bells */
+/* what difference() compares, and the replies and bells; not pri_y, which the
+ * sums predate and only a resize reads */
 static uint64_t state_hash(const struct vt *vt, const struct run *run)
 {
 	uint64_t h = 0xcbf29ce484222325u;

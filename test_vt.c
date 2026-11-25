@@ -1259,6 +1259,73 @@ static void test_resize(void)
 	CHECK_STR(row(vt, 0), "2");
 	CHECK_STR(row(vt, 2), "4");
 	vt_free(vt);
+
+	/* and one saved above it moves up with its line, into the top row when
+	 * that line went into the history */
+	vt = mk(10, 6, 10);
+	w(vt, "1\r\n2\r\n3\0337\r\n4\r\n5\r\n6\033[?47h\033[H");
+	vt_resize(vt, 10, 5);
+	CHECK(vt->hist_count == 1 && vt->saved_pri.y == 1);
+	vt_resize(vt, 10, 2);
+	CHECK(vt->hist_count == 4 && vt->saved_pri.y == 0);
+	vt_free(vt);
+
+	/* the other way round: the alternate screen behind the main one keeps
+	 * the row of the cursor it saved, which moves with it once */
+	vt = mk(10, 6, 10);
+	w(vt, "\033[?47h\033[6;1Hx\0337\033[?47l");
+	vt_resize(vt, 10, 4);
+	CHECK(vt->saved_alt.y == 3 && vt->alt[3]->c[0].cp == 'x');
+	w(vt, "\033[?47h\0338");
+	CHECK(vt->c.y == 3 && vt->c.x == 1);
+	vt_free(vt);
+
+	/* each screen by its own cursor: the alternate one's at the top keeps its
+	 * rows while the main one's at the bottom gives two to the history */
+	vt = mk(10, 6, 10);
+	w(vt, "1\r\n2\r\n3\r\n4\r\n5\r\n6\033[?1049h\033[Ha");
+	vt_resize(vt, 10, 4);
+	CHECK_STR(row(vt, 0), "a");
+	CHECK(vt->c.y == 0 && vt->hist_count == 2);
+	w(vt, "\033[?1049l");
+	CHECK_STR(row(vt, 0), "3");
+	CHECK_STR(row(vt, 3), "6");
+	CHECK(vt->c.y == 3);
+	vt_free(vt);
+	/* and the alternate one behind, by the cursor it saved */
+	vt = mk(10, 6, 10);
+	w(vt, "\033[?47h\033[2;1Hx\0337\033[?47l\033[6;1H");
+	vt_resize(vt, 10, 4);
+	CHECK(vt->saved_alt.y == 1 && vt->alt[1]->c[0].cp == 'x' && vt->hist_count == 2);
+	vt_free(vt);
+	/* shown, its saved cursor moves up with its rows */
+	vt = mk(10, 6, 10);
+	w(vt, "\033[?47h\033[4;1Hy\0337\033[6;1H");
+	vt_resize(vt, 10, 4);
+	CHECK(vt->saved_alt.y == 1 && vt->c.y == 3);
+	w(vt, "\0338");
+	CHECK(vt->c.y == 1 && vt->c.x == 1);
+	vt_free(vt);
+
+	/* fewer columns alone move nothing up; a history too small, or none,
+	 * takes what it can and the rows are the same */
+	vt = mk(10, 6, 10);
+	w(vt, "1\r\n2\r\n3\r\n4\r\n5\r\n6\033[?47h\033[H");
+	vt_resize(vt, 5, 6);
+	CHECK(vt->hist_count == 0 && vt->pri_y == 5);
+	vt_free(vt);
+	for (int cap = 0; cap < 2; cap++) {
+		vt = mk(10, 6, cap);
+		w(vt, "1\r\n2\r\n3\r\n4\r\n5\r\n6\033[?47h\033[H");
+		vt_resize(vt, 10, 2);
+		CHECK(vt->hist_count == cap && vt->pri_y == 1);
+		if (cap)
+			CHECK_STR(hist_line(vt, 1), "4");
+		w(vt, "\033[?47l");
+		CHECK_STR(row(vt, 0), "5");
+		CHECK_STR(row(vt, 1), "6");
+		vt_free(vt);
+	}
 }
 
 static void test_index_and_charsets(void)
@@ -1865,6 +1932,28 @@ static void test_alloc_failures(void)
 			w(vt, "\r\nmore");
 			CHECK_STR(row(vt, 3), "more");
 			CHECK(vt->hist_count == 1);
+		}
+		vt_free(vt);
+		if (!injected)
+			break;
+	}
+	CHECK(fails > 0);
+	/* the same behind the alternate screen: the main screen's row and its
+	 * saved cursor are as they were */
+	fails = 0;
+	for (long n = 0;; n++) {
+		struct vt *vt = mk(10, 6, 10);
+		w(vt, "1\r\n2\r\n3\0337\r\n4\r\n5\r\n6\033[?47h\033[2;3H");
+		injected = false;
+		countdown = n;
+		bool ok = vt_resize(vt, 10, 3);
+		countdown = -1;
+		if (ok) {
+			CHECK(vt->rows == 3 && vt->pri_y == 2 && vt->saved_pri.y == 0);
+		} else {
+			fails++;
+			CHECK(vt->rows == 6 && vt->pri_y == 5 && vt->saved_pri.y == 2);
+			CHECK(vt->c.y == 1 && vt->c.x == 2 && vt->hist_count == 0);
 		}
 		vt_free(vt);
 		if (!injected)

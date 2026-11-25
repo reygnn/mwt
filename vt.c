@@ -643,8 +643,7 @@ bool vt_resize(struct vt *vt, int cols, int rows)
 	bool alt = vt->mode & MODE_ALTSCREEN;
 	/* The main screen's cursor row: behind the alternate screen, where it was
 	 * when that one took over. Not saved_pri: 47 and 1047 save no cursor, and
-	 * it holds what DECSC last left, the top row if nothing; the main screen
-	 * then lost its last lines, the ones with the prompt. */
+	 * it holds what DECSC last left, the top row if nothing. */
 	int *py = alt ? &vt->pri_y : &vt->c.y;
 	struct vt_cursor *ac = alt ? &vt->c : &vt->saved_alt;
 
@@ -673,7 +672,8 @@ bool vt_resize(struct vt *vt, int cols, int rows)
 	vt->line = alt ? vt->alt : vt->pri;
 	*py -= pshift;
 	ac->y -= ashift;
-	/* a saved cursor moves with its screen, to the top row at most */
+	/* a saved cursor moves with its screen, to the top row at most; behind
+	 * the main screen ac is the alternate one's and has moved */
 	vt->saved_pri.y -= MIN(pshift, vt->saved_pri.y);
 	if (alt)
 		vt->saved_alt.y -= MIN(ashift, vt->saved_alt.y);

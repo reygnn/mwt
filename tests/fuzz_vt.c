@@ -25,10 +25,12 @@
  *   fix vt.c, then copy the input to tests/fuzz-regress/ under a name that
  *   says what it was, e.g. decstbm-bottom-not-clamped
  *
- * The first four there come from bugs planted on purpose (parser state lost
+ * The first five there come from bugs planted on purpose (parser state lost
  * between writes, DECSTBM bottom not clamped, OSC 4 index not checked, ICH not
- * raising the row's count of written cells), each caught by its file. They depend on how this harness reads an input: change
- * the header or the chunking, and they may no longer mean what they meant. */
+ * raising the row's count of written cells, the main screen's cursor row not
+ * moved by a resize behind the alternate screen), each caught by its file. They
+ * depend on how this harness reads an input: change the header or the chunking,
+ * and they may no longer mean what they meant. */
 #define _XOPEN_SOURCE 700
 #include "vt.h"
 
