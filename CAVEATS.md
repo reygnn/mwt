@@ -53,6 +53,10 @@ that ended further up moves with its rows, and nothing comes back from the histo
 a screen that was erased (`CSI 2 J`) stays so. What no longer fits below the cursor is
 lost, once the cursor's row is the first: the cursor stays on the screen.
 
+Narrower, the same text takes more rows. Where the history is full, its oldest lines
+fall off its far end for them, and a wider window does not bring them back: narrower
+and wider again can leave less history than before.
+
 A shorter window puts the lines above the cursor's that no longer fit into the
 history, and cuts off what is below; a taller one takes the newest lines of the history
 back onto the screen, as xterm does, also above a screen that was erased while its

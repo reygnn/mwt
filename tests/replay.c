@@ -161,8 +161,8 @@ static const char *difference(const struct vt *a, const struct vt *b)
 	if (!same_cursor(&a->saved_pri, &b->saved_pri) ||
 	    !same_cursor(&a->saved_alt, &b->saved_alt))
 		return "saved cursor";
-	if ((a->mode & MODE_ALTSCREEN) && a->pri_y != b->pri_y)
-		return "main screen's cursor row";
+	if ((a->mode & MODE_ALTSCREEN) && (a->pri_x != b->pri_x || a->pri_y != b->pri_y))
+		return "main screen's cursor behind the alternate one";
 	if (a->top != b->top || a->bot != b->bot)
 		return "scroll region";
 	if (a->cursor_style != b->cursor_style)

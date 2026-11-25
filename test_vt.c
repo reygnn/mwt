@@ -1832,6 +1832,68 @@ static void test_reflow(void)
 		vt_free(b);
 	}
 	CHECK(bad == 0);
+
+	/* blanks written at the end of a line are no text: narrower, they take no
+	 * rows of their own */
+	vt = mk(10, 4, 10);
+	w(vt, "ab        \r\ncd");
+	CHECK(vt_resize(vt, 4, 4));
+	CHECK_STR(row(vt, 0), "ab");
+	CHECK_STR(row(vt, 1), "cd");
+	vt_free(vt);
+
+	/* the cell a wide glyph did not fit in, written since: text, and the line
+	 * ends in its row, the glyph a line of its own */
+	vt = mk(10, 4, 10);
+	w(vt, "abcdefghi\xe6\xbc\xa2\033[1;10HZ");
+	CHECK(vt->pri[0]->wrap == 9 && vt_abs_wraps(vt, 0) == 0);
+	CHECK(vt_resize(vt, 20, 4));
+	CHECK_STR(row(vt, 0), "abcdefghiZ");
+	CHECK_STR(row(vt, 1), "\xe6\xbc\xa2");
+	vt_free(vt);
+
+	/* a cursor further behind the text than the new width goes: the last
+	 * column, with no wrap pending, which is for the one right behind it */
+	vt = mk(10, 3, 10);
+	w(vt, "abc\033[2C");
+	CHECK(vt_resize(vt, 5, 3));
+	CHECK(vt->c.x == 4 && vt->c.y == 0 && !vt->c.wrapnext);
+	vt_free(vt);
+
+	/* the saved cursor as the cursor: a wrap pending is the place behind its
+	 * cell, and right behind a row its text now fills it is pending */
+	vt = mk(5, 3, 10);
+	w(vt, "abcde\0337\r\nxy");
+	CHECK(vt_resize(vt, 8, 3));
+	w(vt, "\0338");
+	CHECK(vt->c.x == 5 && vt->c.y == 0 && !vt->c.wrapnext);
+	vt_free(vt);
+	vt = mk(8, 3, 10);
+	w(vt, "abcde\0337\r\nxy");
+	CHECK(vt_resize(vt, 5, 3));
+	w(vt, "\0338");
+	CHECK(vt->c.x == 4 && vt->c.y == 0 && vt->c.wrapnext);
+	vt_free(vt);
+	/* not when its text is no longer on the screen: the nearest row, and
+	 * nothing pending there */
+	vt = mk(8, 4, 10);
+	w(vt, "abcd\0337\r\nb\r\nc\r\nd");
+	CHECK(vt_resize(vt, 4, 2));
+	CHECK_STR(row(vt, 0), "c");
+	w(vt, "\0338");
+	CHECK(vt->c.x == 3 && vt->c.y == 0 && !vt->c.wrapnext);
+	vt_free(vt);
+
+	/* a history that has lost lines at its far end: the lines count on from
+	 * where they did */
+	vt = mk(10, 2, 2);
+	w(vt, "1\r\n2\r\n3\r\n4\r\n5\r\n6");
+	CHECK(vt->scrolled == 4 && vt_abs_first(vt) == 2);
+	CHECK(vt_resize(vt, 5, 2));
+	CHECK(vt->scrolled == 4 && vt_abs_first(vt) == 2 && vt->hist_count == 2);
+	CHECK_STR(hist_line(vt, 1), "4");
+	CHECK_STR(row(vt, 1), "6");
+	vt_free(vt);
 }
 
 static void test_index_and_charsets(void)
