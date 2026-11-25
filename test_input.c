@@ -63,9 +63,12 @@ struct kb {
 	struct xkb_state *st;
 };
 
+/* numpad:microsoft: Shift takes NumLock off the keypad, which xkeyboard-config
+ * 2.49 no longer does by itself; older ones know the option too */
 static struct kb kb_new(const char *layout, const char *variant)
 {
-	struct xkb_rule_names names = { .layout = layout, .variant = variant };
+	struct xkb_rule_names names = { .layout = layout, .variant = variant,
+					.options = "numpad:microsoft" };
 	struct kb k = { xkb_keymap_new_from_names(ctx, &names, XKB_KEYMAP_COMPILE_NO_FLAGS),
 			NULL };
 	if (!k.km) {
