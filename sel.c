@@ -22,8 +22,7 @@ static int cell_class(const struct vt *vt, int64_t abs, int col)
 	const struct cell *l = vt_abs_line(vt, abs, &len);
 	if (l && col > 0 && col < len && (l[col].attr & ATTR_WDUMMY))
 		col--;
-	/* a blank with a mark on it is a mark shown by itself, not a blank */
-	if (!l || col >= len || ((l[col].cp == ' ' || l[col].cp == 0) && !l[col].ext))
+	if (!l || col >= len || l[col].cp == ' ' || l[col].cp == 0)
 		return 0;
 	return is_word(l[col].cp) ? 1 : 2;
 }
@@ -86,17 +85,10 @@ char *sel_text(const struct vt *vt, const struct sel *s)
 		if (c0 > 0 && c0 < n && (l[c0].attr & ATTR_WDUMMY))
 			c0--;
 		size_t start = len;
-		for (int c = c0; c <= c1; c++) {
-			if (l[c].attr & ATTR_WDUMMY)
-				continue;
-			if (!put_utf8(&buf, &len, &cap, l[c].cp ? l[c].cp : ' '))
+		for (int c = c0; c <= c1; c++)
+			if (!(l[c].attr & ATTR_WDUMMY) &&
+			    !put_utf8(&buf, &len, &cap, l[c].cp ? l[c].cp : ' '))
 				goto nomem;
-			/* and the marks on it, which are not drawn */
-			const uint32_t *ext;
-			for (int k = 0, n = vt_cell_ext(vt, &l[c], &ext); k < n; k++)
-				if (!put_utf8(&buf, &len, &cap, ext[k]))
-					goto nomem;
-		}
 		if (!wrapped) {
 			while (len > start && buf[len - 1] == ' ')
 				len--;
@@ -176,7 +168,7 @@ bool sel_all(const struct vt *vt, struct sel *s)
 		int n;
 		const struct cell *l = vt_abs_line(vt, a, &n);
 		for (int c = 0; l && c < n; c++) {
-			if ((l[c].cp == ' ' || l[c].cp == 0) && !l[c].ext)
+			if (l[c].cp == ' ' || l[c].cp == 0)
 				continue;
 			s->mode = SEL_LINE;
 			s->aa = first;

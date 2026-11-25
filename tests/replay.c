@@ -91,11 +91,6 @@ static const char *grid_problem(const struct vt *vt)
 		return "scroll region outside the screen";
 	if (vt->c.gl < 0 || vt->c.gl > 1)
 		return "GL is neither G0 nor G1";
-	if (vt->lastx < -1 || vt->lastx >= vt->cols)
-		return "place of the next mark outside the row";
-	if (vt->lastx >= 0 && ((uint32_t)vt->lastx >= vt->line[vt->c.y][vt->cols].cp ||
-			       (vt->line[vt->c.y][vt->lastx].attr & ATTR_WDUMMY)))
-		return "place of the next mark is no character";
 	struct cell **screens[2] = { vt->pri, vt->alt };
 	for (int s = 0; s < 2; s++)
 		for (int r = 0; r < vt->rows; r++) {
@@ -105,7 +100,7 @@ static const char *grid_problem(const struct vt *vt)
 				return "row written past its end";
 			for (int x = (int)used; x < vt->cols; x++)
 				if (l[x].cp != ' ' || l[x].fg != COL_DEFAULT_FG ||
-				    l[x].bg != COL_DEFAULT_BG || l[x].attr || l[x].ext)
+				    l[x].bg != COL_DEFAULT_BG || l[x].attr)
 					return "cell after the written part of a row is not blank";
 			for (int x = 0; x < vt->cols; x++) {
 				bool wide = l[x].attr & ATTR_WIDE;
@@ -118,8 +113,6 @@ static const char *grid_problem(const struct vt *vt)
 					return "cell is both halves";
 				if (l[x].cp >= 0x80 && l[x].cp < 0xa0)
 					return "C1 control stored as text";
-				if (l[x].ext > vt->ext_n || (dummy && l[x].ext))
-					return "cell holds marks that are not kept";
 			}
 		}
 	return NULL;
@@ -133,19 +126,6 @@ static bool same_cells(const struct cell *a, const struct cell *b, int n)
 		if (a[i].cp != b[i].cp || a[i].fg != b[i].fg || a[i].bg != b[i].bg ||
 		    a[i].attr != b[i].attr)
 			return false;
-	return true;
-}
-
-/* what the cells hold after their characters; the numbers may differ */
-static bool same_ext(const struct vt *va, const struct cell *a, const struct vt *vb,
-		     const struct cell *b, int n)
-{
-	for (int i = 0; i < n; i++) {
-		const uint32_t *ea, *eb;
-		int na = vt_cell_ext(va, &a[i], &ea), nb = vt_cell_ext(vb, &b[i], &eb);
-		if (na != nb || (na && memcmp(ea, eb, (size_t)na * sizeof *ea)))
-			return false;
-	}
 	return true;
 }
 
@@ -169,18 +149,14 @@ static const char *difference(const struct vt *a, const struct vt *b)
 		return "saved cursor";
 	if (a->top != b->top || a->bot != b->bot)
 		return "scroll region";
-	if (a->lastx != b->lastx)
-		return "place of the next mark";
 	if (a->cursor_style != b->cursor_style)
 		return "cursor style";
 	if (memcmp(a->tabs, b->tabs, a->cols * sizeof *a->tabs))
 		return "tab stops";
 	for (int r = 0; r < a->rows; r++) {
-		if (!same_cells(a->pri[r], b->pri[r], a->cols) ||
-		    !same_ext(a, a->pri[r], b, b->pri[r], a->cols))
+		if (!same_cells(a->pri[r], b->pri[r], a->cols))
 			return "main screen";
-		if (!same_cells(a->alt[r], b->alt[r], a->cols) ||
-		    !same_ext(a, a->alt[r], b, b->alt[r], a->cols))
+		if (!same_cells(a->alt[r], b->alt[r], a->cols))
 			return "alternate screen";
 	}
 	if (a->hist_count != b->hist_count || a->scrolled != b->scrolled)
@@ -189,7 +165,7 @@ static const char *difference(const struct vt *a, const struct vt *b)
 		int la, lb;
 		const struct cell *ca = vt_abs_line(a, i, &la);
 		const struct cell *cb = vt_abs_line(b, i, &lb);
-		if (!ca || !cb || la != lb || !same_cells(ca, cb, la) || !same_ext(a, ca, b, cb, la))
+		if (!ca || !cb || la != lb || !same_cells(ca, cb, la))
 			return "history";
 	}
 	return NULL;
@@ -214,22 +190,6 @@ static uint64_t fnv_cells(uint64_t h, const struct cell *c, int n)
 	return h;
 }
 
-/* The marks on the cells, with their place, row being the line's number in its
- * screen or the history: nothing for a row without any, so the sums from before
- * cells held them stay. */
-static uint64_t fnv_ext(uint64_t h, const struct vt *vt, const struct cell *c, int n, int64_t row)
-{
-	for (int i = 0; i < n; i++) {
-		const uint32_t *e;
-		int k = vt_cell_ext(vt, &c[i], &e);
-		if (k) {
-			int64_t at[2] = { row, i };
-			h = fnv(fnv(h, at, sizeof at), e, (size_t)k * sizeof *e);
-		}
-	}
-	return h;
-}
-
 static uint64_t fnv_cursor(uint64_t h, const struct vt_cursor *c)
 {
 	int v[7] = { c->x, c->y, c->wrapnext, c->charset[0], c->charset[1], c->gl, c->origin };
@@ -248,15 +208,12 @@ static uint64_t state_hash(const struct vt *vt, const struct run *run)
 		h = fnv(h, &(char){ vt->tabs[x] }, 1);
 	for (int r = 0; r < vt->rows; r++)
 		h = fnv_cells(fnv_cells(h, vt->pri[r], vt->cols), vt->alt[r], vt->cols);
-	for (int r = 0; r < vt->rows; r++)
-		h = fnv_ext(fnv_ext(h, vt, vt->pri[r], vt->cols, r), vt, vt->alt[r], vt->cols,
-			    -1 - r);
 	for (int64_t i = vt_abs_first(vt); i < vt_abs_first(vt) + vt->hist_count; i++) {
 		int n;
 		const struct cell *l = vt_abs_line(vt, i, &n);
 		h = fnv(h, &n, sizeof n);
 		if (l)
-			h = fnv_ext(fnv_cells(h, l, n), vt, l, n, i);
+			h = fnv_cells(h, l, n);
 	}
 	return fnv(h, run->reply ? run->reply : "", run->reply_len);
 }

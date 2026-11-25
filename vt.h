@@ -33,11 +33,7 @@ struct cell {
 	uint32_t cp;
 	uint32_t fg, bg;
 	uint16_t attr;
-	uint16_t ext; /* what follows cp in its cell: vt_cell_ext(); 0 for nothing */
 };
-
-/* the code points without width a cell holds after its own */
-#define VT_EXT_MAX 8
 
 enum {
 	MODE_APPCURSOR  = 1 << 0,  /* DECCKM */
@@ -98,15 +94,6 @@ struct vt {
 	unsigned mode;
 	enum cursor_style cursor_style;
 	uint32_t lastcp;          /* for REP */
-	int lastx;                /* the column a mark goes on, in the cursor's row;
-				   * -1 once the cursor may have moved */
-
-	/* What cells hold after their cp: sequences of up to VT_EXT_MAX code
-	 * points, each kept once and for good, so that a cell copied anywhere
-	 * still names its own. A cell's ext is the place in here plus one. */
-	uint32_t *ext;            /* VT_EXT_MAX each, the unused ones 0 */
-	uint16_t *ext_slot;       /* hash table of them, 0 for a free slot */
-	uint32_t ext_n, ext_cap, ext_slots;
 
 	/* scrollback (main screen only) */
 	struct cell **hist;
@@ -149,10 +136,6 @@ void vt_reset(struct vt *vt);
 /* line as shown at screen row r with the current view offset;
  * *len receives the number of valid cells (may be < cols for history) */
 const struct cell *vt_view_line(const struct vt *vt, int r, int *len);
-/* The code points without width written after c's own, a combining mark, a
- * variation selector or a joiner, in their order: how many, cps set to them.
- * They are kept for a copy; they are not drawn and count no width. */
-int vt_cell_ext(const struct vt *vt, const struct cell *c, const uint32_t **cps);
 /* absolute line addressing for selections: abs = row + scrolled - view */
 const struct cell *vt_abs_line(const struct vt *vt, int64_t abs, int *len);
 int64_t vt_abs_first(const struct vt *vt); /* oldest abs line in history */

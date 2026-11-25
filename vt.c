@@ -71,7 +71,7 @@ static int charwidth(uint32_t cp)
 static struct cell blank(const struct vt *vt)
 {
 	/* background color erase: erased cells take the current bg */
-	return (struct cell){ ' ', COL_DEFAULT_FG, vt->c.tmpl.bg, 0, 0 };
+	return (struct cell){ ' ', COL_DEFAULT_FG, vt->c.tmpl.bg, 0 };
 }
 
 static void fill(struct cell *l, int from, int to, struct cell b)
@@ -138,7 +138,7 @@ static struct cell **alloc_screen(int cols, int rows)
 	struct cell **s = calloc(rows, sizeof *s);
 	if (!s)
 		return NULL;
-	struct cell b = { ' ', COL_DEFAULT_FG, COL_DEFAULT_BG, 0, 0 };
+	struct cell b = { ' ', COL_DEFAULT_FG, COL_DEFAULT_BG, 0 };
 	for (int r = 0; r < rows; r++) {
 		s[r] = malloc(((size_t)cols + 1) * sizeof **s);
 		if (!s[r]) {
@@ -232,7 +232,7 @@ static void push_hist(struct vt *vt, const struct cell *l, int len)
 	if (!(l[len - 1].attr & ATTR_WRAP)) {
 		len = MIN(len, (int)USED(vt, l));
 		while (len > 0 && l[len - 1].cp == ' ' &&
-		       l[len - 1].bg == COL_DEFAULT_BG && !l[len - 1].attr && !l[len - 1].ext)
+		       l[len - 1].bg == COL_DEFAULT_BG && !l[len - 1].attr)
 			len--;
 	}
 	int slot = vt->hist_head;
@@ -295,8 +295,7 @@ int vt_abs_wraps(const struct vt *vt, int64_t abs)
 	for (int k = n - 1; l && k >= 0; k--) {
 		if (l[k].attr & ATTR_WRAP)
 			return k + 1;
-		if ((l[k].cp != ' ' && l[k].cp != 0) || l[k].bg != COL_DEFAULT_BG || l[k].attr ||
-		    l[k].ext)
+		if ((l[k].cp != ' ' && l[k].cp != 0) || l[k].bg != COL_DEFAULT_BG || l[k].attr)
 			return 0;
 	}
 	return 0;
@@ -431,7 +430,7 @@ static void restore_cursor(struct vt *vt)
 static void default_cursor(struct vt_cursor *c)
 {
 	memset(c, 0, sizeof *c);
-	c->tmpl = (struct cell){ ' ', COL_DEFAULT_FG, COL_DEFAULT_BG, 0, 0 };
+	c->tmpl = (struct cell){ ' ', COL_DEFAULT_FG, COL_DEFAULT_BG, 0 };
 }
 
 static void reset_tabs(struct vt *vt)
@@ -512,7 +511,6 @@ void vt_reset(struct vt *vt)
 	vt->state = ST_GROUND;
 	vt->utf8_need = 0;
 	vt->lastcp = 0;
-	vt->lastx = -1;
 	reset_tabs(vt);
 	for (int r = 0; r < vt->rows; r++) {
 		fill_row(vt, vt->pri[r], 0, vt->cols, blank(vt));
@@ -564,8 +562,6 @@ void vt_free(struct vt *vt)
 	free(vt->hist_room);
 	free(vt->dirty);
 	free(vt->tabs);
-	free(vt->ext);
-	free(vt->ext_slot);
 	free(vt);
 }
 
@@ -576,7 +572,7 @@ static struct cell **copy_screen(const struct vt *vt, struct cell **old, int shi
 	struct cell **s = alloc_screen(cols, rows);
 	if (!s)
 		return NULL;
-	struct cell b = { ' ', COL_DEFAULT_FG, COL_DEFAULT_BG, 0, 0 };
+	struct cell b = { ' ', COL_DEFAULT_FG, COL_DEFAULT_BG, 0 };
 	for (int r = 0; r < rows && r + shift < vt->rows; r++) {
 		const struct cell *o = old[r + shift];
 		int used = MIN((int)o[vt->cols].cp, cols);
@@ -621,12 +617,6 @@ bool vt_resize(struct vt *vt, int cols, int rows)
 		free(ntabs);
 		return false;
 	}
-	/* A mark still goes on the character before it, which stays in the
-	 * cursor's row, unless this cuts it off or cuts a wide one in half: a
-	 * window grown again has a blank there. */
-	if (vt->lastx >= 0 &&
-	    vt->lastx + ((vt->line[vt->c.y][vt->lastx].attr & ATTR_WIDE) ? 2 : 1) > cols)
-		vt->lastx = -1;
 	for (int i = 0; i < pshift; i++)
 		push_hist(vt, vt->pri[i], vt->cols);
 	free_screen(vt->pri, vt->rows);
@@ -670,143 +660,13 @@ __attribute__((noinline, cold)) static bool format_char(uint32_t cp)
 	       (cp >= 0x2060 && cp <= 0x206f) || cp == 0xfeff;
 }
 
-/* ---- what a cell holds after its character ----------------------------- */
-
-static uint32_t ext_hash(const uint32_t *seq)
-{
-	uint32_t h = 2166136261u;
-	for (int i = 0; i < VT_EXT_MAX; i++)
-		h = (h ^ seq[i]) * 16777619u;
-	return h ^ h >> 15;
-}
-
-static void ext_enter(uint16_t *slot, uint32_t slots, const uint32_t *seq, uint16_t id)
-{
-	uint32_t i = ext_hash(seq) & (slots - 1);
-	while (slot[i])
-		i = (i + 1) & (slots - 1);
-	slot[i] = id;
-}
-
-/* room for more sequences, at most as many as a cell's ext can name; false
- * with nothing changed when that is reached or there is no memory. Entered
- * again in their order into a table twice the size, none ends up further from
- * its slot than it was: ext_find() still finds each within EXT_PROBES. */
-static bool ext_grow(struct vt *vt)
-{
-	if (vt->ext_cap >= UINT16_MAX)
-		return false;
-	uint32_t cap = vt->ext_cap ? MIN(vt->ext_cap * 2, UINT16_MAX) : 64, slots = 128;
-	while (slots < cap * 2)
-		slots *= 2;
-	uint16_t *slot = calloc(slots, sizeof *slot);
-	if (!slot)
-		return false;
-	uint32_t *ext = realloc(vt->ext, (size_t)cap * VT_EXT_MAX * sizeof *ext);
-	if (!ext) {
-		free(slot);
-		return false;
-	}
-	for (uint32_t k = 0; k < vt->ext_n; k++)
-		ext_enter(slot, slots, ext + k * VT_EXT_MAX, (uint16_t)(k + 1));
-	free(vt->ext_slot);
-	vt->ext = ext;
-	vt->ext_slot = slot;
-	vt->ext_cap = cap;
-	vt->ext_slots = slots;
-	return true;
-}
-
-/* Where seq is in the table: its number, or 0 with *free set to the slot it
- * would take. Only EXT_PROBES slots are looked at: sequences made to share a
- * slot would otherwise cost a walk past all of them for every mark, and one
- * that finds neither itself nor room there is not kept (*free past the table). */
-#define EXT_PROBES 64
-static uint16_t ext_find(const struct vt *vt, const uint32_t *seq, uint32_t *free)
-{
-	*free = UINT32_MAX;
-	if (!vt->ext_slots)
-		return 0;
-	uint32_t i = ext_hash(seq) & (vt->ext_slots - 1);
-	for (int k = 0; k < EXT_PROBES; k++, i = (i + 1) & (vt->ext_slots - 1)) {
-		uint16_t id = vt->ext_slot[i];
-		if (!id) {
-			*free = i;
-			return 0;
-		}
-		if (!memcmp(vt->ext + (id - 1) * VT_EXT_MAX, seq, VT_EXT_MAX * sizeof *seq))
-			return id;
-	}
-	return 0;
-}
-
-/* what a cell's ext is for seq, VT_EXT_MAX code points; 0 when it cannot be kept */
-static uint16_t ext_id(struct vt *vt, const uint32_t *seq)
-{
-	uint32_t free;
-	uint16_t id = ext_find(vt, seq, &free);
-	if (id)
-		return id;
-	if (vt->ext_n == vt->ext_cap) {
-		if (!ext_grow(vt))
-			return 0;
-		ext_find(vt, seq, &free);
-	}
-	if (free == UINT32_MAX)
-		return 0;
-	memcpy(vt->ext + vt->ext_n * VT_EXT_MAX, seq, VT_EXT_MAX * sizeof *seq);
-	id = (uint16_t)++vt->ext_n;
-	vt->ext_slot[free] = id;
-	return id;
-}
-
-int vt_cell_ext(const struct vt *vt, const struct cell *c, const uint32_t **cps)
-{
-	if (!c->ext || c->ext > vt->ext_n)
-		return 0;
-	const uint32_t *seq = vt->ext + (c->ext - 1) * VT_EXT_MAX;
-	int n = 0;
-	while (n < VT_EXT_MAX && seq[n])
-		n++;
-	*cps = seq;
-	return n;
-}
-
-/* A code point without width goes into the cell of the character printed just
- * before it, for a copy; it is not drawn. Only while the cursor is where that
- * character left it, lastx says so: after a movement xterm 407 puts the mark on
- * the cell under the cursor, which is hardly what a program meant.
- * That cell is within what its row counts as written, and of a wide character
- * it is the left half. Out of put()'s way, as format_char(). */
-__attribute__((noinline, cold)) static void put_mark(struct vt *vt, uint32_t cp)
-{
-	int x = vt->lastx;
-	if (x < 0 || x >= vt->cols)
-		return;
-	struct cell *l = vt->line[vt->c.y];
-	const uint32_t *old;
-	uint32_t seq[VT_EXT_MAX] = { 0 };
-	int n = vt_cell_ext(vt, &l[x], &old);
-	if (n == VT_EXT_MAX)
-		return;
-	for (int i = 0; i < n; i++)
-		seq[i] = old[i];
-	seq[n] = cp;
-	uint16_t id = ext_id(vt, seq);
-	if (!id)
-		return;
-	l[x].ext = id;
-}
-
 /* true when REP may still repeat what it had: a character was printed, or a
  * combining mark went on it; false for what ends it, as xterm 407 has it */
 static bool put(struct vt *vt, uint32_t cp)
 {
 	struct vt_cursor *c = &vt->c;
-	if (cp >= 0x80 && cp < 0xa0) {
-		vt->lastx = -1;
+	if (cp >= 0x80 && cp < 0xa0)
 		return false; /* C1 controls are not supported in UTF-8 mode */
-	}
 	uint32_t orig = cp; /* for REP, which goes through DEC graphics again */
 	uint16_t gfx = 0;
 	if (c->charset[c->gl] && cp >= 0x5f && cp <= 0x7e) {
@@ -814,20 +674,10 @@ static bool put(struct vt *vt, uint32_t cp)
 		gfx = ATTR_DECGFX;
 	}
 	int w = charwidth(cp);
-	if (w == 0) {
-		/* the joiners are kept as marks are: an emoji sequence or Persian
-		 * text is copied whole. The other format characters are dropped:
-		 * a copy would hold bidi controls nothing on the screen showed. */
-		/* U+061C is a mark to xterm and so to REP, and a bidi control */
-		bool format = format_char(cp);
-		if ((!format && cp != 0x61c) || cp == 0x200c || cp == 0x200d)
-			put_mark(vt, cp);
-		return !format;
-	}
-	if (w > vt->cols) {
-		vt->lastx = -1;
+	if (w == 0) /* combining characters are dropped */
+		return !format_char(cp);
+	if (w > vt->cols)
 		return false;
-	}
 
 	bool wrap = vt->mode & MODE_AUTOWRAP;
 	if (wrap && (c->wrapnext || c->x + w > vt->cols)) {
@@ -862,7 +712,6 @@ static bool put(struct vt *vt, uint32_t cp)
 	touch(vt, l, c->x + w);
 	mark_row(vt, c->y);
 	vt->lastcp = orig;
-	vt->lastx = c->x;
 	advance(vt, c->x + w, wrap);
 	return true;
 }
@@ -907,9 +756,6 @@ static void rep_row(struct vt *vt, uint32_t cp, int w, int n)
 
 static void control(struct vt *vt, uint32_t cp)
 {
-	/* also within a sequence, which feed() does not end: a line feed in an
-	 * SGR would leave a mark's place in another row */
-	vt->lastx = -1;
 	switch (cp) {
 	case 0x07:
 		if (vt->cb.bell)
@@ -1644,7 +1490,6 @@ static void feed(struct vt *vt, uint32_t cp)
 	if (cp == 0x18 || cp == 0x1a) {
 		vt->state = ST_GROUND;
 		vt->lastcp = 0;
-		vt->lastx = -1;
 		return;
 	}
 	if (cp == 0x1b) {
@@ -1660,19 +1505,13 @@ static void feed(struct vt *vt, uint32_t cp)
 	/* REP repeats what was printed just before: a code point that ends in
 	 * the ground state without being printed ends that, as in xterm 407; a
 	 * control within a sequence, or one cut off by ESC, does not */
-	/* A mark goes on that character still after what leaves the cursor where
-	 * it is for certain: more marks, and SGR, as in xterm 407. Also after a
-	 * string or sequence that ESC cut off, which did nothing, when an SGR
-	 * is what follows. */
-	bool keep = false, stays = false;
+	bool keep = false;
 	switch (vt->state) {
 	case ST_GROUND:
 		if (cp < 0x20 || cp == 0x7f)
 			control(vt, cp);
-		else {
+		else
 			keep = put(vt, cp);
-			stays = true; /* put() forgets the place itself */
-		}
 		break;
 	case ST_ESC:
 		if (cp < 0x20)
@@ -1725,7 +1564,6 @@ static void feed(struct vt *vt, uint32_t cp)
 			collect(vt, cp);
 			vt->state = ST_CSI_INTER;
 		} else if (cp >= 0x40 && cp < 0x7f) {
-			stays = cp == 'm' && !vt->priv;
 			csi_dispatch(vt, cp);
 			vt->state = ST_GROUND;
 		} else if (cp >= 0x80) {
@@ -1767,8 +1605,6 @@ static void feed(struct vt *vt, uint32_t cp)
 	}
 	if (vt->state == ST_GROUND && !keep)
 		vt->lastcp = 0;
-	if (vt->state == ST_GROUND && !stays)
-		vt->lastx = -1;
 }
 
 /* A run of printable ASCII in the ground state, as put() writes it one by one, up
@@ -1811,7 +1647,6 @@ static size_t put_ascii(struct vt *vt, const unsigned char *s, size_t n)
 	touch(vt, l, x1 + 1);
 	mark_row(vt, c->y);
 	vt->lastcp = s[k - 1];
-	vt->lastx = x1;
 	advance(vt, x1 + 1, vt->mode & MODE_AUTOWRAP);
 	return k;
 }

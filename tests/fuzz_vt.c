@@ -101,12 +101,6 @@ static void check(const struct vt *vt)
 		die("GL is neither G0 nor G1", vt);
 	if (vt->view < 0 || vt->view > vt->hist_count)
 		die("view outside the history", vt);
-	/* the place of the next mark: a cell written, of a character's own */
-	if (vt->lastx < -1 || vt->lastx >= vt->cols)
-		die("place of the next mark outside the row", vt);
-	if (vt->lastx >= 0 && ((uint32_t)vt->lastx >= vt->line[vt->c.y][vt->cols].cp ||
-			       (vt->line[vt->c.y][vt->lastx].attr & ATTR_WDUMMY)))
-		die("place of the next mark is no character", vt);
 	struct cell **screens[2] = { vt->pri, vt->alt };
 	for (int s = 0; s < 2; s++)
 		for (int r = 0; r < vt->rows; r++) {
@@ -117,7 +111,7 @@ static void check(const struct vt *vt)
 				die("row written past its end", vt);
 			for (int x = (int)used; x < vt->cols; x++)
 				if (l[x].cp != ' ' || l[x].fg != COL_DEFAULT_FG ||
-				    l[x].bg != COL_DEFAULT_BG || l[x].attr || l[x].ext)
+				    l[x].bg != COL_DEFAULT_BG || l[x].attr)
 					die("cell after the written part of a row is not blank", vt);
 			for (int x = 0; x < vt->cols; x++) {
 				bool wide = l[x].attr & ATTR_WIDE;
@@ -128,8 +122,6 @@ static void check(const struct vt *vt)
 					die("right half without wide cell", vt);
 				if (l[x].cp >= 0x80 && l[x].cp < 0xa0)
 					die("C1 control stored as text", vt);
-				if (l[x].ext > vt->ext_n || (dummy && l[x].ext))
-					die("cell holds marks that are not kept", vt);
 			}
 		}
 }
@@ -140,19 +132,6 @@ static bool same_cells(const struct cell *a, const struct cell *b, int n)
 		if (a[i].cp != b[i].cp || a[i].fg != b[i].fg || a[i].bg != b[i].bg ||
 		    a[i].attr != b[i].attr)
 			return false;
-	return true;
-}
-
-/* what the cells hold after their characters; the numbers may differ */
-static bool same_ext(const struct vt *va, const struct cell *a, const struct vt *vb,
-		     const struct cell *b, int n)
-{
-	for (int i = 0; i < n; i++) {
-		const uint32_t *ea, *eb;
-		int na = vt_cell_ext(va, &a[i], &ea), nb = vt_cell_ext(vb, &b[i], &eb);
-		if (na != nb || (na && memcmp(ea, eb, (size_t)na * sizeof *ea)))
-			return false;
-	}
 	return true;
 }
 
@@ -174,24 +153,20 @@ static void compare(const struct vt *a, const struct vt *b,
 		die("saved cursor differs between whole and chunked", b);
 	if (a->top != b->top || a->bot != b->bot)
 		die("scroll region differs between whole and chunked", b);
-	if (a->lastx != b->lastx)
-		die("place of the next mark differs between whole and chunked", b);
 	if (a->cursor_style != b->cursor_style)
 		die("cursor style differs between whole and chunked", b);
 	if (memcmp(a->tabs, b->tabs, (size_t)a->cols * sizeof *a->tabs))
 		die("tab stops differ between whole and chunked", b);
 	for (int r = 0; r < a->rows; r++)
 		if (!same_cells(a->pri[r], b->pri[r], a->cols) ||
-		    !same_cells(a->alt[r], b->alt[r], a->cols) ||
-		    !same_ext(a, a->pri[r], b, b->pri[r], a->cols) ||
-		    !same_ext(a, a->alt[r], b, b->alt[r], a->cols))
+		    !same_cells(a->alt[r], b->alt[r], a->cols))
 			die("screen differs between whole and chunked", b);
 	if (a->hist_count != b->hist_count || a->scrolled != b->scrolled)
 		die("history differs between whole and chunked", b);
 	for (int64_t i = vt_abs_first(a); i < vt_abs_first(a) + a->hist_count; i++) {
 		int la, lb;
 		const struct cell *ca = vt_abs_line(a, i, &la), *cb = vt_abs_line(b, i, &lb);
-		if (!ca || !cb || la != lb || !same_cells(ca, cb, la) || !same_ext(a, ca, b, cb, la))
+		if (!ca || !cb || la != lb || !same_cells(ca, cb, la))
 			die("history lines differ between whole and chunked", b);
 	}
 	if (sa->replies != sb->replies || sa->reply_bytes != sb->reply_bytes)
@@ -202,8 +177,8 @@ static void compare(const struct vt *a, const struct vt *b,
 		die("bells differ between whole and chunked", b);
 }
 
-/* Widths as mwt has them: in the C locale wcwidth() knows no wide character and
- * no mark, and none of the checks on them could fail. */
+/* Widths as mwt has them: in the C locale wcwidth() knows no wide character,
+ * and none of the checks on them could fail. */
 int LLVMFuzzerInitialize(int *argc, char ***argv)
 {
 	(void)argc;

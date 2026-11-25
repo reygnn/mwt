@@ -151,14 +151,7 @@ has the option `numpad:microsoft` or `numpad:pc`.
 ## Character widths
 
 mwt counts as glibc and bash do, code point by code point with `wcwidth()`. Characters
-without width (combining accents, VS16, ZWJ and ZWNJ) are not drawn, but a copy has them
-after their character. A cell takes eight of them, and takes one only while the cursor
-is where its character left it: one that comes after a control or a sequence other than
-SGR is dropped, where xterm puts it on the cell under the cursor. All cells together
-keep 65535 different sequences, the beginnings of a longer one among them, and a reset
-does not empty them; past that a new one is dropped, as is one of many made to look
-alike to the table. The other format characters without width (ZWSP, the bidi controls,
-BOM) are always dropped. tmux 3.8
+without width (ZWJ, VS16, combining accents) are dropped, also when copying. tmux 3.8
 counts ❤️ (with VS16), skin tones such as 👍🏽 and ZWJ sequences such as 👨‍👩‍👧
 differently, vim 9.2 flags and Hangul jamo; there the cursor drifts. `make width` shows where. To a query for mode 2027
 (CSI ? 2027 $ p) mwt answers "unknown"; see TODO.
@@ -204,7 +197,7 @@ DECSCL, and the DECDSR reports for printer, keyboard and locator.
 DA2 answers `CSI > 1 ; 10 ; 0 c`, a VT220 as DA does, with a version below xterm's:
 esctest wants xterm's 41 and 314 or more, and programs like vim would take mwt for xterm.
 
-Combining characters are not drawn, see Character widths. Setting colors through OSC is
+Combining characters are discarded, see Character widths. Setting colors through OSC is
 ignored; queries are answered.
 
 REP past a screenful and a row leaves the screen as all the copies would, but puts fewer

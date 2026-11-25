@@ -835,7 +835,7 @@ static void draw_row(struct buffer *b, int r, bool sel, int64_t ba, int bc,
 	int64_t abs = (int64_t)vt->scrolled - vt->view + r;
 	int y0 = t.pad + r * t.ch;
 	bool cur_row = cursor_shown() && r == vt->c.y;
-	static const struct cell blankc = { ' ', COL_DEFAULT_FG, COL_DEFAULT_BG, 0, 0 };
+	static const struct cell blankc = { ' ', COL_DEFAULT_FG, COL_DEFAULT_BG, 0 };
 
 	/* Backgrounds first, a run of cells of one color at a time, then what goes on
 	 * top. Each of those stays inside its own cell, so the order does not show. */
