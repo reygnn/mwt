@@ -1688,6 +1688,12 @@ static void test_marks(void)
 				break;
 			}
 	}
+	/* a control within an SGR moves the cursor all the same */
+	w(vt, "\033[H\033[2Je\033[\nm\u0301");
+	CHECK(vt->c.y == 1 && vt->pri[0][0].cp == 'e');
+	for (int y = 0; y < 2; y++)
+		for (int x = 0; x < 4; x++)
+			CHECK(!vt->pri[y][x].ext);
 	/* SGR leaves the cursor: the mark goes on, as in xterm 407, and the cell
 	 * keeps the colors it was written with */
 	w(vt, "\033[H\033[2Je\033[31m\033[1;4m\u0301x");

@@ -872,6 +872,9 @@ static void rep_row(struct vt *vt, uint32_t cp, int w, int n)
 
 static void control(struct vt *vt, uint32_t cp)
 {
+	/* also within a sequence, which feed() does not end: a line feed in an
+	 * SGR would leave a mark's place in another row */
+	vt->lastx = -1;
 	switch (cp) {
 	case 0x07:
 		if (vt->cb.bell)
