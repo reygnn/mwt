@@ -40,8 +40,14 @@ no border.
 HiDPI needs `wl_compositor` version 6, which tells a surface its scale. Where a
 compositor offers only an older one, mwt draws at scale 1, blurry on a HiDPI output.
 
-There is no reflow: shrinking the window cuts off what no longer fits. A resize also
-sets the tab stops back to every eighth column.
+There is no reflow: a narrower window cuts off what no longer fits. A shorter one puts
+the lines above the cursor's that no longer fit into the history, and a taller one takes
+the newest lines of the history back onto the screen, as xterm does. They also come
+above a screen that was erased (`CSI 2 J`) while its history stayed. A line longer than
+the window is wide stays in the history, and so do those above it: on the screen it
+would be cut, as xterm cuts it. Behind the alternate screen the main one gives and
+takes lines the same way; xterm leaves it as it is there, and a shorter window loses its
+last lines. A resize also sets the tab stops back to every eighth column.
 
 
 ## Selection and paste

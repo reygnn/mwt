@@ -1217,9 +1217,12 @@ static void test_resize(void)
 	CHECK_STR(row(vt, 0), "3");
 	CHECK_STR(row(vt, 2), "5");
 	CHECK(vt->c.y == 2 && vt->hist_count == 2);
+	/* taller again, the lines pushed off come back, and the cursor with them */
 	vt_resize(vt, 12, 6);
-	CHECK_STR(row(vt, 2), "5");
+	CHECK_STR(row(vt, 0), "1");
+	CHECK_STR(row(vt, 4), "5");
 	CHECK_STR(row(vt, 5), "");
+	CHECK(vt->c.y == 4 && vt->hist_count == 0 && vt->scrolled == 0);
 	w(vt, "\033[6;12Hx");
 	CHECK(vt->pri[5]->c[11].cp == 'x');
 	vt_free(vt);
@@ -1326,6 +1329,150 @@ static void test_resize(void)
 		CHECK_STR(row(vt, 1), "6");
 		vt_free(vt);
 	}
+}
+
+/* A taller window takes the newest history lines back onto the main screen, as
+ * xterm does, so what a shorter one pushed off returns with it. */
+static void test_resize_back(void)
+{
+	int len;
+	/* no more than the rows it grew by, and the history goes on after them: a
+	 * ring that has gone round, its head taken back past the start */
+	struct vt *vt = mk(10, 3, 4);
+	w(vt, "1\r\n2\r\n3\r\n4\r\n5\r\n6\r\n7\r\n8\r\n9");
+	CHECK(vt->hist_count == 4 && vt->scrolled == 6);
+	CHECK(vt_resize(vt, 10, 5));
+	CHECK_STR(row(vt, 0), "5");
+	CHECK_STR(row(vt, 1), "6");
+	CHECK_STR(row(vt, 2), "7");
+	CHECK_STR(row(vt, 4), "9");
+	CHECK(vt->c.y == 4 && vt->c.x == 1);
+	CHECK(vt->hist_count == 2 && vt->scrolled == 4 && vt_abs_first(vt) == 2);
+	CHECK_STR(hist_line(vt, 1), "4");
+	CHECK_STR(hist_line(vt, 2), "3");
+	w(vt, "\r\na\r\nb\r\nc");
+	CHECK(vt->hist_count == 4 && vt->scrolled == 7);
+	CHECK_STR(hist_line(vt, 1), "7");
+	CHECK_STR(hist_line(vt, 4), "4");
+	CHECK_STR(row(vt, 4), "c");
+	vt_free(vt);
+
+	/* more rows than the history has lines: blank ones below, as before */
+	vt = mk(10, 2, 10);
+	w(vt, "1\r\n2\r\n3");
+	CHECK(vt_resize(vt, 10, 6));
+	CHECK_STR(row(vt, 0), "1");
+	CHECK_STR(row(vt, 2), "3");
+	CHECK_STR(row(vt, 3), "");
+	CHECK(vt->c.y == 2 && vt->hist_count == 0 && vt->scrolled == 0);
+	vt_free(vt);
+
+	/* without a history there is nothing to take */
+	vt = mk(10, 2, 0);
+	w(vt, "1\r\n2\r\n3");
+	CHECK(vt_resize(vt, 10, 4));
+	CHECK_STR(row(vt, 0), "2");
+	CHECK_STR(row(vt, 1), "3");
+	CHECK(vt->c.y == 1 && vt->scrolled == 0);
+	vt_free(vt);
+
+	/* A line longer than the window stays in the history, whole, and so do
+	 * those above it: on the screen it would be cut for good. Once the window
+	 * is wide enough it comes. */
+	vt = mk(12, 2, 10);
+	w(vt, "x\r\nAAAAAAAAAAAA\r\nb\r\nc\r\nd");
+	CHECK(vt->hist_count == 3);
+	CHECK(vt_resize(vt, 8, 6));
+	CHECK_STR(row(vt, 0), "b");
+	CHECK_STR(row(vt, 2), "d");
+	CHECK(vt->c.y == 2 && vt->hist_count == 2);
+	CHECK(vt_abs_line(vt, vt_abs_first(vt) + 1, &len) && len == 12);
+	CHECK_STR(hist_line(vt, 1), "AAAAAAAAAAAA");
+	CHECK_STR(hist_line(vt, 2), "x");
+	CHECK(vt_resize(vt, 12, 7));
+	CHECK_STR(row(vt, 0), "AAAAAAAAAAAA");
+	CHECK_STR(row(vt, 1), "b");
+	CHECK(vt->c.y == 3 && vt->hist_count == 1);
+	vt_free(vt);
+
+	/* a line that goes on in the next row still does on the screen */
+	vt = mk(5, 2, 10);
+	w(vt, "abcdefgh\r\nX");
+	CHECK(vt->hist_count == 1 && vt_abs_wraps(vt, vt_abs_first(vt)) == 5);
+	CHECK(vt_resize(vt, 5, 3));
+	CHECK_STR(row(vt, 0), "abcde");
+	CHECK_STR(row(vt, 1), "fgh");
+	CHECK(vt->pri[0]->wrap == 5 && vt->pri[0]->used == 5 && vt_abs_wraps(vt, 0) == 5);
+	CHECK(vt->pri[1]->wrap == 0);
+	vt_free(vt);
+
+	/* Behind the alternate screen too, which gets none itself: the main
+	 * screen's cursor row and its saved cursor move down with the lines, so a
+	 * shorter window afterwards pushes the same ones off again. */
+	static const char *const enter[] = { "\033[?47h", "\033[?1049h" };
+	static const char *const leave[] = { "\033[?47l", "\033[?1049l" };
+	for (int i = 0; i < 2; i++) {
+		vt = mk(10, 2, 10);
+		w(vt, "1\r\n2\r\n3\r\n4");
+		w(vt, enter[i]);
+		w(vt, "\033[HALT");
+		CHECK(vt_resize(vt, 10, 4));
+		CHECK_STR(row(vt, 0), "ALT");
+		CHECK_STR(row(vt, 1), "");
+		CHECK(vt->c.y == 0 && vt->hist_count == 0 && vt->pri_y == 3);
+		CHECK(vt_resize(vt, 10, 2));
+		CHECK(vt->hist_count == 2 && vt->pri_y == 1);
+		CHECK(vt_resize(vt, 10, 4));
+		w(vt, leave[i]);
+		CHECK_STR(row(vt, 0), "1");
+		CHECK_STR(row(vt, 3), "4");
+		CHECK(vt->hist_count == 0 && vt->c.y == (i ? 3 : 0));
+		vt_free(vt);
+	}
+
+	/* Shorter and taller again leaves a full screen and its history as they
+	 * were, cell for cell: lines that wrap, wide glyphs and colours, against a
+	 * second terminal that was never resized. */
+	fuzz_state = 0x9e3779b97f4a7c15ULL;
+	int bad = 0;
+	for (int round = 0; round < 300; round++) {
+		int cols = 2 + (int)(fuzz_rand() % 30), rows = 2 + (int)(fuzz_rand() % 8);
+		struct vt *a = mk(cols, rows, 256), *b = mk(cols, rows, 256);
+		/* at least a screenful, so the cursor ends in the last row */
+		for (int i = rows + (int)(fuzz_rand() % 20); i > 0; i--) {
+			char s[2 * 31 * 5 + 3]; /* 2 * cols pieces of 5 bytes at most */
+			int n = 0;
+			for (int k = (int)(fuzz_rand() % (unsigned)(2 * cols)); k > 0; k--) {
+				switch (fuzz_rand() % 12) {
+				case 0: n += sprintf(s + n, "\xe6\xbc\xa2"); break;
+				case 1: n += sprintf(s + n, "\033[%um", 40 + fuzz_rand() % 8); break;
+				case 2: n += sprintf(s + n, "\033[%cm", fuzz_rand() % 2 ? '4' : '0'); break;
+				default: s[n++] = (char)('a' + fuzz_rand() % 26);
+				}
+			}
+			memcpy(s + n, "\r\n", 3);
+			w(a, s);
+			w(b, s);
+		}
+		int k = 1 + (int)(fuzz_rand() % (unsigned)(rows - 1));
+		if (!vt_resize(b, cols, rows - k) || !vt_resize(b, cols, rows)) {
+			bad++;
+		} else {
+			bad += a->c.x != b->c.x || a->c.y != b->c.y || a->hist_count != b->hist_count ||
+			       a->scrolled != b->scrolled;
+			for (int r = 0; r < rows; r++)
+				bad += !fuzz_rows(a->pri[r], b->pri[r], cols);
+			for (int64_t i = vt_abs_first(a); i < (int64_t)a->scrolled; i++) {
+				int la, lb;
+				const struct cell *ca = vt_abs_line(a, i, &la), *cb = vt_abs_line(b, i, &lb);
+				bad += !ca || !cb || la != lb || !fuzz_cells(ca, cb, la) ||
+				       vt_abs_wraps(a, i) != vt_abs_wraps(b, i);
+			}
+		}
+		vt_free(a);
+		vt_free(b);
+	}
+	CHECK(bad == 0);
 }
 
 static void test_index_and_charsets(void)
@@ -1960,6 +2107,32 @@ static void test_alloc_failures(void)
 			break;
 	}
 	CHECK(fails > 0);
+	/* the same for a taller one: the history keeps its lines when it fails */
+	fails = 0;
+	for (long n = 0;; n++) {
+		struct vt *vt = mk(10, 2, 10);
+		w(vt, "1\r\n2\r\n3\r\nabc");
+		injected = false;
+		countdown = n;
+		bool ok = vt_resize(vt, 10, 4);
+		countdown = -1;
+		if (ok) {
+			CHECK(vt->rows == 4 && vt->c.y == 3 && vt->hist_count == 0);
+			CHECK_STR(row(vt, 0), "1");
+			CHECK_STR(row(vt, 3), "abc");
+		} else {
+			fails++;
+			CHECK(vt->rows == 2 && vt->hist_count == 2 && vt->scrolled == 2);
+			CHECK(vt->c.x == 3 && vt->c.y == 1);
+			CHECK_STR(hist_line(vt, 1), "2");
+			CHECK_STR(row(vt, 0), "3");
+			CHECK_STR(row(vt, 1), "abc");
+		}
+		vt_free(vt);
+		if (!injected)
+			break;
+	}
+	CHECK(fails > 0);
 	/* a history line that cannot be kept goes in empty: it scrolled off all the
 	 * same, so the numbers of the lines after it stay */
 	{
@@ -2027,6 +2200,7 @@ int main(void)
 	test_charset_and_misc();
 	test_unsupported_vt100();
 	test_resize();
+	test_resize_back();
 	test_origin();
 	test_xterm_details();
 	test_ascii_runs();

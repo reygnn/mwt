@@ -607,7 +607,8 @@ void vt_free(struct vt *vt)
 	free(vt);
 }
 
-/* a new screen holding what fits of old, which is left as it is */
+/* a new screen holding what fits of old, which is left as it is: its row shift
+ * as the first one, or with -shift rows left blank above it for the caller */
 static struct row **copy_screen(const struct vt *vt, struct row **old, int shift,
 				int cols, int rows)
 {
@@ -615,7 +616,7 @@ static struct row **copy_screen(const struct vt *vt, struct row **old, int shift
 	if (!s)
 		return NULL;
 	struct cell b = { ' ', COL_DEFAULT_FG, COL_DEFAULT_BG, 0 };
-	for (int r = 0; r < rows && r + shift < vt->rows; r++) {
+	for (int r = MAX(0, -shift); r < rows && r + shift < vt->rows; r++) {
 		const struct row *o = old[r + shift];
 		s[r]->used = MIN(o->used, cols);
 		memcpy(s[r]->c, o->c, s[r]->used * sizeof *o->c);
@@ -625,6 +626,23 @@ static struct row **copy_screen(const struct vt *vt, struct row **old, int shift
 			s[r]->c[cols - 1] = b;
 	}
 	return s;
+}
+
+/* The slot of the history line back lines up, 0 for the newest. */
+static int hist_slot(const struct vt *vt, int back)
+{
+	return (vt->hist_head - 1 - back + vt->hist_cap) % vt->hist_cap;
+}
+
+/* How many history lines a main screen n rows taller takes back, the newest
+ * ones: all there are, up to one longer than cols. That one stays whole in the
+ * history, as it is cut only on the screen (no reflow), and so do those above. */
+static int hist_back(const struct vt *vt, int n, int cols)
+{
+	int k = 0;
+	while (k < n && k < vt->hist_count && vt->hist_len[hist_slot(vt, k)] <= cols)
+		k++;
+	return k;
 }
 
 static void clamp_cursor(struct vt_cursor *c, int cols, int rows)
@@ -650,9 +668,13 @@ bool vt_resize(struct vt *vt, int cols, int rows)
 	/* keep the cursor line visible: lines above it go into history */
 	int pshift = MAX(0, *py - (rows - 1));
 	int ashift = MAX(0, ac->y - (rows - 1));
+	/* And a taller main screen takes the newest ones back above its text, as
+	 * xterm does: what a shorter window pushed off returns with the window.
+	 * Never both: a cursor row that fit before fits a taller screen. */
+	int pull = hist_back(vt, rows - vt->rows, cols);
 
 	/* everything new first, so a failure leaves the terminal as it was */
-	struct row **npri = copy_screen(vt, vt->pri, pshift, cols, rows);
+	struct row **npri = copy_screen(vt, vt->pri, pshift - pull, cols, rows);
 	struct row **nalt = copy_screen(vt, vt->alt, ashift, cols, rows);
 	bool *ndirty = calloc(rows, sizeof *ndirty);
 	bool *ntabs = calloc(cols, sizeof *ntabs);
@@ -665,16 +687,31 @@ bool vt_resize(struct vt *vt, int cols, int rows)
 	}
 	for (int i = 0; i < pshift; i++)
 		push_hist(vt, vt->pri[i]);
+	/* the lines taken back, the oldest in the top row: they fit, wrap and all,
+	 * and need no memory, so nothing here can fail; then out of the history */
+	for (int i = 0; i < pull; i++) {
+		int slot = hist_slot(vt, pull - 1 - i);
+		struct row *l = npri[i];
+		l->used = vt->hist_len[slot];
+		if (l->used)
+			memcpy(l->c, vt->hist[slot], l->used * sizeof *l->c);
+		l->wrap = vt->hist_wrap[slot];
+	}
+	if (pull) {
+		vt->hist_head = hist_slot(vt, pull - 1);
+		vt->hist_count -= pull;
+		vt->scrolled -= pull; /* the lines count from the same place still */
+	}
 	free_screen(vt->pri, vt->rows);
 	free_screen(vt->alt, vt->rows);
 	vt->pri = npri;
 	vt->alt = nalt;
 	vt->line = alt ? vt->alt : vt->pri;
-	*py -= pshift;
+	*py += pull - pshift;
 	ac->y -= ashift;
 	/* a saved cursor moves with its screen, to the top row at most; behind
 	 * the main screen ac is the alternate one's and has moved */
-	vt->saved_pri.y -= MIN(pshift, vt->saved_pri.y);
+	vt->saved_pri.y += pull - MIN(pshift, vt->saved_pri.y);
 	if (alt)
 		vt->saved_alt.y -= MIN(ashift, vt->saved_alt.y);
 
