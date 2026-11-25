@@ -6,9 +6,16 @@ fail=0
 mkdir -p ~/w/mwc
 cp -r /src/mwt ~/w/mwt
 cp -r /src/mwc/. ~/w/mwc/
-cd ~/w/mwc && rm -rf build mwc .git
-grep -q '<stdlib.h>' tests/vinput.c || sed -i '1i #include <stdlib.h>' tests/vinput.c
-make -j"$(nproc)" build/vinput >/dev/null 2>&1 || { echo "vinput did not build"; exit 1; }
+# vinput alone, as in oldwayland-run.sh: mwc's Makefile wants all of mwc's
+# dependencies first, and this image has no wlroots.
+cd ~/w/mwc && rm -rf build mwc .git && mkdir build || exit 1
+for x in wlr-virtual-pointer-unstable-v1 virtual-keyboard-unstable-v1; do
+	wayland-scanner client-header protocols/$x.xml build/$x-client.h &&
+	wayland-scanner private-code protocols/$x.xml build/$x-code.c || exit 1
+done
+cc -O2 -g -std=c11 -Wall -Wextra -Wno-unused-parameter -Ibuild -o build/vinput tests/vinput.c \
+	build/wlr-virtual-pointer-unstable-v1-code.c build/virtual-keyboard-unstable-v1-code.c \
+	-lwayland-client -lm -lxkbcommon || { echo "vinput did not build"; exit 1; }
 export VINPUT=$HOME/w/mwc/build/vinput
 cd ~/w/mwt || exit 1
 build() {

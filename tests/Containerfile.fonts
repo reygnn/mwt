@@ -1,7 +1,9 @@
-# What `make fonts` runs in: the image of `make evil` with fallback fonts, so the
-# search for a face that has a missing glyph (find_fallback in font.c) runs at all.
-# A separate image: in mwt-test, DejaVu alone keeps the pictures and the timings
-# of the other tests as they are. Each font has a part to play:
+# What `make fonts` runs in: what mwt, vinput and the tests under sway need, with
+# fallback fonts, so the search for a face that has a missing glyph (find_fallback
+# in font.c) runs at all. A separate image: in mwt-test, DejaVu alone keeps the
+# pictures and the timings of the other tests as they are. Ubuntu, where mwt-test
+# is Arch: Arch has Nanum, D2Coding and Symbola only in the AUR. Each font has a
+# part to play:
 #
 # fonts-droid-fallback   CJK: wide glyphs from a fallback face (it has no Hangul)
 # fonts-nanum            Hangul: a second fallback face next to the first
@@ -14,13 +16,19 @@
 #                        for tests/font_ttc.c
 #
 # DejaVu Sans Mono stays what "monospace" means; tests/fonts-run.sh checks it.
-FROM localhost/mwt-test
-USER root
+FROM docker.io/library/ubuntu:26.04
+ENV DEBIAN_FRONTEND=noninteractive
 COPY mkttc.py /tmp/mkttc.py
 RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential pkg-config libwayland-dev wayland-protocols \
+    libxkbcommon-dev libfreetype-dev libfontconfig-dev ncurses-bin \
+    sway wtype wl-clipboard grim python3 git \
+    fonts-dejavu-core fontconfig procps xkb-data locales \
     fonts-droid-fallback fonts-nanum fonts-noto-color-emoji fonts-symbola fonts-noto-core \
     python3-fonttools \
     && rm -rf /var/lib/apt/lists/* \
     && mkdir -p /usr/local/share/fonts/mwt && python3 -I /tmp/mkttc.py /usr/local/share/fonts/mwt/mwt-test.ttc \
     && rm /tmp/mkttc.py && fc-cache -f
+RUN useradd -m tester
 USER tester
+WORKDIR /home/tester
