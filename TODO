@@ -2,9 +2,11 @@ TODO
 
 * Mode 2027 (Graphem-Cluster), sobald die Spezifikation der Terminal-WG bei
   freedesktop.org verabschiedet ist. Standard bleibt wcwidth, Programme
-  schalten per CSI ? 2027 h um. Dazu gehört: Cluster in einer Zelle
-  speichern, als ein Glyph zeichnen, beim Kopieren erhalten, und die
-  DECRQM-Antwort in vt.c (private_mode_state) auf 1/2 umstellen.
+  schalten per CSI ? 2027 h um. Die Zellen halten schon, was ohne Breite
+  auf ihr Zeichen folgt (cell.ext, vt_cell_ext), und ein Kopieren gibt es
+  aus. Es fehlt: die Cluster-Grenzen nach UAX #29 und ihre Breite, das
+  Zeichnen als ein Glyph, auch der Akzente, die bisher keiner zeichnet,
+  und die DECRQM-Antwort in vt.c (private_mode_state) auf 1/2 umstellen.
   Abnahme: tests/width.sh schaltet den Modus ein, und die tmux-Fälle laufen
   ohne GAP. Die vim-Fälle (Flaggen, Jamo) zählen nicht: vim zählt selbst.
 
