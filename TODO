@@ -25,8 +25,6 @@ Performance, aus der Review vom 2026-11-17 (docs/history/Review-2026-11-17.md):
   60 Hz kostet so viel wie neuer (2,72 gegen 2,92 ms pro Frame). Eine Kopie je
   Zeile und ein memcmp, bevor sie als geändert gilt. Aus der Review vom
   2026-11-18, 3.3.
-* push_hist ruft realloc für jede Zeile, die hinausscrollt; eine Kapazität je
-  Platz sparte bei seq 17 %.
 * Synchronized Output (Mode 2026), damit ein Programm, das ein Bild in
   mehreren write() schickt, nicht halb gezeichnet wird.
 * Beim Resize und Zoom bei jedem Schritt zwei neue memfd-Puffer; ein Pool,

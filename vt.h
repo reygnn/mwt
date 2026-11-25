@@ -98,6 +98,7 @@ struct vt {
 	/* scrollback (main screen only) */
 	struct cell **hist;
 	int *hist_len;
+	int *hist_room;            /* cells each slot holds; it only grows */
 	int hist_cap, hist_count, hist_head; /* head: index of next slot */
 	int view;                 /* lines scrolled back, 0 = live */
 	uint64_t scrolled;        /* total lines pushed into history */

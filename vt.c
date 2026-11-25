@@ -236,13 +236,20 @@ static void push_hist(struct vt *vt, const struct cell *l, int len)
 			len--;
 	}
 	int slot = vt->hist_head;
-	struct cell *dst = realloc(vt->hist[slot], MAX(len, 1) * sizeof *dst);
+	struct cell *dst = vt->hist[slot];
+	/* a slot keeps its cells: once the history is full, a line that fits
+	 * where the one it replaces was needs no realloc */
+	if (!dst || len > vt->hist_room[slot]) {
+		dst = realloc(dst, MAX(len, 1) * sizeof *dst);
+		if (dst) {
+			vt->hist[slot] = dst;
+			vt->hist_room[slot] = MAX(len, 1);
+		}
+	}
 	/* out of memory the line goes in empty: it still scrolled off, and
 	 * skipping it would shift every line number a selection holds */
-	if (dst) {
+	if (dst)
 		memcpy(dst, l, len * sizeof *dst);
-		vt->hist[slot] = dst;
-	}
 	vt->hist_len[slot] = dst ? len : 0;
 	vt->hist_head = (slot + 1) % vt->hist_cap;
 	if (vt->hist_count < vt->hist_cap)
@@ -526,9 +533,10 @@ struct vt *vt_new(int cols, int rows, int histsize, const struct vt_callbacks *c
 	if (vt->hist_cap) {
 		vt->hist = calloc(vt->hist_cap, sizeof *vt->hist);
 		vt->hist_len = calloc(vt->hist_cap, sizeof *vt->hist_len);
+		vt->hist_room = calloc(vt->hist_cap, sizeof *vt->hist_room);
 	}
 	if (!vt->pri || !vt->alt || !vt->dirty || !vt->tabs ||
-	    (vt->hist_cap && (!vt->hist || !vt->hist_len))) {
+	    (vt->hist_cap && (!vt->hist || !vt->hist_len || !vt->hist_room))) {
 		vt_free(vt);
 		return NULL;
 	}
@@ -548,6 +556,7 @@ void vt_free(struct vt *vt)
 		free(vt->hist[i]);
 	free(vt->hist);
 	free(vt->hist_len);
+	free(vt->hist_room);
 	free(vt->dirty);
 	free(vt->tabs);
 	free(vt);

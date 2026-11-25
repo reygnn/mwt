@@ -19,6 +19,7 @@ void *__real_malloc(size_t n);
 void *__real_calloc(size_t n, size_t sz);
 void *__real_realloc(void *p, size_t n);
 static long countdown = -1;
+static long reallocs; /* calls of realloc, failed or not */
 static bool injected;
 static bool inject(void)
 {
@@ -29,7 +30,11 @@ static bool inject(void)
 }
 void *__wrap_malloc(size_t n) { return inject() ? NULL : __real_malloc(n); }
 void *__wrap_calloc(size_t n, size_t sz) { return inject() ? NULL : __real_calloc(n, sz); }
-void *__wrap_realloc(void *p, size_t n) { return inject() ? NULL : __real_realloc(p, n); }
+void *__wrap_realloc(void *p, size_t n)
+{
+	reallocs++;
+	return inject() ? NULL : __real_realloc(p, n);
+}
 static char replybuf[256];
 static char titlebuf[VT_OSC_MAX];
 
@@ -172,6 +177,45 @@ static void test_scroll_history(void)
 	/* ED 3 clears history */
 	w(vt, "\033[3J");
 	CHECK(vt->hist_count == 0);
+	vt_free(vt);
+}
+
+static const char *hist_line(struct vt *vt, int back) /* 1: the newest */
+{
+	int len;
+	const struct cell *l = vt_abs_line(vt, (int64_t)vt->scrolled - back, &len);
+	return l ? text(l, len) : "(null)";
+}
+
+/* A history slot keeps its cells: lines no longer than the one before in
+ * their slot go in without realloc, a longer one grows it. */
+static void test_history_slots(void)
+{
+	struct vt *vt = mk(10, 1, 3); /* each line feed pushes the row */
+	w(vt, "abcdef\r\nabcdef\r\nabcdef\r\nabcdef\r\n");
+	CHECK(vt->hist_count == 3);
+	long before = reallocs;
+	for (int i = 0; i < 30; i++)
+		w(vt, i % 2 ? "xyz\r\n" : "uvwxyz\r\n");
+	CHECK(reallocs == before);
+	CHECK_STR(hist_line(vt, 1), "xyz");
+	CHECK_STR(hist_line(vt, 2), "uvwxyz");
+	/* longer than its slot: one realloc */
+	w(vt, "0123456789");
+	w(vt, "\r\n");
+	CHECK(reallocs == before + 1);
+	CHECK_STR(hist_line(vt, 1), "0123456789");
+	/* a slot that cannot grow keeps its cells and the line goes in empty */
+	countdown = 0;
+	w(vt, "9876543210\r\n");
+	countdown = -1;
+	CHECK(vt->hist_count == 3);
+	CHECK_STR(hist_line(vt, 1), "");
+	CHECK_STR(hist_line(vt, 2), "0123456789");
+	w(vt, "ab\r\n");
+	CHECK_STR(hist_line(vt, 1), "ab");
+	CHECK_STR(hist_line(vt, 2), "");
+	CHECK_STR(hist_line(vt, 3), "0123456789");
 	vt_free(vt);
 }
 
@@ -1674,6 +1718,7 @@ int main(void)
 	test_cnl_cpl_1048_decom();
 	test_abs_line_range();
 	test_alloc_failures();
+	test_history_slots();
 	test_rep();
 	test_xterm_resets();
 	test_fuzz();
