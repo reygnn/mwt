@@ -152,12 +152,13 @@ has the option `numpad:microsoft` or `numpad:pc`.
 
 mwt counts as glibc and bash do, code point by code point with `wcwidth()`. Characters
 without width (combining accents, VS16, ZWJ and ZWNJ) are not drawn, but a copy has them
-after their character. A cell keeps eight of them, and only while the cursor is where
-its character left it: after a control or a sequence other than SGR they are dropped,
-where xterm puts them on the cell under the cursor. All cells together keep
-65535 different sequences, a reset does not empty them; past that a new one is dropped.
-The other format characters
-without width (ZWSP, the bidi controls, BOM) are always dropped. tmux 3.8
+after their character. A cell takes eight of them, and takes one only while the cursor
+is where its character left it: one that comes after a control or a sequence other than
+SGR is dropped, where xterm puts it on the cell under the cursor. All cells together
+keep 65535 different sequences, the beginnings of a longer one among them, and a reset
+does not empty them; past that a new one is dropped, as is one of many made to look
+alike to the table. The other format characters without width (ZWSP, the bidi controls,
+BOM) are always dropped. tmux 3.8
 counts ❤️ (with VS16), skin tones such as 👍🏽 and ZWJ sequences such as 👨‍👩‍👧
 differently, vim 9.2 flags and Hangul jamo; there the cursor drifts. `make width` shows where. To a query for mode 2027
 (CSI ? 2027 $ p) mwt answers "unknown"; see TODO.

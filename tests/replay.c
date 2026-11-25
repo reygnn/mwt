@@ -91,6 +91,11 @@ static const char *grid_problem(const struct vt *vt)
 		return "scroll region outside the screen";
 	if (vt->c.gl < 0 || vt->c.gl > 1)
 		return "GL is neither G0 nor G1";
+	if (vt->lastx < -1 || vt->lastx >= vt->cols)
+		return "place of the next mark outside the row";
+	if (vt->lastx >= 0 && ((uint32_t)vt->lastx >= vt->line[vt->c.y][vt->cols].cp ||
+			       (vt->line[vt->c.y][vt->lastx].attr & ATTR_WDUMMY)))
+		return "place of the next mark is no character";
 	struct cell **screens[2] = { vt->pri, vt->alt };
 	for (int s = 0; s < 2; s++)
 		for (int r = 0; r < vt->rows; r++) {

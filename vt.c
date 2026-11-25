@@ -605,13 +605,6 @@ bool vt_resize(struct vt *vt, int cols, int rows)
 	struct vt_cursor *pc = alt ? &vt->saved_pri : &vt->c;
 	struct vt_cursor *ac = alt ? &vt->c : &vt->saved_alt;
 
-	/* A mark still goes on the character before it, which stays in the
-	 * cursor's row, unless this cuts it off or cuts a wide one in half: a
-	 * window grown again has a blank there. */
-	if (vt->lastx >= 0 &&
-	    vt->lastx + ((vt->line[vt->c.y][vt->lastx].attr & ATTR_WIDE) ? 2 : 1) > cols)
-		vt->lastx = -1;
-
 	/* keep the cursor line visible: lines above it go into history */
 	int pshift = MAX(0, pc->y - (rows - 1));
 	int ashift = MAX(0, ac->y - (rows - 1));
@@ -628,6 +621,12 @@ bool vt_resize(struct vt *vt, int cols, int rows)
 		free(ntabs);
 		return false;
 	}
+	/* A mark still goes on the character before it, which stays in the
+	 * cursor's row, unless this cuts it off or cuts a wide one in half: a
+	 * window grown again has a blank there. */
+	if (vt->lastx >= 0 &&
+	    vt->lastx + ((vt->line[vt->c.y][vt->lastx].attr & ATTR_WIDE) ? 2 : 1) > cols)
+		vt->lastx = -1;
 	for (int i = 0; i < pshift; i++)
 		push_hist(vt, vt->pri[i], vt->cols);
 	free_screen(vt->pri, vt->rows);
@@ -690,7 +689,9 @@ static void ext_enter(uint16_t *slot, uint32_t slots, const uint32_t *seq, uint1
 }
 
 /* room for more sequences, at most as many as a cell's ext can name; false
- * with nothing changed when that is reached or there is no memory */
+ * with nothing changed when that is reached or there is no memory. Entered
+ * again in their order into a table twice the size, none ends up further from
+ * its slot than it was: ext_find() still finds each within EXT_PROBES. */
 static bool ext_grow(struct vt *vt)
 {
 	if (vt->ext_cap >= UINT16_MAX)
@@ -817,8 +818,9 @@ static bool put(struct vt *vt, uint32_t cp)
 		/* the joiners are kept as marks are: an emoji sequence or Persian
 		 * text is copied whole. The other format characters are dropped:
 		 * a copy would hold bidi controls nothing on the screen showed. */
+		/* U+061C is a mark to xterm and so to REP, and a bidi control */
 		bool format = format_char(cp);
-		if (!format || cp == 0x200c || cp == 0x200d)
+		if ((!format && cp != 0x61c) || cp == 0x200c || cp == 0x200d)
 			put_mark(vt, cp);
 		return !format;
 	}
@@ -1659,7 +1661,9 @@ static void feed(struct vt *vt, uint32_t cp)
 	 * the ground state without being printed ends that, as in xterm 407; a
 	 * control within a sequence, or one cut off by ESC, does not */
 	/* A mark goes on that character still after what leaves the cursor where
-	 * it is for certain: more marks, and SGR, as in xterm 407. */
+	 * it is for certain: more marks, and SGR, as in xterm 407. Also after a
+	 * string or sequence that ESC cut off, which did nothing, when an SGR
+	 * is what follows. */
 	bool keep = false, stays = false;
 	switch (vt->state) {
 	case ST_GROUND:

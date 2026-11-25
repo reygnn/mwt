@@ -32,6 +32,7 @@
 #define _XOPEN_SOURCE 700
 #include "vt.h"
 
+#include <locale.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -100,6 +101,12 @@ static void check(const struct vt *vt)
 		die("GL is neither G0 nor G1", vt);
 	if (vt->view < 0 || vt->view > vt->hist_count)
 		die("view outside the history", vt);
+	/* the place of the next mark: a cell written, of a character's own */
+	if (vt->lastx < -1 || vt->lastx >= vt->cols)
+		die("place of the next mark outside the row", vt);
+	if (vt->lastx >= 0 && ((uint32_t)vt->lastx >= vt->line[vt->c.y][vt->cols].cp ||
+			       (vt->line[vt->c.y][vt->lastx].attr & ATTR_WDUMMY)))
+		die("place of the next mark is no character", vt);
 	struct cell **screens[2] = { vt->pri, vt->alt };
 	for (int s = 0; s < 2; s++)
 		for (int r = 0; r < vt->rows; r++) {
@@ -195,6 +202,19 @@ static void compare(const struct vt *a, const struct vt *b,
 		die("bells differ between whole and chunked", b);
 }
 
+/* Widths as mwt has them: in the C locale wcwidth() knows no wide character and
+ * no mark, and none of the checks on them could fail. */
+int LLVMFuzzerInitialize(int *argc, char ***argv)
+{
+	(void)argc;
+	(void)argv;
+	if (!setlocale(LC_CTYPE, "C.UTF-8")) {
+		fprintf(stderr, "fuzz_vt: no C.UTF-8 locale\n");
+		abort();
+	}
+	return 0;
+}
+
 int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size)
 {
 	if (size < 2)
@@ -229,6 +249,11 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size)
 	for (size_t i = 0; i < 4 && i < size; i++) {
 		uint8_t v = data[size - 1 - i];
 		if (!vt_resize(b, 1 + v % 140, 1 + (v * 31) % 60))
+			abort();
+		check(b);
+		/* and at times once more before anything is written, as a
+		 * window dragged: narrower, then wider again */
+		if ((v & 3) == 3 && !vt_resize(b, 1 + (v * 7) % 140, 1 + (v * 13) % 60))
 			abort();
 		check(b);
 		vt_write(b, (const char *)data, size < 512 ? size : 512);
@@ -285,6 +310,7 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size)
 int main(int argc, char **argv)
 {
 	int n = 0;
+	LLVMFuzzerInitialize(&argc, &argv);
 	for (int i = 1; i < argc; i++) {
 		FILE *f = fopen(argv[i], "rb");
 		if (!f) {

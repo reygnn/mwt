@@ -1719,6 +1719,10 @@ static void test_marks(void)
 	CHECK_STR(marks(vt, &vt->pri[1][0]), "200c");
 	CHECK_STR(marks(vt, &vt->pri[2][0]), "301");
 	CHECK(!vt->pri[2][1].ext && vt->c.x == 2);
+	/* U+061C too, a bidi control that is a mark to REP */
+	w(vt, "\033[H\033[2Ja\u061c\u0301\033[2b");
+	CHECK_STR(marks(vt, &vt->pri[0][0]), "301");
+	CHECK_STR(row(vt, 0), "aaa");
 
 	/* a cell holds VT_EXT_MAX of them, more are dropped */
 	w(vt, "\033[H\033[2Jz\u0300\u0301\u0302\u0303\u0304\u0305\u0306\u0307\u0308\u0309");
@@ -1803,7 +1807,29 @@ static void test_marks(void)
 	w(vt, "\033[H\033[2Je\033[2b\u0301");
 	CHECK_STR(row(vt, 0), "eee");
 	CHECK(!vt->pri[0][0].ext && !vt->pri[0][1].ext && !vt->pri[0][2].ext);
+	/* a resize to the column: the last one that stays, a wide character
+	 * that just fits, one at the left edge cut in two; and the row moved up */
+	CHECK(vt_resize(vt, 8, 2));
+	w(vt, "\033[H\033[2Jab");
+	CHECK(vt_resize(vt, 2, 2));
+	w(vt, "\u0301");
+	CHECK_STR(marks(vt, &vt->pri[0][1]), "301");
+	CHECK(vt_resize(vt, 8, 2));
+	w(vt, "\033[H\033[2Jabcd\u4e16");
 	CHECK(vt_resize(vt, 6, 2));
+	w(vt, "\u0301");
+	CHECK_STR(marks(vt, &vt->pri[0][4]), "301");
+	w(vt, "\033[H\033[2J\u4e16");
+	CHECK(vt_resize(vt, 1, 2));
+	w(vt, "\u0301");
+	CHECK(!vt->pri[0][0].ext && vt->pri[0][0].cp == ' ');
+	CHECK(vt_resize(vt, 4, 3));
+	w(vt, "\033[H\033[2J\r\n\r\nab");
+	CHECK(vt_resize(vt, 4, 1) && vt->c.y == 0);
+	w(vt, "\u0301");
+	CHECK_STR(marks(vt, &vt->pri[0][1]), "301");
+	/* and REP still repeats after a resize */
+	CHECK(vt_resize(vt, 5, 2));
 	w(vt, "\033[H\033[2Jx");
 	CHECK(vt_resize(vt, 6, 2));
 	w(vt, "\033[2b");
@@ -1840,7 +1866,7 @@ static void test_marks(void)
 				strcpy(one, b);
 		}
 		CHECK(made == CROWD);
-		CHECK(kept >= 1 && kept <= 64);
+		CHECK(kept > 32 && kept <= 64);
 		uint32_t before = vt->ext_n;
 		w(vt, one);
 		CHECK_STR(marks(vt, &vt->pri[0][0]), "300 300 300 300");
@@ -1942,6 +1968,27 @@ static void test_alloc_failures(void)
 		CHECK(l && len == 1 && l[0].cp == 'b');
 		vt_free(vt);
 	}
+	/* a resize that fails leaves a mark its place, also one that would have
+	 * cut the character off */
+	fails = 0;
+	for (long n = 0;; n++) {
+		struct vt *vt = mk(10, 2, 0);
+		w(vt, "ab");
+		injected = false;
+		countdown = n;
+		bool ok = vt_resize(vt, 1, 2);
+		countdown = -1;
+		w(vt, "\u0301");
+		if (!ok) {
+			fails++;
+			CHECK(vt->cols == 10);
+			CHECK_STR(marks(vt, &vt->pri[0][1]), "301");
+		}
+		vt_free(vt);
+		if (!injected)
+			break;
+	}
+	CHECK(fails > 0);
 	/* no memory for a mark: it is dropped, its character stays, the next goes on */
 	fails = 0;
 	for (long n = 0;; n++) {

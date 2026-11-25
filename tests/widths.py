@@ -67,7 +67,7 @@ def visible(s):
     marks and variation selectors stay with their character."""
     def dropped(cp):
         return (0x200b <= cp <= 0x200f or 0x202a <= cp <= 0x202e or
-                0x2060 <= cp <= 0x206f or cp == 0xfeff) and cp not in (0x200c, 0x200d)
+                0x2060 <= cp <= 0x206f or cp in (0xfeff, 0x61c)) and cp not in (0x200c, 0x200d)
     return "".join(c for c in s if not dropped(ord(c)))
 
 
