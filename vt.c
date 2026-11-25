@@ -232,7 +232,7 @@ static void push_hist(struct vt *vt, const struct cell *l, int len)
 	if (!(l[len - 1].attr & ATTR_WRAP)) {
 		len = MIN(len, (int)USED(vt, l));
 		while (len > 0 && l[len - 1].cp == ' ' &&
-		       l[len - 1].bg == COL_DEFAULT_BG && !l[len - 1].attr)
+		       l[len - 1].bg == COL_DEFAULT_BG && !l[len - 1].attr && !l[len - 1].ext)
 			len--;
 	}
 	int slot = vt->hist_head;
@@ -295,7 +295,8 @@ int vt_abs_wraps(const struct vt *vt, int64_t abs)
 	for (int k = n - 1; l && k >= 0; k--) {
 		if (l[k].attr & ATTR_WRAP)
 			return k + 1;
-		if ((l[k].cp != ' ' && l[k].cp != 0) || l[k].bg != COL_DEFAULT_BG || l[k].attr)
+		if ((l[k].cp != ' ' && l[k].cp != 0) || l[k].bg != COL_DEFAULT_BG || l[k].attr ||
+		    l[k].ext)
 			return 0;
 	}
 	return 0;
@@ -604,6 +605,13 @@ bool vt_resize(struct vt *vt, int cols, int rows)
 	struct vt_cursor *pc = alt ? &vt->saved_pri : &vt->c;
 	struct vt_cursor *ac = alt ? &vt->c : &vt->saved_alt;
 
+	/* A mark still goes on the character before it, which stays in the
+	 * cursor's row, unless this cuts it off or cuts a wide one in half: a
+	 * window grown again has a blank there. */
+	if (vt->lastx >= 0 &&
+	    vt->lastx + ((vt->line[vt->c.y][vt->lastx].attr & ATTR_WIDE) ? 2 : 1) > cols)
+		vt->lastx = -1;
+
 	/* keep the cursor line visible: lines above it go into history */
 	int pshift = MAX(0, pc->y - (rows - 1));
 	int ashift = MAX(0, ac->y - (rows - 1));
@@ -708,21 +716,46 @@ static bool ext_grow(struct vt *vt)
 	return true;
 }
 
+/* Where seq is in the table: its number, or 0 with *free set to the slot it
+ * would take. Only EXT_PROBES slots are looked at: sequences made to share a
+ * slot would otherwise cost a walk past all of them for every mark, and one
+ * that finds neither itself nor room there is not kept (*free past the table). */
+#define EXT_PROBES 64
+static uint16_t ext_find(const struct vt *vt, const uint32_t *seq, uint32_t *free)
+{
+	*free = UINT32_MAX;
+	if (!vt->ext_slots)
+		return 0;
+	uint32_t i = ext_hash(seq) & (vt->ext_slots - 1);
+	for (int k = 0; k < EXT_PROBES; k++, i = (i + 1) & (vt->ext_slots - 1)) {
+		uint16_t id = vt->ext_slot[i];
+		if (!id) {
+			*free = i;
+			return 0;
+		}
+		if (!memcmp(vt->ext + (id - 1) * VT_EXT_MAX, seq, VT_EXT_MAX * sizeof *seq))
+			return id;
+	}
+	return 0;
+}
+
 /* what a cell's ext is for seq, VT_EXT_MAX code points; 0 when it cannot be kept */
 static uint16_t ext_id(struct vt *vt, const uint32_t *seq)
 {
-	if (vt->ext_slots) {
-		for (uint32_t i = ext_hash(seq) & (vt->ext_slots - 1); vt->ext_slot[i];
-		     i = (i + 1) & (vt->ext_slots - 1))
-			if (!memcmp(vt->ext + (vt->ext_slot[i] - 1) * VT_EXT_MAX, seq,
-				    VT_EXT_MAX * sizeof *seq))
-				return vt->ext_slot[i];
+	uint32_t free;
+	uint16_t id = ext_find(vt, seq, &free);
+	if (id)
+		return id;
+	if (vt->ext_n == vt->ext_cap) {
+		if (!ext_grow(vt))
+			return 0;
+		ext_find(vt, seq, &free);
 	}
-	if (vt->ext_n == vt->ext_cap && !ext_grow(vt))
+	if (free == UINT32_MAX)
 		return 0;
 	memcpy(vt->ext + vt->ext_n * VT_EXT_MAX, seq, VT_EXT_MAX * sizeof *seq);
-	uint16_t id = (uint16_t)++vt->ext_n;
-	ext_enter(vt->ext_slot, vt->ext_slots, seq, id);
+	id = (uint16_t)++vt->ext_n;
+	vt->ext_slot[free] = id;
 	return id;
 }
 

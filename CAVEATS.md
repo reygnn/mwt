@@ -155,7 +155,8 @@ without width (combining accents, VS16, ZWJ and ZWNJ) are not drawn, but a copy 
 after their character. A cell keeps eight of them, and only while the cursor is where
 its character left it: after a control or a sequence other than SGR they are dropped,
 where xterm puts them on the cell under the cursor. All cells together keep
-65535 different sequences; past that a new one is dropped. The other format characters
+65535 different sequences, a reset does not empty them; past that a new one is dropped.
+The other format characters
 without width (ZWSP, the bidi controls, BOM) are always dropped. tmux 3.8
 counts ❤️ (with VS16), skin tones such as 👍🏽 and ZWJ sequences such as 👨‍👩‍👧
 differently, vim 9.2 flags and Hangul jamo; there the cursor drifts. `make width` shows where. To a query for mode 2027

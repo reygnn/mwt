@@ -164,6 +164,8 @@ static const char *difference(const struct vt *a, const struct vt *b)
 		return "saved cursor";
 	if (a->top != b->top || a->bot != b->bot)
 		return "scroll region";
+	if (a->lastx != b->lastx)
+		return "place of the next mark";
 	if (a->cursor_style != b->cursor_style)
 		return "cursor style";
 	if (memcmp(a->tabs, b->tabs, a->cols * sizeof *a->tabs))
@@ -207,15 +209,18 @@ static uint64_t fnv_cells(uint64_t h, const struct cell *c, int n)
 	return h;
 }
 
-/* The marks on the cells, with their place: nothing for a row without any, so
- * the sums from before cells held them stay. */
-static uint64_t fnv_ext(uint64_t h, const struct vt *vt, const struct cell *c, int n)
+/* The marks on the cells, with their place, row being the line's number in its
+ * screen or the history: nothing for a row without any, so the sums from before
+ * cells held them stay. */
+static uint64_t fnv_ext(uint64_t h, const struct vt *vt, const struct cell *c, int n, int64_t row)
 {
 	for (int i = 0; i < n; i++) {
 		const uint32_t *e;
 		int k = vt_cell_ext(vt, &c[i], &e);
-		if (k)
-			h = fnv(fnv(h, &i, sizeof i), e, (size_t)k * sizeof *e);
+		if (k) {
+			int64_t at[2] = { row, i };
+			h = fnv(fnv(h, at, sizeof at), e, (size_t)k * sizeof *e);
+		}
 	}
 	return h;
 }
@@ -239,13 +244,14 @@ static uint64_t state_hash(const struct vt *vt, const struct run *run)
 	for (int r = 0; r < vt->rows; r++)
 		h = fnv_cells(fnv_cells(h, vt->pri[r], vt->cols), vt->alt[r], vt->cols);
 	for (int r = 0; r < vt->rows; r++)
-		h = fnv_ext(fnv_ext(h, vt, vt->pri[r], vt->cols), vt, vt->alt[r], vt->cols);
+		h = fnv_ext(fnv_ext(h, vt, vt->pri[r], vt->cols, r), vt, vt->alt[r], vt->cols,
+			    -1 - r);
 	for (int64_t i = vt_abs_first(vt); i < vt_abs_first(vt) + vt->hist_count; i++) {
 		int n;
 		const struct cell *l = vt_abs_line(vt, i, &n);
 		h = fnv(h, &n, sizeof n);
 		if (l)
-			h = fnv_ext(fnv_cells(h, l, n), vt, l, n);
+			h = fnv_ext(fnv_cells(h, l, n), vt, l, n, i);
 	}
 	return fnv(h, run->reply ? run->reply : "", run->reply_len);
 }

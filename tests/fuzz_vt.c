@@ -167,6 +167,8 @@ static void compare(const struct vt *a, const struct vt *b,
 		die("saved cursor differs between whole and chunked", b);
 	if (a->top != b->top || a->bot != b->bot)
 		die("scroll region differs between whole and chunked", b);
+	if (a->lastx != b->lastx)
+		die("place of the next mark differs between whole and chunked", b);
 	if (a->cursor_style != b->cursor_style)
 		die("cursor style differs between whole and chunked", b);
 	if (memcmp(a->tabs, b->tabs, (size_t)a->cols * sizeof *a->tabs))

@@ -224,9 +224,6 @@ static void test_covers(void)
 	CHECK(sel_covers(7, 0, 8, INT_MAX, 8, 1000, 1));
 }
 
-/* A window grown wider keeps the wrap where the line ended, blanks after it:
- * the lines are still one, on the screen as in the history; a cleared screen
- * no longer goes on from the history. */
 /* What a cell holds after its character is copied with it, though not drawn */
 static void test_text_marks(void)
 {
@@ -241,12 +238,32 @@ static void test_text_marks(void)
 	/* a mark on a blank is not a trailing blank */
 	w(vt, "\r\n \u0301");
 	TEXT(vt, sel_of(SEL_CHAR, line(vt, 2), 0, line(vt, 2), 9), " \u0301");
-	/* and from the history */
-	w(vt, "\r\n\r\n");
-	TEXT(vt, sel_of(SEL_CHAR, line(vt, -2), 0, line(vt, -2), 9), "e\u0301 \u4e16\ufe0f\u200d\u4e16");
+	/* and from the history, the blank with its mark too */
+	w(vt, "\r\n\r\n\r\n\r\n");
+	TEXT(vt, sel_of(SEL_CHAR, line(vt, -4), 0, line(vt, -4), 9), "e\u0301 \u4e16\ufe0f\u200d\u4e16");
+	TEXT(vt, sel_of(SEL_CHAR, line(vt, -2), 0, line(vt, -2), 9), " \u0301");
+	vt_free(vt);
+
+	/* a line that wraps on a character with a mark goes on with the mark */
+	vt = mk(4, 3, 0);
+	w(vt, "abcd\u0301ef");
+	TEXT(vt, sel_of(SEL_LINE, line(vt, 0), 0, line(vt, 1), 0), "abcd\u0301ef");
+	/* a blank with a mark is a character to a double click and to select
+	 * all, not a blank */
+	w(vt, "\033[H\033[2Ja \u0301 b");
+	WORD(vt, 1, 1, 1);
+	WORD(vt, 2, 2, 2);
+	w(vt, "\033[H\033[2J \u0301");
+	struct sel all = { 0 };
+	CHECK(sel_all(vt, &all));
+	w(vt, "\033[H\033[2J ");
+	CHECK(!sel_all(vt, &all));
 	vt_free(vt);
 }
 
+/* A window grown wider keeps the wrap where the line ended, blanks after it:
+ * the lines are still one, on the screen as in the history; a cleared screen
+ * no longer goes on from the history. */
 static void test_text_wider(void)
 {
 	struct vt *vt = mk(10, 4, 10);
@@ -374,6 +391,31 @@ static void test_text_nomem(void)
 		countdown = -1;
 		if (!injected) {
 			CHECK(t && strlen(t) == 29 * 52); /* 51 bytes and a newline each */
+			free(t);
+			break;
+		}
+		failed++;
+		if (t) {
+			CHECK(!t);
+			free(t);
+		}
+	}
+	CHECK(failed >= 3);
+	vt_free(vt);
+
+	/* and while the marks are written, which are most of this text */
+	vt = mk(40, 12, 0);
+	for (int i = 0; i < 440; i++)
+		w(vt, "a\u0301\u0302\u0303\u0304\u0305\u0306\u0307\u0308");
+	s = sel_of(SEL_LINE, line(vt, 0), 0, line(vt, 10), 0);
+	failed = 0;
+	for (long n = 0;; n++) {
+		countdown = n;
+		injected = false;
+		char *t = sel_text(vt, &s);
+		countdown = -1;
+		if (!injected) {
+			CHECK(t && strlen(t) == 440 * 17);
 			free(t);
 			break;
 		}

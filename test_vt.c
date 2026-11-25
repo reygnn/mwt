@@ -1632,6 +1632,15 @@ static const char *marks(const struct vt *vt, const struct cell *c)
 	return buf;
 }
 
+/* ext_hash() of vt.c, to make sequences that share a slot of its table */
+static uint32_t marks_hash(const uint32_t *seq)
+{
+	uint32_t h = 2166136261u;
+	for (int i = 0; i < VT_EXT_MAX; i++)
+		h = (h ^ seq[i]) * 16777619u;
+	return h ^ h >> 15;
+}
+
 /* What has no width goes into the cell of the character before it, to be copied
  * with it; nothing of it is drawn or counted. */
 static void test_marks(void)
@@ -1750,11 +1759,93 @@ static void test_marks(void)
 	CHECK_STR(row(vt, 1), "abc");
 	CHECK_STR(marks(vt, &vt->pri[1][1]), "301");
 	CHECK(!vt->pri[1][0].ext && !vt->pri[1][2].ext);
-	/* and REP still repeats after one */
+	/* cut off and shown again by a window grown back, the place is a blank;
+	 * so is the left half of a wide character cut in two */
+	w(vt, "\033[H\033[2Jab");
+	CHECK(vt_resize(vt, 1, 2) && vt_resize(vt, 6, 2));
+	w(vt, "\u0301");
+	CHECK(!vt->pri[0][0].ext && !vt->pri[0][1].ext && vt->pri[0][1].cp == ' ');
+	w(vt, "\033[H\033[2Jabcd\u4e16");
+	CHECK(vt_resize(vt, 5, 2));
+	w(vt, "\u0301");
+	CHECK(vt->pri[0][3].cp == 'd' && vt->pri[0][4].cp == ' ');
+	for (int x = 0; x < 5; x++)
+		CHECK(!vt->pri[0][x].ext);
+	/* a blank with a mark is not a trailing blank of a line that goes into
+	 * the history, nor one after a wrap */
+	CHECK(vt_resize(vt, 4, 2));
+	w(vt, "\033[H\033[2Jx \u0301 \r\n\n\n");
+	l = vt_abs_line(vt, (int64_t)vt->scrolled - 2, &len);
+	CHECK(l && len == 2 && l[0].cp == 'x');
+	if (l && len == 2)
+		CHECK_STR(marks(vt, &l[1]), "301");
+	w(vt, "\033[H\033[2Jabcde");
+	CHECK(vt_abs_wraps(vt, (int64_t)vt->scrolled) == 4);
+	CHECK(vt_resize(vt, 8, 2));
+	CHECK(vt_abs_wraps(vt, (int64_t)vt->scrolled) == 4);
+	w(vt, "\033[1;7H \u0301");
+	CHECK(vt_abs_wraps(vt, (int64_t)vt->scrolled) == 0);
+	/* the next character after a wrap that was pending has its own; the
+	 * alternate screen keeps its marks to itself; DCH moves them along, ECH
+	 * ends them; after REP, a sequence like others, a mark is dropped */
+	CHECK(vt_resize(vt, 4, 2));
+	w(vt, "\033[H\033[2Jabcd\u0301e\u0302");
+	CHECK_STR(marks(vt, &vt->pri[0][3]), "301");
+	CHECK_STR(marks(vt, &vt->pri[1][0]), "302");
+	w(vt, "\033[H\033[2J\033[?1049ha\u0301\033[?1049l");
+	CHECK(!vt->pri[0][0].ext && vt->alt[0][0].cp == 'a');
+	CHECK_STR(marks(vt, &vt->alt[0][0]), "301");
+	w(vt, "\033[H\033[2Jxe\u0301\r\033[P");
+	CHECK_STR(marks(vt, &vt->pri[0][0]), "301");
+	CHECK(!vt->pri[0][1].ext);
+	w(vt, "\033[X");
+	CHECK(!vt->pri[0][0].ext && vt->pri[0][0].cp == ' ');
+	w(vt, "\033[H\033[2Je\033[2b\u0301");
+	CHECK_STR(row(vt, 0), "eee");
+	CHECK(!vt->pri[0][0].ext && !vt->pri[0][1].ext && !vt->pri[0][2].ext);
+	CHECK(vt_resize(vt, 6, 2));
 	w(vt, "\033[H\033[2Jx");
 	CHECK(vt_resize(vt, 6, 2));
 	w(vt, "\033[2b");
 	CHECK_STR(row(vt, 0), "xxx");
+	vt_free(vt);
+
+	/* Sequences made to share a slot, at every size of the table: only so
+	 * many are looked through for a mark, the rest are dropped, each cell
+	 * keeping the three marks before; those kept are found again. Were they
+	 * all kept, every mark would walk past all of them. */
+	vt = mk(4, 1, 0);
+	{
+		enum { CROWD = 80 };
+		uint32_t first[VT_EXT_MAX] = { 0x300, 0x300, 0x300, 0x300 }, home = 0;
+		int made = 0, kept = 0;
+		char one[32] = "";
+		for (uint32_t i = 0; made < CROWD && i < 112u * 112 * 112 * 112; i++) {
+			uint32_t seq[VT_EXT_MAX] = { 0x300 + i % 112, 0x300 + i / 112 % 112,
+						     0x300 + i / 12544 % 112, 0x300 + i / 1404928 };
+			if (!made)
+				home = marks_hash(first) & 0x1ffff;
+			if ((marks_hash(seq) & 0x1ffff) != home)
+				continue;
+			char b[32] = "\rx", *o = b + 2;
+			for (int k = 0; k < 4; k++)
+				enc(&o, seq[k]);
+			*o = 0;
+			w(vt, b);
+			const uint32_t *e;
+			int n = vt_cell_ext(vt, &vt->pri[0][0], &e);
+			CHECK(n == 4 || n == 3);
+			kept += n == 4;
+			if (!made++)
+				strcpy(one, b);
+		}
+		CHECK(made == CROWD);
+		CHECK(kept >= 1 && kept <= 64);
+		uint32_t before = vt->ext_n;
+		w(vt, one);
+		CHECK_STR(marks(vt, &vt->pri[0][0]), "300 300 300 300");
+		CHECK(vt->ext_n == before);
+	}
 	vt_free(vt);
 
 	/* nothing to go on in a new terminal, nor after a character too wide

@@ -22,7 +22,8 @@ static int cell_class(const struct vt *vt, int64_t abs, int col)
 	const struct cell *l = vt_abs_line(vt, abs, &len);
 	if (l && col > 0 && col < len && (l[col].attr & ATTR_WDUMMY))
 		col--;
-	if (!l || col >= len || l[col].cp == ' ' || l[col].cp == 0)
+	/* a blank with a mark on it is a mark shown by itself, not a blank */
+	if (!l || col >= len || ((l[col].cp == ' ' || l[col].cp == 0) && !l[col].ext))
 		return 0;
 	return is_word(l[col].cp) ? 1 : 2;
 }
@@ -175,7 +176,7 @@ bool sel_all(const struct vt *vt, struct sel *s)
 		int n;
 		const struct cell *l = vt_abs_line(vt, a, &n);
 		for (int c = 0; l && c < n; c++) {
-			if (l[c].cp == ' ' || l[c].cp == 0)
+			if ((l[c].cp == ' ' || l[c].cp == 0) && !l[c].ext)
 				continue;
 			s->mode = SEL_LINE;
 			s->aa = first;
