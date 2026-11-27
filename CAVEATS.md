@@ -55,9 +55,10 @@ narrower window, as it does in a terminal of that width given the same output. `
 `ps` write lines of 79 characters and a blank, which are two rows at 79 columns. Blanks
 an erase left are no text and are not laid out, before the cursor either: a cursor
 behind the end of its line is as far behind it in another width as the row has room for,
-and in the last column where it has none. Narrower and wider again, it is not back in
-its column. A row that holds nothing but what an erase left stays an empty row. A copy
-leaves the blanks at the end of a line out, written or not.
+and in the last column where it has none. Narrower and wider again, it is back in its
+column as long as the program wrote nothing meanwhile; once it wrote, it goes on from
+the column it found the cursor in. A row that holds nothing but what an erase left stays
+an empty row. A copy leaves the blanks at the end of a line out, written or not.
 
 Blanks a row was erased with in a background color, up to its last column (`CSI K`
 after `CSI 44 m`), are no text either: they are put behind the line's text again, up to
@@ -81,6 +82,19 @@ lost, once the cursor's row is the first: the cursor stays on the screen. The la
 ends its line then, in a shorter window as well: what is written below it later is a
 line of its own.
 
+A resize remembers where it found the cursor, a saved cursor and the first row of the
+screen, and the next one starts from there, not from where a narrower or shorter window
+left them. The cursors' places hold until the program writes to the main screen; what a
+full-screen program draws on the alternate one does not count. The first row holds
+until rows of the main screen scroll, or its text ends in another row than the resize
+left it in. So a screen that was erased and partly filled again is the same after
+narrower and wider, also at a prompt: bash and zsh write the prompt again after every
+change of size, and that scrolls nothing. Not with a command line typed and not yet
+entered that takes a row more in the narrower window: the shell writes it again in the
+last row, the screen scrolls, and wider again the rows from before the erase are back
+above the text. And nothing a window cut is remembered: rows past the end of the
+history, rows below the screen, a wide character at one column.
+
 bash draws its line again after a resize, by the rows it counted at the old width:
 readline does not know that the line was laid out anew. After many columns in one step,
 as in a tiling compositor, the line with the prompt can show twice; dragged column by
@@ -95,11 +109,13 @@ A shorter window keeps the end of the text on the screen, as a narrower one does
 go into the history from the top, as far as the cursor's row stays, and only what is
 below the screen then is cut off. A taller one takes the newest lines of the history
 back onto the screen, as xterm does, also above a screen that was erased while its
-history stayed. Behind the alternate screen the main one gives and takes lines the same
-way; xterm leaves it as it is there, and a shorter window loses its last lines.
+history stayed; shorter and taller again, it is the screen it was. Behind the alternate
+screen the main one gives and takes lines the same way; xterm leaves it as it is there,
+and a shorter window loses its last lines.
 
 A cursor a program saved (DECSC, `CSI s`, `?1048`, `?1049`) goes with the text of its
-row in a resize, to the nearest row where that is no longer on the screen. Without one,
+row in a resize, to the nearest row where that is no longer on the screen, and back to
+its own when that is on the screen again and the program wrote nothing. Without one,
 DECRC goes to the first row and column, as in any window of that size.
 
 The alternate screen is not laid out anew: its program draws it again. A narrower

@@ -453,6 +453,9 @@ static void scroll_up(struct vt *vt, int orig, int n, bool goes_on)
 	n = CLAMP(n, 0, vt->bot - orig + 1);
 	if (!n)
 		return;
+	/* where the screen started is no row of it any more (K4) */
+	if (!(vt->mode & MODE_ALTSCREEN))
+		vt->keep_view = false;
 	if (!goes_on)
 		vt->line[vt->bot]->wrap = 0;
 	if (orig > 0)
@@ -484,6 +487,8 @@ static void scroll_down(struct vt *vt, int orig, int n)
 	n = CLAMP(n, 0, vt->bot - orig + 1);
 	if (!n)
 		return;
+	if (!(vt->mode & MODE_ALTSCREEN))
+		vt->keep_view = false; /* as in scroll_up() */
 	if (orig > 0)
 		vt->line[orig - 1]->wrap = 0;
 	else
@@ -621,6 +626,9 @@ static void set_altscreen(struct vt *vt, bool on, bool clear)
 	} else {
 		vt->mode &= ~MODE_ALTSCREEN;
 		vt->line = vt->pri;
+		/* the cursor is the alternate screen's now, or the one 1049
+		 * brings back: neither is the place a resize kept (K3) */
+		vt->keep_cur = false;
 	}
 	vt->view = 0;
 	vt_mark_all(vt);
@@ -651,6 +659,7 @@ static void soft_reset(struct vt *vt)
 
 void vt_reset(struct vt *vt)
 {
+	vt->keep_cur = vt->keep_view = false;
 	set_altscreen(vt, false, false);
 	hist_unwrap(vt);
 	vt->mode = MODE_AUTOWRAP;
@@ -772,6 +781,8 @@ struct mark {
 	                 * wrap pending is the column behind the last, vt.cols */
 	int64_t row;    /* where it is now */
 	int col;
+	int far;        /* col before the last column stopped it: what the next
+	                 * resize starts from (K1) */
 	bool pend;      /* right behind a row that is full: a wrap is pending */
 };
 
@@ -903,7 +914,8 @@ static void reflow_mark(struct reflow *rf, int g, int lo, int hi, int col)
 		if (m->g != g || m->x < lo || m->x >= hi)
 			continue;
 		m->row = rf->row;
-		m->col = MIN(col + (m->x - lo), rf->cols - 1);
+		m->far = col + (m->x - lo);
+		m->col = MIN(m->far, rf->cols - 1);
 		m->pend = col == rf->cols;
 	}
 }
@@ -1014,6 +1026,16 @@ static void reflow_free(const struct vt *vt, struct reflow *rf)
 	rf->buf = NULL;
 }
 
+/* What 4.6 reads of the screen a resize comes from: the row it started in,
+ * counted from the first row now, and the cell of that row; its height;
+ * whether its text reached the last row; and the row the text ends in now. */
+struct view {
+	int64_t top;
+	int tx, rows;
+	bool full;
+	int end;
+};
+
 /* The last row of the main screen that has content, or a tail in a colour;
  * the cursor's row cy if none comes after it (REFLOW.md 4.6, e0) */
 static int screen_end(const struct vt *vt, int cy)
@@ -1040,18 +1062,27 @@ static int screen_end(const struct vt *vt, int cy)
  * taller window takes as many lines back as it grew, as without another width.
  * Then what no longer fits goes into the history from the top, as far as the
  * cursor stays on the screen: past that, what is below it is lost, as it is in
- * a shorter window. */
-static bool reflow(const struct vt *vt, int cols, int rows, struct reflow *rf, struct mark *m)
+ * a shorter window.
+ *
+ * "It showed", "reached the last row" and "grew" are of the screen in *v: the
+ * one the resizes since came from (K2), or this one. */
+static bool reflow(const struct vt *vt, int cols, int rows, struct reflow *rf, struct mark *m,
+		   const struct view *v)
 {
-	int e = screen_end(vt, m[0].g - vt->hist_count);
 	*rf = (struct reflow){ .vt = vt, .cols = cols, .rows = rows, .m = m, .nm = 4 };
-	m[2] = (struct mark){ .g = vt->hist_count };
-	m[3] = (struct mark){ .g = vt->hist_count + e, .x = vt->cols };
+	/* a start that is no row any more, off the far end of the history or
+	 * with the history cleared, marks nothing: row 0 stands for it, the
+	 * oldest there is */
+	m[2] = (struct mark){ .g = (int)(vt->hist_count + v->top), .x = v->tx };
+	m[3] = (struct mark){ .g = vt->hist_count + v->end, .x = vt->cols };
 	reflow_walk(rf);
-	int64_t top = m[2].row, end = m[3].row;
-	if (e == vt->rows - 1)
-		top = MIN(top, end - e);
-	top = MAX(top - MAX(0, rows - vt->rows), 0);
+	/* V1 to V4. A screen that was full has the end of its text in the last
+	 * row: that is all V2 to V4 leave of where it started and how tall it
+	 * was. One that was not starts where it did, a window taller than it
+	 * was taking that many rows back, and its end stays on the screen. */
+	int64_t end = m[3].row;
+	int64_t top = v->full ? end - (rows - 1) : m[2].row - MAX(0, rows - v->rows);
+	top = MAX(top, 0);
 	if (end - top > rows - 1)
 		top = end - (rows - 1);
 	top = MIN(top, m[0].row);
@@ -1104,34 +1135,66 @@ bool vt_resize(struct vt *vt, int cols, int rows)
 	struct vt_cursor *ac = alt ? &vt->c : &vt->saved_alt;
 	int ashift = MAX(0, ac->y - (rows - 1));
 
+	/* The places it starts from (K2): what the last resize kept, as long as
+	 * that holds, and what the state shows otherwise. A pending wrap is the
+	 * place behind the row, wherever the cursor is (C1). The screen's start
+	 * holds while its text ends where that resize left it: cleared, or
+	 * written further down, it is another screen (K4). */
+	const struct vt_cursor *s = &vt->saved_pri;
+	int cx = alt ? vt->pri_x : vt->c.wrapnext ? vt->cols : vt->c.x;
+	int sx = s->wrapnext ? vt->cols : s->x;
+	int64_t sy = s->y;
+	if (vt->keep_cur) {
+		cx = vt->kept_cx;
+		sx = vt->kept_sx;
+		sy = vt->kept_sy;
+	}
+	struct view v = { .rows = vt->rows, .end = screen_end(vt, *py) };
+	v.full = v.end == vt->rows - 1;
+	if (vt->keep_view && v.end == vt->kept_end) {
+		v.top = vt->kept_top;
+		v.tx = vt->kept_tx;
+		v.rows = vt->kept_rows;
+		v.full = vt->kept_full;
+	}
+
 	/* everything new first, so a failure leaves the terminal as it was */
 	bool anew = cols != vt->cols;
 	int pshift = 0, pull = 0;
+	int64_t t = 0;
 	struct reflow rf = { 0 };
 	struct mark m[4];
 	struct row **npri;
 	if (anew) {
 		/* Another width: the lines of the main screen and of the history are
-		 * laid out for it, behind the alternate screen too. A pending wrap
-		 * is the place behind the row, wherever the cursor is (C1). */
-		const struct vt_cursor *s = &vt->saved_pri;
-		m[0] = (struct mark){ .g = vt->hist_count + *py,
-				      .x = alt ? vt->pri_x : vt->c.wrapnext ? vt->cols : vt->c.x };
-		m[1] = (struct mark){ .g = vt->hist_count + s->y, .x = s->wrapnext ? vt->cols : s->x };
-		npri = reflow(vt, cols, rows, &rf, m) ? rf.scr : NULL;
+		 * laid out for it, behind the alternate screen too. The saved
+		 * cursor from its row, if that is a row still: one that went off
+		 * the far end of the history or below the screen is gone, and the
+		 * place the state shows stands for it, row and column. */
+		m[0] = (struct mark){ .g = vt->hist_count + *py, .x = cx };
+		if (sy >= -vt->hist_count && sy < vt->rows)
+			m[1] = (struct mark){ .g = (int)(vt->hist_count + sy), .x = sx };
+		else
+			m[1] = (struct mark){ .g = vt->hist_count + s->y,
+					      .x = s->wrapnext ? vt->cols : s->x };
+		npri = reflow(vt, cols, rows, &rf, m, &v) ? rf.scr : NULL;
 	} else {
 		/* Another height alone: the rows stay as they are, and which of
 		 * them the screen shows is decided as with another width
-		 * (REFLOW.md 4.6, V1 to V5). In a shorter window the end of the
-		 * text stays on the screen and rows go into the history from the
-		 * top, as far as the cursor's row stays too; what is below the
-		 * screen then is lost. */
-		pshift = MIN(MAX(0, screen_end(vt, *py) - (rows - 1)), *py);
-		/* And a taller main screen takes the newest ones back above its
-		 * text, as xterm does: what a shorter window pushed off returns with
-		 * the window. They fit: the history is as wide as the screen. Never
-		 * both: an end that fit before fits a taller screen. */
-		pull = CLAMP(rows - vt->rows, 0, vt->hist_count);
+		 * (REFLOW.md 4.6, V1 to V5), in rows from its first now. In a
+		 * shorter window the end of the text stays on the screen and rows
+		 * go into the history from the top, as far as the cursor's row
+		 * stays too; what is below the screen then is lost. A taller one
+		 * takes the newest ones back above its text, as xterm does: what a
+		 * shorter window pushed off returns with the window. They fit: the
+		 * history is as wide as the screen. */
+		t = v.full ? v.end - (rows - 1) : v.top - MAX(0, rows - v.rows);
+		t = MAX(t, -vt->hist_count);
+		if (v.end - t > rows - 1)
+			t = v.end - (rows - 1);
+		t = MIN(t, *py);
+		pshift = (int)MAX(t, 0);
+		pull = (int)MAX(-t, 0);
 		npri = copy_screen(vt, vt->pri, pshift - pull, cols, rows);
 	}
 	struct row **nalt = copy_screen(vt, vt->alt, ashift, cols, rows);
@@ -1179,12 +1242,16 @@ bool vt_resize(struct vt *vt, int cols, int rows)
 		/* A saved cursor whose text is no longer on the screen: the nearest
 		 * row. None was saved since a reset: DECRC goes home, in a window
 		 * of this size as in one that had it all along (C5). */
-		int64_t sy = m[1].row - rf.top;
+		sy = m[1].row - rf.top;
 		if (vt->pri_saved) {
 			vt->saved_pri.x = m[1].col;
 			vt->saved_pri.y = (int)CLAMP(sy, 0, rows - 1);
 			pend[1] = m[1].pend && sy == vt->saved_pri.y;
 		}
+		vt->kept_cx = m[0].far;
+		vt->kept_sx = m[1].far;
+		vt->kept_top = m[2].row - rf.top;
+		vt->kept_tx = m[2].col;
 	} else {
 		for (int i = 0; i < pshift; i++)
 			push_hist(vt, vt->pri[i]);
@@ -1205,11 +1272,22 @@ bool vt_resize(struct vt *vt, int cols, int rows)
 			vt->hist_count -= pull;
 			vt->scrolled -= pull; /* the lines count from the same place still */
 		}
-		*py += pull - pshift;
-		/* a saved cursor moves with its screen, to the top row at most */
+		*py -= (int)t;
+		/* a saved cursor moves with its screen, to its first row or its
+		 * last at most */
+		sy -= t;
 		if (vt->pri_saved)
-			vt->saved_pri.y += pull - MIN(pshift, vt->saved_pri.y);
+			vt->saved_pri.y = (int)CLAMP(sy, 0, rows - 1);
+		vt->kept_cx = cx;
+		vt->kept_sx = sx;
+		vt->kept_top = v.top - t;
+		vt->kept_tx = v.tx;
 	}
+	/* K1: the places as this resize found them, for the next one */
+	vt->kept_sy = sy;
+	vt->kept_rows = v.rows;
+	vt->kept_full = v.full;
+	vt->keep_cur = vt->keep_view = true;
 	free_screen(vt->pri, vt->rows);
 	free_screen(vt->alt, vt->rows);
 	vt->pri = npri;
@@ -1248,6 +1326,7 @@ bool vt_resize(struct vt *vt, int cols, int rows)
 	}
 	if (!vt->pri_saved)
 		vt->saved_pri.wrapnext = wn[1]; /* as the reset left it */
+	vt->kept_end = screen_end(vt, *py);
 	vt->view = 0;
 	vt_mark_all(vt);
 	return true;
@@ -2269,6 +2348,13 @@ static size_t put_ascii(struct vt *vt, const unsigned char *s, size_t n)
 
 void vt_write(struct vt *vt, const char *buf, size_t len)
 {
+	/* The program has seen the size and goes on from where the cursor is
+	 * now: the place a resize kept for it is the past (K3). Not while the
+	 * alternate screen is shown: a full-screen program draws after every
+	 * change of size, and none of that is on the main screen. Any byte
+	 * counts, a bell too; telling them apart costs more than the place. */
+	if (len && !(vt->mode & MODE_ALTSCREEN))
+		vt->keep_cur = false;
 	const unsigned char *s = (const unsigned char *)buf;
 	for (size_t i = 0; i < len; i++) {
 		unsigned char b = s[i];

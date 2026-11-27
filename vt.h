@@ -120,6 +120,26 @@ struct vt {
 	int pri_x, pri_y;         /* behind the alternate screen: where the main
 	                           * screen's cursor was when that one took over,
 	                           * pri_x one further with a wrap pending */
+	/* Places a resize keeps for the next one, as it found them: what the
+	 * state shows of them a narrower or shorter window has clamped, and from
+	 * there they were not back in a wider one. No content is kept
+	 * (REFLOW.md 4.11). */
+	bool keep_cur;            /* the two cursors': until a write to the main
+	                           * screen */
+	bool keep_view;           /* where the screen started: until its rows
+	                           * scroll, or its text ends in another row */
+	int kept_cx;              /* the cursor's column, or the place's behind the
+	                           * alternate screen: past the last one as far as
+	                           * it was */
+	int kept_sx;              /* the saved cursor's, */
+	int64_t kept_sy;          /* and its row from the screen's first, off the
+	                           * screen too */
+	int64_t kept_top;         /* the row the screen started in, from its first
+	                           * now, */
+	int kept_tx;              /* and the cell of that row it started with */
+	int kept_rows;            /* its height then, */
+	bool kept_full;           /* and whether its text reached the last row */
+	int kept_end;             /* the row the text ended in after the resize */
 	int top, bot;             /* scroll region, inclusive */
 	unsigned mode;
 	enum cursor_style cursor_style;

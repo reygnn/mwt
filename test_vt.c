@@ -952,6 +952,9 @@ static void test_fuzz(void)
 			vt_write(vt, buf + i, k);
 			i += k;
 			const char *why = fuzz_broken(vt);
+			/* K3: no place of the cursor outlives output to the main screen */
+			if (!why && vt->keep_cur && !(vt->mode & MODE_ALTSCREEN))
+				why = "the cursor's place kept past output to the main screen";
 			if (why) {
 				fuzz_report(seed, "after output", why);
 				break;
@@ -1805,13 +1808,14 @@ static void test_reflow(void)
 	vt_free(vt);
 	/* No row is laid out for it (REFLOW.md C3, C4; G4 before): further
 	 * behind the text than the row goes, it is in the last column of the
-	 * row its line ends in. Its column is not back in a wider window: that
-	 * takes the origin (O1). */
+	 * row its line ends in. Its column is back in a wider window as long
+	 * as the program wrote nothing (K2, K3; test_places()). */
 	vt = mk(20, 2, 10);
 	w(vt, "ab\033[1;18H");
 	CHECK(vt_resize(vt, 12, 2));
 	CHECK(vt->c.x == 11 && vt->c.y == 0 && !vt->c.wrapnext && vt->pri[0]->wrap == 0);
 	CHECK(vt->pri[0]->used == 2 && vt->pri[1]->used == 0);
+	w(vt, "\a");
 	CHECK(vt_resize(vt, 30, 2));
 	CHECK(vt->c.x == 11 && vt->c.y == 0 && vt->pri[0]->wrap == 0);
 	vt_free(vt);
@@ -2216,31 +2220,39 @@ static void test_reflow(void)
  * two cells, attributes and foreground colours, CR LF. Every row of the screen
  * and the history, where each goes on, the cursor and its pending wrap. Lines
  * end in blanks too: a written blank is content (D1). */
+/* Plain output (REFLOW.md A2): lines of letters, blanks, a wide glyph, SGR
+ * without a background, ended by CR LF; the last one maybe not. A round is its
+ * number alone: one that fails can be run again. */
+static size_t plain_stream(char *s, int round)
+{
+	size_t n = 0;
+	fuzz_state = (unsigned long long)(round + 1) * 0x9E3779B97F4A7C15ULL + 1;
+	int lines = (int)(fuzz_rand() % 12);
+	for (int l = 0; l < lines; l++) {
+		int len = fuzz_rand() % 5 ? (int)(fuzz_rand() % 60) : 0;
+		for (int i = 0; i < len; i++) {
+			unsigned k = fuzz_rand() % 20;
+			if (k == 0)
+				n += (size_t)sprintf(s + n, "\xe6\xbc\xa2");
+			else if (k == 1)
+				n += (size_t)sprintf(s + n, "\033[%um", 1 + fuzz_rand() % 7);
+			else if (k == 2)
+				n += (size_t)sprintf(s + n, "\033[3%um", fuzz_rand() % 8);
+			else
+				s[n++] = k == 3 ? ' ' : (char)('a' + fuzz_rand() % 26);
+		}
+		if (l + 1 < lines || fuzz_rand() % 2)
+			n += (size_t)sprintf(s + n, "\r\n");
+	}
+	return n;
+}
+
 static void test_plain_output(void)
 {
 	int bad = 0, shown = 0, wide = 0, hist = 0, wrapped = 0, pending = 0;
 	for (int round = 0; round < 3000; round++) {
 		char s[4096];
-		size_t n = 0;
-		/* a round is its number alone: one that fails can be run again */
-		fuzz_state = (unsigned long long)(round + 1) * 0x9E3779B97F4A7C15ULL + 1;
-		int lines = (int)(fuzz_rand() % 12);
-		for (int l = 0; l < lines; l++) {
-			int len = fuzz_rand() % 5 ? (int)(fuzz_rand() % 60) : 0;
-			for (int i = 0; i < len; i++) {
-				unsigned k = fuzz_rand() % 20;
-				if (k == 0)
-					n += (size_t)sprintf(s + n, "\xe6\xbc\xa2");
-				else if (k == 1)
-					n += (size_t)sprintf(s + n, "\033[%um", 1 + fuzz_rand() % 7);
-				else if (k == 2)
-					n += (size_t)sprintf(s + n, "\033[3%um", fuzz_rand() % 8);
-				else
-					s[n++] = k == 3 ? ' ' : (char)('a' + fuzz_rand() % 26);
-			}
-			if (l + 1 < lines || fuzz_rand() % 2)
-				n += (size_t)sprintf(s + n, "\r\n");
-		}
+		size_t n = plain_stream(s, round);
 		int w0 = 2 + (int)(fuzz_rand() % 40), r0 = 1 + (int)(fuzz_rand() % 12);
 		int w1 = 2 + (int)(fuzz_rand() % 40), r1 = 1 + (int)(fuzz_rand() % 12);
 		if (round % 8 == 0)
@@ -2807,10 +2819,8 @@ static void test_reflow_ends(void)
 	vt_free(vt);
 
 	/* In a row that holds nothing, the cursor is in its column or the last:
-	 * no cells are laid out for it, and the row stays one row (C4). Clamped
-	 * into a narrower row it is not back in its column in a wider one, and
-	 * by way of a narrow window it ends elsewhere than without: the origin
-	 * is for that (O1, A1). */
+	 * no cells are laid out for it, and the row stays one row (C4). By way
+	 * of a narrow window it ends where it does without (K2, A1). */
 	vt = mk(20, 3, 10);
 	w(vt, "\033[1;18H");
 	CHECK(vt_resize(vt, 12, 3));
@@ -2818,7 +2828,7 @@ static void test_reflow_ends(void)
 	CHECK(vt_resize(vt, 3, 3));
 	CHECK(vt->c.x == 2 && vt->c.y == 0 && vt->hist_count == 0);
 	CHECK(vt_resize(vt, 30, 3));
-	CHECK(vt->c.x == 2 && vt->c.y == 0 && vt->hist_count == 0);
+	CHECK(vt->c.x == 17 && vt->c.y == 0 && vt->hist_count == 0);
 	vt_free(vt);
 
 	/* A wrap pending on a row that goes on, where the cursor came back to
@@ -3690,6 +3700,8 @@ static void test_joins(void)
 				for (int y = 0; y + 1 < vt->rows; y++)
 					after += vt->pri[y]->wrap && vt->pri[y]->wrap < vt->cols;
 				cleared += after < before;
+				if (vt->keep_cur && !(vt->mode & MODE_ALTSCREEN))
+					why = "the cursor's place kept past output (K3)";
 			}
 			for (int y = 0; y + 1 < vt->rows; y++) {
 				int j = vt->pri[y]->wrap;
@@ -3974,6 +3986,440 @@ static void test_height(void)
 /* A saved cursor that was never set is none (REFLOW.md S6, C5, D20; G15
  * before): DECRC goes home at any size, and no resize carries the home
  * position along with the text as if a program had saved it there. */
+/* A screen after Ctrl-L: old rows in the history, the screen cleared, a
+ * command, lines of output that take two rows each at half the width, and a
+ * prompt. Not full: the text ends above the last row. */
+static struct vt *ctrl_l_screen(const char *prompt)
+{
+	struct vt *vt = mk(20, 8, 100);
+	for (int i = 1; i <= 12; i++) {
+		char b[32];
+		snprintf(b, sizeof b, "old %d\r\n", i);
+		w(vt, b);
+	}
+	w(vt, "$ \033[H\033[2J");
+	w(vt, prompt);
+	w(vt, "ls\r\nfile one two three\r\nfile four five six\r\n"
+	      "file seven and eight\r\nfile nine and ten\r\n");
+	w(vt, prompt);
+	return vt;
+}
+
+/* The places a resize keeps for the next one (REFLOW.md 4.11, K1 to K6) */
+static void test_places(void)
+{
+	struct vt *vt, *b;
+
+	/* K2: a cursor behind the end of its line, which a narrower window has
+	 * in its last column (C3), is back in its column in a wider one: from
+	 * one width or from two, and in any window wide enough */
+	vt = mk(20, 2, 10);
+	w(vt, "ab\033[1;18H");
+	CHECK(vt_resize(vt, 12, 2));
+	CHECK(vt->c.x == 11 && vt->c.y == 0);
+	CHECK(vt_resize(vt, 5, 2));
+	CHECK(vt->c.x == 4 && vt->c.y == 0);
+	CHECK(vt_resize(vt, 30, 2));
+	CHECK(vt->c.x == 17 && vt->c.y == 0 && !vt->c.wrapnext);
+	CHECK(vt_resize(vt, 15, 2));
+	CHECK(vt->c.x == 14);
+	/* a resize to the size it has is none (A4), and takes no place away */
+	CHECK(vt_resize(vt, 15, 2));
+	CHECK(vt_resize(vt, 20, 2));
+	CHECK(vt->c.x == 17 && vt->c.y == 0);
+	CHECK(vt->pri[0]->used == 2 && vt->pri[1]->used == 0 && vt->hist_count == 0);
+	vt_free(vt);
+
+	/* K3: until the program writes. It has seen the narrow window and goes
+	 * on from the column it found the cursor in; a bell is enough. */
+	vt = mk(20, 2, 10);
+	w(vt, "ab\033[1;18H");
+	CHECK(vt_resize(vt, 12, 2));
+	CHECK(vt->keep_cur);
+	w(vt, "\a");
+	CHECK(!vt->keep_cur);
+	CHECK(vt_resize(vt, 20, 2));
+	CHECK(vt->c.x == 11);
+	vt_write(vt, "", 0); /* nothing written is no write */
+	CHECK(vt->keep_cur);
+	vt_free(vt);
+
+	/* K3: what a full-screen program draws is not on the main screen. It
+	 * draws after every change of size, and the place it left behind is
+	 * back all the same; so is the cursor 1049 saved and brings back. */
+	vt = mk(20, 2, 10);
+	w(vt, "ab\033[1;18H\033[?1049h\033[H\033[2Jtext");
+	CHECK(vt_resize(vt, 12, 2));
+	CHECK(vt->pri_x == 11 && vt->saved_pri.x == 11);
+	w(vt, "\033[H\033[2Jtext\033[2;1H-- 12 --\033[H");
+	CHECK(vt_resize(vt, 20, 2));
+	CHECK(vt->pri_x == 17 && vt->pri_y == 0);
+	CHECK(vt->saved_pri.x == 17 && vt->saved_pri.y == 0);
+	w(vt, "\033[H\033[2Jtext\033[?1049l");
+	CHECK(vt->c.x == 17 && vt->c.y == 0);
+	vt_free(vt);
+	/* Leaving it ends them: after 47 the cursor is the alternate screen's
+	 * (X2), in the column that one had it in, and stays there. */
+	vt = mk(20, 2, 10);
+	w(vt, "ab\033[1;18H\033[?47h");
+	CHECK(vt_resize(vt, 12, 2));
+	w(vt, "\033[?47l");
+	CHECK(vt->c.x == 11 && !vt->keep_cur);
+	CHECK(vt_resize(vt, 20, 2));
+	CHECK(vt->c.x == 11);
+	vt_free(vt);
+
+	/* K2: the saved cursor, behind the end of its line */
+	vt = mk(20, 3, 10);
+	w(vt, "ab\033[1;18H\0337\r");
+	CHECK(vt_resize(vt, 12, 3));
+	CHECK(vt->saved_pri.x == 11 && vt->saved_pri.y == 0);
+	CHECK(vt_resize(vt, 20, 3));
+	CHECK(vt->saved_pri.x == 17 && vt->saved_pri.y == 0);
+	vt_free(vt);
+	/* and with its row above the screen: in the first row meanwhile, and
+	 * back in its own. From the first row it came back as the place of the
+	 * text that row then had. */
+	vt = mk(10, 3, 10);
+	w(vt, "\0337abcdefghi\r\nxxxxxxxxx\r\nyyyyyyyyy");
+	CHECK(vt_resize(vt, 5, 3));
+	CHECK(vt->hist_count == 3 && vt->saved_pri.x == 0 && vt->saved_pri.y == 0);
+	CHECK_STR(row(vt, 0), "xxxx");
+	CHECK(vt_resize(vt, 10, 3));
+	CHECK(vt->hist_count == 0 && vt->saved_pri.x == 0 && vt->saved_pri.y == 0);
+	CHECK_STR(row(vt, 0), "abcdefghi");
+	vt_free(vt);
+	/* Its row gone off the far end of the history: the row is no more, and
+	 * the nearest row stands for it, as the state shows it. */
+	vt = mk(10, 3, 1);
+	w(vt, "\0337abcdefghi\r\nxxxxxxxxx\r\nyyyyyyyyy");
+	CHECK(vt_resize(vt, 5, 3));
+	CHECK(vt->hist_count == 1 && vt->saved_pri.x == 0 && vt->saved_pri.y == 0);
+	CHECK(vt_resize(vt, 10, 3));
+	CHECK(vt->hist_count == 0 && vt->saved_pri.x == 5 && vt->saved_pri.y == 0);
+	CHECK_STR(row(vt, 0), "xxxxxxxxx");
+	vt_free(vt);
+
+	/* K2: where the screen started. After Ctrl-L the text ends above the
+	 * last row; a narrower window fills the screen, and from there a wider
+	 * one took rows back from the history to keep the end in the last row
+	 * (V2): rows from before the Ctrl-L, above the prompt. Now the screen
+	 * is the one a terminal has that was not resized. */
+	vt = ctrl_l_screen("$ ");
+	b = ctrl_l_screen("$ ");
+	CHECK(vt->hist_count == 5 && vt->c.y == 5);
+	CHECK(vt_resize(vt, 10, 8));
+	CHECK(vt->hist_count == 7 && vt->c.y == 7);
+	CHECK(vt_resize(vt, 20, 8));
+	CHECK(vt->hist_count == 5 && vt->c.y == 5);
+	CHECK(!same_state(vt, b, 0));
+	vt_free(vt);
+	vt_free(b);
+
+	/* The screen started in the middle of a line whose first rows are in the
+	 * history. A wider window has the line in one row and shows all of it
+	 * (V1 takes the row that holds the cell); from there the screen began
+	 * with the line. The cell is kept with the row, through another height
+	 * too, and one step is as two. */
+	static const char midline[] = "abcdefghijklmnopqrstuvwxy\r\nx\r\ny\r\n\033[2A\033[J$ ";
+	vt = mk(10, 4, 10);
+	b = mk(10, 4, 10);
+	w(vt, midline);
+	w(b, midline);
+	CHECK(vt->hist_count == 2 && vt->c.y == 1);
+	CHECK_STR(row(vt, 0), "uvwxy");
+	CHECK(vt_resize(vt, 30, 4));
+	CHECK(vt->hist_count == 0 && vt->c.y == 1 && vt->kept_tx == 20);
+	CHECK_STR(row(vt, 0), "abcdefghijklmnopqrstuvwxy");
+	CHECK(vt_resize(vt, 10, 4));
+	CHECK(!same_state(vt, b, 0));
+	CHECK(vt_resize(vt, 30, 4));
+	CHECK(vt_resize(vt, 30, 2));
+	CHECK(vt->kept_tx == 20);
+	CHECK(vt_resize(vt, 10, 4));
+	CHECK(!same_state(vt, b, 0));
+	CHECK(vt_resize(b, 30, 2));
+	CHECK(vt_resize(vt, 30, 4));
+	CHECK(vt_resize(vt, 30, 2));
+	CHECK(!same_state(vt, b, 0));
+	vt_free(vt);
+	vt_free(b);
+
+	/* The same with a shell at the prompt, which writes after every change
+	 * of size: that ends the cursor's place (K3) and not the screen's start,
+	 * as nothing scrolled and the text ends where it did (K4).
+	 * bash 5.2.21, as recorded at a pty: CR, EL, CR and the last line of
+	 * its prompt. zsh 5.9, as the reviewer recorded it: two CR, three SGR,
+	 * ED 0 and the prompt, CUU before them where the prompt has two lines;
+	 * which SGR they are is made up here, they move nothing. */
+	static const struct { const char *prompt, *redraw; } shell[] = {
+		{ "$ ", "\r\033[K\r$ " },
+		{ "~/mwt (m)\r\n$ ", "\r\033[K\r$ " },
+		{ "$ ", "\r\r\033[0m\033[27m\033[24m\033[J$ " },
+		{ "~/mwt (m)\r\n$ ", "\033[A\r\r\033[0m\033[27m\033[24m\033[J~/mwt (m)\r\n$ " },
+	};
+	for (size_t i = 0; i < sizeof shell / sizeof *shell; i++) {
+		vt = ctrl_l_screen(shell[i].prompt);
+		b = ctrl_l_screen(shell[i].prompt);
+		int hist = vt->hist_count;
+		CHECK(vt_resize(vt, 10, 8));
+		CHECK(vt->hist_count > hist && vt->c.y == 7);
+		w(vt, shell[i].redraw);
+		CHECK(!vt->keep_cur && vt->keep_view);
+		CHECK(vt_resize(vt, 20, 8));
+		w(vt, shell[i].redraw);
+		const char *why = same_state(vt, b, 0);
+		checks++;
+		if (why) {
+			failures++;
+			fprintf(stderr, "%s:%d: FAIL: shell %zu: %s\n", __FILE__, __LINE__, i, why);
+		}
+		vt_free(vt);
+		vt_free(b);
+	}
+	/* Where it does not hold (CAVEATS): a command line typed and not yet
+	 * entered that takes two rows in the narrower window. bash writes it
+	 * again from the cursor's row, in the last row of the screen, and the
+	 * screen scrolls: its start is no row of it any more (K4), and the
+	 * wider window takes rows back as it did before there were places. */
+	vt = ctrl_l_screen("$ ");
+	w(vt, "echo some words");
+	CHECK(vt->hist_count == 5 && vt->c.y == 5);
+	CHECK(vt_resize(vt, 10, 8));
+	w(vt, "\r\033[K\r$ echo some words");
+	CHECK(!vt->keep_view);
+	CHECK(vt_resize(vt, 20, 8));
+	w(vt, "\r\033[K\r\033[A\033[K\r$ echo some words");
+	CHECK(vt->hist_count == 4 && vt->c.y == 6 && vt->c.x == 17);
+	CHECK_STR(row(vt, 0), "old 5");
+	CHECK_STR(row(vt, 6), "$ echo some words");
+	vt_free(vt);
+
+	/* K4: rows that scroll end it. A line more at the bottom of the narrow
+	 * screen, and the wider one keeps its end in the last row (V2). */
+	vt = ctrl_l_screen("$ ");
+	CHECK(vt_resize(vt, 10, 8));
+	w(vt, "\r\n");
+	CHECK(!vt->keep_view);
+	CHECK(vt_resize(vt, 20, 8));
+	CHECK(vt->hist_count == 4 && vt->c.y == 7);
+	CHECK_STR(row(vt, 0), "old 5");
+	vt_free(vt);
+	/* rows that scroll down, too: the text still ends in the last row */
+	vt = ctrl_l_screen("$ ");
+	CHECK(vt_resize(vt, 10, 8));
+	w(vt, "\033[T");
+	CHECK(!vt->keep_view && vt->c.y == 7);
+	CHECK_STR(row(vt, 7), "and ten");
+	CHECK(vt_resize(vt, 20, 8));
+	CHECK(vt->hist_count == 4 && vt->c.y == 7 && vt->c.x == 12);
+	CHECK_STR(row(vt, 0), "old 5");
+	CHECK_STR(row(vt, 7), "file nine and ten");
+	vt_free(vt);
+	/* Not those of the alternate screen: the main screen behind a program
+	 * that scrolls its own comes back as it was. */
+	vt = ctrl_l_screen("$ ");
+	b = ctrl_l_screen("$ ");
+	w(vt, "\033[?1049h");
+	w(b, "\033[?1049h");
+	CHECK(vt_resize(vt, 10, 8));
+	w(vt, "\033[8;1H\r\n\r\n\033[T\033M\033[H\033M\033[2S");
+	CHECK(vt->keep_view && vt->keep_cur);
+	CHECK(vt_resize(vt, 20, 8));
+	w(vt, "\033[?1049l");
+	w(b, "\033[?1049l");
+	CHECK(!same_state(vt, b, 0));
+	vt_free(vt);
+	vt_free(b);
+
+	/* K4: a screen whose text ends in another row is another screen. A full
+	 * one, wider, cleared there by Ctrl-L: back in the narrower window it
+	 * stays cleared. With "it was full" kept from before, the rows of the
+	 * history came back above the prompt. */
+	vt = mk(20, 8, 100);
+	for (int i = 1; i <= 12; i++)
+		w(vt, "a line of old text here\r\n");
+	w(vt, "$ ");
+	CHECK(vt_resize(vt, 30, 8));
+	w(vt, "\r\033[K\r$ ");
+	w(vt, "\033[H\033[2J$ ");
+	CHECK(vt->keep_view); /* until the next resize looks */
+	CHECK(vt_resize(vt, 20, 8));
+	CHECK(vt->c.y == 0 && vt->c.x == 2);
+	CHECK_STR(row(vt, 0), "$");
+	for (int r = 1; r < 8; r++)
+		CHECK_STR(row(vt, r), "");
+	vt_free(vt);
+	/* and vt_reset() ends both */
+	vt = mk(20, 8, 100);
+	for (int i = 1; i <= 12; i++)
+		w(vt, "a line of old text here\r\n");
+	w(vt, "$ \033[1;18H");
+	CHECK(vt_resize(vt, 30, 8));
+	CHECK(vt->keep_view && vt->keep_cur && vt->kept_cx > 0);
+	vt_reset(vt);
+	CHECK(!vt->keep_view && !vt->keep_cur && vt->c.x == 0 && vt->c.y == 0);
+	CHECK(vt_resize(vt, 20, 8));
+	CHECK(vt->c.x == 0 && vt->c.y == 0);
+	vt_free(vt);
+
+	/* The start of the screen was in the history, and the history is
+	 * cleared (ED 3): the oldest row there is stands for it. */
+	vt = ctrl_l_screen("$ ");
+	CHECK(vt_resize(vt, 10, 8));
+	CHECK(vt->hist_count == 7 && vt->kept_top == -2);
+	w(vt, "\033[3J");
+	CHECK(vt->hist_count == 0);
+	CHECK(vt_resize(vt, 20, 8));
+	CHECK(vt->hist_count == 0 && vt->c.y == 4);
+	CHECK_STR(row(vt, 0), "wo three");
+	vt_free(vt);
+
+	/* Another height alone keeps the places and reads them (K5, D12). The
+	 * screen after Ctrl-L in a window half as high and back: a taller
+	 * window took as many rows from the history as it grew (V3), and they
+	 * were the rows from before the Ctrl-L. */
+	vt = ctrl_l_screen("$ ");
+	b = ctrl_l_screen("$ ");
+	CHECK(vt_resize(vt, 20, 4));
+	CHECK(vt->hist_count == 7 && vt->c.y == 3);
+	CHECK(vt_resize(vt, 20, 8));
+	CHECK(vt->hist_count == 5 && vt->c.y == 5);
+	CHECK(!same_state(vt, b, 0));
+	/* width, height, height, width, as a tiling window manager does it */
+	CHECK(vt_resize(vt, 10, 8));
+	CHECK(vt_resize(vt, 10, 3));
+	CHECK(vt_resize(vt, 10, 12));
+	CHECK(vt_resize(vt, 20, 12));
+	CHECK(vt_resize(vt, 20, 8));
+	CHECK(!same_state(vt, b, 0));
+	vt_free(vt);
+	vt_free(b);
+	/* One step is as two (A1), where the first is a shorter window: the
+	 * narrower one after it is as tall as the screen was, and takes no row
+	 * back for the rows it has more than the shorter one (V3 is by the
+	 * height of the screen the resizes came from). */
+	vt = ctrl_l_screen("$ ");
+	b = ctrl_l_screen("$ ");
+	CHECK(vt_resize(vt, 20, 4));
+	CHECK(vt_resize(vt, 10, 8));
+	CHECK(vt_resize(b, 10, 8));
+	CHECK(!same_state(vt, b, 0));
+	CHECK(vt->hist_count == 7 && vt->c.y == 7);
+	vt_free(vt);
+	vt_free(b);
+	/* A full screen, wider: rows came back from the history, and the row
+	 * the screen started in is no longer its first. Taller from there, the
+	 * end of the text is in the last row still (V2), as in one step. */
+	vt = mk(20, 6, 100);
+	b = mk(20, 6, 100);
+	for (int i = 0; i < 9; i++) {
+		w(vt, "a line of thirty characters...\r\n");
+		w(b, "a line of thirty characters...\r\n");
+	}
+	CHECK(vt_resize(vt, 40, 6));
+	CHECK(vt->kept_top == 2 && vt->kept_full && vt->c.y == 5);
+	CHECK(vt_resize(vt, 40, 9));
+	CHECK(vt_resize(b, 40, 9));
+	CHECK(vt->c.y == 8 && vt->hist_count == 1);
+	CHECK(!same_state(vt, b, 0));
+	vt_free(vt);
+	vt_free(b);
+	/* the cursors' columns through a change of the height */
+	vt = mk(20, 6, 10);
+	w(vt, "ab\033[1;16H\0337\033[1;18H");
+	CHECK(vt_resize(vt, 12, 6));
+	CHECK(vt_resize(vt, 12, 3));
+	CHECK(vt->c.x == 11 && vt->saved_pri.x == 11 && vt->keep_cur);
+	CHECK(vt_resize(vt, 20, 3));
+	CHECK(vt->c.x == 17 && vt->c.y == 0);
+	CHECK(vt->saved_pri.x == 15 && vt->saved_pri.y == 0);
+	vt_free(vt);
+	/* The saved cursor below a shorter window: in its last row meanwhile,
+	 * and back in its own. Not from another width: the rows below the
+	 * screen are gone, and the last row stands for its own. */
+	vt = mk(20, 6, 10);
+	w(vt, "ab\033[6;18H\0337\033[H");
+	CHECK(vt_resize(vt, 20, 3));
+	CHECK(vt->saved_pri.x == 17 && vt->saved_pri.y == 2);
+	CHECK(vt_resize(vt, 20, 6));
+	CHECK(vt->saved_pri.x == 17 && vt->saved_pri.y == 5);
+	CHECK(vt_resize(vt, 20, 3));
+	CHECK(vt_resize(vt, 12, 3));
+	CHECK(vt->saved_pri.x == 11 && vt->saved_pri.y == 2);
+	CHECK(vt_resize(vt, 20, 6));
+	CHECK(vt->saved_pri.x == 17 && vt->saved_pri.y == 2);
+	vt_free(vt);
+
+	/* A resize that runs out of memory keeps the places as they were, and
+	 * the next one starts from them (O6). */
+	int fails = 0;
+	for (long n = 0;; n++) {
+		vt = mk(20, 3, 10);
+		w(vt, "ab\033[1;18H");
+		CHECK(vt_resize(vt, 12, 3));
+		injected = false;
+		countdown = n;
+		bool ok = vt_resize(vt, 9, 2);
+		countdown = -1;
+		fails += !ok;
+		CHECK(vt->keep_cur && vt->kept_cx == 17 && vt->c.x == (ok ? 8 : 11));
+		CHECK(vt_resize(vt, 20, 3));
+		CHECK(vt->c.x == 17 && vt->c.y == 0);
+		vt_free(vt);
+		if (!injected)
+			break;
+	}
+	CHECK(fails > 3);
+
+	/* A1 for plain output: through one to four other sizes and back, with
+	 * nothing written on the way, the state is the one of a terminal that
+	 * was not resized. Nothing is cut there: the cursor is in the last row
+	 * of the text, the history holds every row, and no window has one
+	 * column, where a wide glyph is not placed. In half of the rounds the
+	 * cursor is behind the end of its line, by a tab, a line feed alone or
+	 * a move to the right. */
+	int bad = 0, shown = 0, clamped = 0, pushed = 0, heights = 0;
+	for (int round = 0; round < 3000; round++) {
+		char s[4096];
+		static const char *const behind[] = { "\t", "\n", "\033[7C", "\033[30C" };
+		size_t n = plain_stream(s, round);
+		if (fuzz_rand() % 2)
+			n += (size_t)sprintf(s + n, "%s", behind[fuzz_rand() % 4]);
+		int w0 = 2 + (int)(fuzz_rand() % 40), r0 = 1 + (int)(fuzz_rand() % 12);
+		struct vt *a = mk(w0, r0, 4096);
+		b = mk(w0, r0, 4096);
+		vt_write(a, s, n);
+		vt_write(b, s, n);
+		char way[80] = "";
+		int cols = w0, hist = a->hist_count;
+		for (int k = 1 + (int)(fuzz_rand() % 4); k > 0; k--) {
+			int w1 = fuzz_rand() % 3 ? 2 + (int)(fuzz_rand() % 40) : cols;
+			int r1 = 1 + (int)(fuzz_rand() % 12);
+			heights += w1 == cols && r1 != a->rows;
+			cols = w1;
+			snprintf(way + strlen(way), sizeof way - strlen(way), " %dx%d", w1, r1);
+			if (!vt_resize(a, w1, r1))
+				bad++;
+			clamped += a->kept_cx > a->c.x + a->c.wrapnext;
+			pushed += a->hist_count > hist;
+		}
+		const char *why = vt_resize(a, w0, r0) ? same_state(a, b, 0) : "no memory";
+		if (why) {
+			bad++;
+			if (shown++ < 5)
+				fprintf(stderr, "plain round trip %d: %dx%d by%s: %s\n", round, w0, r0,
+					way, why);
+		}
+		vt_free(a);
+		vt_free(b);
+	}
+	CHECK(bad == 0);
+	/* and on the way the cursor was stopped by a last column, rows went into
+	 * the history, and the height changed alone */
+	CHECK(clamped > 300 && pushed > 1000 && heights > 1000);
+}
+
 static void test_saved_none(void)
 {
 	struct vt *vt;
@@ -4337,6 +4783,7 @@ int main(void)
 	test_joins();
 	test_rows_move();
 	test_height();
+	test_places();
 	test_saved_none();
 	test_resize_alt_and_view();
 	test_sgr_details();

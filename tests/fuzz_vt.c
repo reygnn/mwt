@@ -251,6 +251,14 @@ int LLVMFuzzerInitialize(int *argc, char ***argv)
 	return 0;
 }
 
+/* After output: no place a resize kept for the cursor outlives output to the
+ * main screen (REFLOW.md K3) */
+static void wrote(const struct vt *vt)
+{
+	if (vt->keep_cur && !(vt->mode & MODE_ALTSCREEN))
+		abort();
+}
+
 int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size)
 {
 	if (size < 2)
@@ -278,6 +286,7 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size)
 		vt_write(b, (const char *)data + off, n);
 		off += n;
 		check(b);
+		wrote(b);
 	}
 	compare(a, b, &sa, &sb);
 
@@ -294,6 +303,8 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size)
 		check(b);
 		vt_write(b, (const char *)data, size < 512 ? size : 512);
 		check(b);
+		if (size)
+			wrote(b);
 	}
 
 	/* scroll through all of the history and back */
