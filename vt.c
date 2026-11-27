@@ -298,7 +298,8 @@ static void clear_line(struct vt *vt, int y, int x0, int x1)
 /* The newest history line no longer goes on in the first row of the main
  * screen, which was erased: a selection or a URL over the two would join text
  * that is not one line any more. For the screen cleared (ED from its start,
- * RIS), not for a line erased, which readline does to the line it redraws. */
+ * RIS), not for a line erased, which readline does to the line it redraws.
+ * And for a first row that is a new one, with the rows moved down (J5). */
 static void hist_unwrap(struct vt *vt)
 {
 	if ((vt->mode & MODE_ALTSCREEN) || vt->hist_count == 0)
@@ -456,13 +457,25 @@ void vt_scroll_view(struct vt *vt, int delta)
 
 /* ---- scrolling -------------------------------------------------------- */
 
-static void scroll_up(struct vt *vt, int orig, int n)
+/* Rows orig to vt.bot move up by n; the first n go, into the history from
+ * the top of the main screen, and n new ones come in below.
+ *
+ * A row goes on only in the row that followed it before (REFLOW.md J5). The
+ * last that moves is followed by a new row: its line ends there, unless
+ * put() has just wrapped it and writes on in that row (goes_on). The row
+ * above those that move is followed by another than before; not the
+ * history's newest, which the rows that go there follow as they did. */
+static void scroll_up(struct vt *vt, int orig, int n, bool goes_on)
 {
 	if (orig < vt->top || orig > vt->bot)
 		return;
 	n = CLAMP(n, 0, vt->bot - orig + 1);
 	if (!n)
 		return;
+	if (!goes_on)
+		vt->line[vt->bot]->wrap = 0;
+	if (orig > 0)
+		vt->line[orig - 1]->wrap = 0;
 	bool hist = orig == 0 && !(vt->mode & MODE_ALTSCREEN);
 	if (hist)
 		for (int i = 0; i < n; i++)
@@ -479,6 +492,10 @@ static void scroll_up(struct vt *vt, int orig, int n)
 	dirty_range(vt, orig, hist && vt->view > 0 ? vt->rows - 1 : vt->bot);
 }
 
+/* Rows orig to vt.bot move down by n; the last n go, and n new ones come in
+ * above. The row above them is followed by a new one then, and so is the
+ * history's newest above the first row; the last that stays by what is
+ * below the region, or by nothing: their lines end (REFLOW.md J5). */
 static void scroll_down(struct vt *vt, int orig, int n)
 {
 	if (orig < vt->top || orig > vt->bot)
@@ -486,6 +503,12 @@ static void scroll_down(struct vt *vt, int orig, int n)
 	n = CLAMP(n, 0, vt->bot - orig + 1);
 	if (!n)
 		return;
+	if (orig > 0)
+		vt->line[orig - 1]->wrap = 0;
+	else
+		hist_unwrap(vt);
+	if (n <= vt->bot - orig)
+		vt->line[vt->bot - n]->wrap = 0;
 	struct row *tmp[n];
 	memcpy(tmp, &vt->line[vt->bot - n + 1], n * sizeof *tmp);
 	memmove(&vt->line[orig + n], &vt->line[orig],
@@ -496,10 +519,12 @@ static void scroll_down(struct vt *vt, int orig, int n)
 	dirty_range(vt, orig, vt->bot);
 }
 
-static void index_down(struct vt *vt)
+/* wrapped: put() has set the wrap of the cursor's row and writes on in the
+ * row this gives it */
+static void index_down(struct vt *vt, bool wrapped)
 {
 	if (vt->c.y == vt->bot)
-		scroll_up(vt, vt->top, 1);
+		scroll_up(vt, vt->top, 1, wrapped);
 	else if (vt->c.y < vt->rows - 1)
 		vt->c.y++;
 }
@@ -1251,13 +1276,18 @@ static bool put(struct vt *vt, uint32_t cp)
 		 * over it. With anything else there the cell is the line's. */
 		struct row *l = vt->line[c->y];
 		bool gap = !c->wrapnext && is_end_blank(l->c[vt->cols - 1], l->tail);
-		l->wrap = gap ? vt->cols - 1 : vt->cols;
-		touch(l, l->wrap);
-		/* the cells before a join are content, blanks too: a row that
-		 * had none has some now (J9) */
-		row_changed(vt, c->y);
+		/* Not where the cursor stays in its row, the last of the screen
+		 * below a scroll region: the character goes over the row's first
+		 * cell, and the row goes on nowhere (J1). */
+		if (c->y == vt->bot || c->y < vt->rows - 1) {
+			l->wrap = gap ? vt->cols - 1 : vt->cols;
+			touch(l, l->wrap);
+			/* the cells before a join are content, blanks too: a row
+			 * that had none has some now (J9) */
+			row_changed(vt, c->y);
+		}
 		c->x = 0;
-		index_down(vt);
+		index_down(vt, true);
 	} else if (c->x + w > vt->cols) {
 		c->x = vt->cols - w;
 	}
@@ -1338,7 +1368,7 @@ static void control(struct vt *vt, uint32_t cp)
 		tab(vt, 1);
 		break;
 	case 0x0a: case 0x0b: case 0x0c:
-		index_down(vt);
+		index_down(vt, false);
 		vt->c.wrapnext = false;
 		break;
 	case 0x0d:
@@ -1367,8 +1397,8 @@ static void esc_dispatch(struct vt *vt, uint32_t f)
 		 * come with smkx and is2, and DECRC brings back the saved one */
 		case '7': save_cursor(vt); break;
 		case '8': restore_cursor(vt); break;
-		case 'D': index_down(vt); vt->c.wrapnext = false; break;
-		case 'E': vt->c.x = 0; index_down(vt); vt->c.wrapnext = false; break;
+		case 'D': index_down(vt, false); vt->c.wrapnext = false; break;
+		case 'E': vt->c.x = 0; index_down(vt, false); vt->c.wrapnext = false; break;
 		case 'H': vt->tabs[vt->c.x] = true; break;
 		case 'M': reverse_index(vt); vt->c.wrapnext = false; break;
 		case 'c': vt_reset(vt); break;
@@ -1804,7 +1834,7 @@ static void csi_dispatch(struct vt *vt, uint32_t f)
 		break;
 	case 'M':
 		if (c->y >= vt->top && c->y <= vt->bot) {
-			scroll_up(vt, c->y, n);
+			scroll_up(vt, c->y, n, false);
 			c->x = 0;
 			c->wrapnext = false;
 		}
@@ -1824,7 +1854,7 @@ static void csi_dispatch(struct vt *vt, uint32_t f)
 		mark_row(vt, c->y);
 		c->wrapnext = false;
 		break;
-	case 'S': scroll_up(vt, vt->top, n); break;
+	case 'S': scroll_up(vt, vt->top, n, false); break;
 	case 'T': scroll_down(vt, vt->top, n); break;
 	case 'X':
 		clear_line(vt, c->y, c->x, c->x + n - 1);

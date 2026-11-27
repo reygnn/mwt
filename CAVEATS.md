@@ -40,12 +40,14 @@ no border.
 HiDPI needs `wl_compositor` version 6, which tells a surface its scale. Where a
 compositor offers only an older one, mwt draws at scale 1, blurry on a HiDPI output.
 
-A window of another width lays the lines of the main screen and of the history out
-anew: rows that went on in the next are one line, wrapped where the new width ends.
-Only what autowrap joined is one line; rows a program broke itself (vim, a table) stay
-rows and are wrapped each on its own. In a window one column wide, wide characters are
-gone, as they are when written there. A line that ended in one behind erased blanks ends
-with an empty row from then on.
+A window of another width lays the lines of the main screen and of the history out anew:
+rows that went on in the next are one line, wrapped where the new width ends. Only what
+autowrap joined is one line; rows a program broke itself (vim, a table) stay rows and
+are wrapped each on its own. Rows of one line that a program moved apart, with a scroll
+region or with lines put in or taken out between them, are no longer one; rows that move
+together stay one line. In a window one column wide, wide characters are gone, as they
+are when written there. A line that ended in one behind erased blanks ends with an empty
+row from then on.
 
 Blanks at the end of a line of which nothing shows are no text to mwt, written or
 erased, and are not laid out, but for those before the cursor: the cells before it are

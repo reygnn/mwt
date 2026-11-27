@@ -512,6 +512,33 @@ static const char *fuzz_broken_grid(struct row **s, int cols, int rows)
 	return NULL;
 }
 
+/* I3 and I8 (REFLOW.md): the last row of a screen does not go on, and on the
+ * main screen a join short of the last column is one the layout would make,
+ * into a row without content or, one cell short, into one that begins with
+ * a wide glyph; from the history's newest line into the first row too. NULL
+ * when that holds. */
+static const char *joins_broken(const struct vt *vt)
+{
+	if (vt->pri[vt->rows - 1]->wrap || vt->alt[vt->rows - 1]->wrap)
+		return "the last row of a screen goes on (I3)";
+	for (int y = 0; y < vt->rows; y++) {
+		const struct row *l = vt->pri[y];
+		int join = y ? vt->pri[y - 1]->wrap : vt->hist_count ?
+			vt->hist_wrap[(vt->hist_head - 1 + vt->hist_cap) % vt->hist_cap] : 0;
+		if (!join || join == vt->cols)
+			continue;
+		int n = l->used;
+		while (n > 0 && end_blank(l->c[n - 1], l->tail))
+			n--;
+		if (!l->wrap && !n)
+			continue;
+		if (join == vt->cols - 1 && (l->c[0].attr & ATTR_WIDE))
+			continue;
+		return "a join the layout would not make at this width (I8)";
+	}
+	return NULL;
+}
+
 static const char *fuzz_broken(const struct vt *vt)
 {
 	if (vt->c.x < 0 || vt->c.x >= vt->cols || vt->c.y < 0 || vt->c.y >= vt->rows)
@@ -533,7 +560,9 @@ static const char *fuzz_broken(const struct vt *vt)
 				return "a cell behind a history line's wrap that is not of its tail (I2)";
 	}
 	const char *why = fuzz_broken_grid(vt->pri, vt->cols, vt->rows);
-	return why ? why : fuzz_broken_grid(vt->alt, vt->cols, vt->rows);
+	if (!why)
+		why = fuzz_broken_grid(vt->alt, vt->cols, vt->rows);
+	return why ? why : joins_broken(vt);
 }
 
 static bool fuzz_cells(const struct cell *a, const struct cell *b, int n)
@@ -3327,34 +3356,6 @@ static void test_wrap_row(void)
 	vt_free(vt);
 }
 
-/* I3 and I8 on the main screen (REFLOW.md): the last row does not go on, and
- * a join short of the last column is one the layout would make, into a row
- * without content or, one cell short, into one that begins with a wide
- * glyph; from the history's newest line into the first row too. NULL when
- * that holds. Not for streams that move rows (IL, DL, SU, SD, RI, a scroll
- * region): J5 is the next step. */
-static const char *joins_broken(const struct vt *vt)
-{
-	if (vt->pri[vt->rows - 1]->wrap)
-		return "the last row of the screen goes on (I3)";
-	for (int y = 0; y < vt->rows; y++) {
-		const struct row *l = vt->pri[y];
-		int join = y ? vt->pri[y - 1]->wrap : vt->hist_count ?
-			vt->hist_wrap[(vt->hist_head - 1 + vt->hist_cap) % vt->hist_cap] : 0;
-		if (!join || join == vt->cols)
-			continue;
-		int n = l->used;
-		while (n > 0 && end_blank(l->c[n - 1], l->tail))
-			n--;
-		if (!l->wrap && !n)
-			continue;
-		if (join == vt->cols - 1 && (l->c[0].attr & ATTR_WIDE))
-			continue;
-		return "a join the layout would not make at this width (I8)";
-	}
-	return NULL;
-}
-
 /* The joins are kept right where a row changes, and nothing is checked where
  * one is read (REFLOW.md J3b, J9, I2, I8, X1; G5, G13 and G14 before). The
  * checks read the row's own wrap for that: vt_abs_wraps() gave these answers
@@ -3533,9 +3534,10 @@ static void test_joins(void)
 	CHECK(vt->alt[0]->wrap == 0 && vt->alt[0]->tail == COL_DEFAULT_BG);
 	vt_free(vt);
 
-	/* I2, I3 and I8 after every piece of output and every resize, for
-	 * streams of text, wide glyphs, colours, erases, shifts, cursor
-	 * addresses, both screens and a reset: all but what moves rows. */
+	/* I2, I3 and I8 (fuzz_broken()) after every piece of output and every
+	 * resize, for streams of text, wide glyphs, colours, erases, shifts,
+	 * cursor addresses, rows that move, scroll regions, both screens and a
+	 * reset. */
 	static const char *const frags[] = {
 		"\r", "\n", "\r\n", "\b", "abc", " ", "x", "xxxxxxxxxxxxxxxxxxxx", "  ",
 		"\xe6\xbc\xa2", "\xe6\xbc\xa2\xe5\xad\x97", "\xf0\x9f\x99\x82", "\xe6\xbc\xa2",
@@ -3547,6 +3549,8 @@ static void test_joins(void)
 		"\033[41m", "\033[44m", "\033[49m", "\033[0m", "\033[7m",
 		"\033[?1049h", "\033[?1049l", "\033[?47h", "\033[?47l",
 		"\0337", "\0338", "\033D", "\033E", "\033c",
+		"\033[L", "\033[M", "\033[2L", "\033[2M", "\033[S", "\033[T", "\033[3S", "\033[3T",
+		"\033M", "\033M", "\033[2;4r", "\033[1;2r", "\033[3;99r", "\033[r", "\033[99;1H",
 	};
 	long short_joins = 0, glyph_joins = 0, cleared = 0;
 	for (long round = 0; round < 4000 && !failures; round++) {
@@ -3589,8 +3593,6 @@ static void test_joins(void)
 			}
 			if (!why)
 				why = fuzz_broken(vt);
-			if (!why)
-				why = joins_broken(vt);
 		}
 		checks++;
 		if (why) {
@@ -3604,6 +3606,159 @@ static void test_joins(void)
 	if (getenv("VT_TEST_STATS"))
 		fprintf(stderr, "joins: %ld short, %ld before a glyph, %ld times fewer\n", short_joins,
 			glyph_joins, cleared);
+}
+
+
+/* Rows that move (REFLOW.md J5, J1; G10 before): a row goes on only in the row
+ * that followed it before. Each case is a line of two rows at ten columns,
+ * "abcdefghij" and "KLM", some rows around it, and what moves them: whether
+ * the first still goes on, and the row it is in then. */
+static void test_rows_move(void)
+{
+	struct vt *vt;
+	static const struct { const char *seq; int y, wraps; } move[] = {
+		/* written at rows 2 and 3 of six, "xyz" below */
+		{ "", 1, 10 },
+		{ "\033[3;1H\033[M", 1, 0 },             /* DL takes KLM: xyz is no part of it */
+		{ "\033[3;1H\033[L", 1, 0 },             /* IL between the two */
+		{ "\033[2;1H\033[L", 2, 10 },            /* above both: they move as one */
+		{ "\033[1;1H\033[M", 0, 10 },
+		{ "\033[1;1H\033[4L", 5, 0 },            /* KLM falls off the screen */
+		{ "\033[T", 2, 10 },                     /* SD */
+		{ "\033[4T", 5, 0 },
+		{ "\033[S", 0, 10 },                     /* SU */
+		{ "\033[H\033M", 2, 10 },                /* RI at the top */
+		{ "\033[6;1H\n", 0, 10 },                /* LF at the bottom */
+		/* a region that takes in both: they roll as one */
+		{ "\033[1;5r\033[5;1H\n", 0, 10 },
+		{ "\033[2;5r\033[2;1H\033M", 2, 10 },
+		{ "\033[1;3r\033[S", 0, 10 },
+		/* one that begins with KLM pushes it out */
+		{ "\033[3;5r\033[5;1H\n", 1, 0 },
+		{ "\033[3;5r\033[S", 1, 0 },
+		{ "\033[3;5r\033[3;1H\033M", 1, 0 },     /* or away from its row */
+		{ "\033[3;5r\033[T", 1, 0 },
+		/* one that ends with the first row: KLM stays below it */
+		{ "\033[1;2r\033[2;1H\n", 0, 0 },
+		{ "\033[1;2r\033[S", 0, 0 },
+		{ "\033[1;2r\033[1;1H\033[M", 0, 0 },
+		{ "\033[1;2r\033[2;1H\033D", 0, 0 },    /* IND and NEL as LF */
+		{ "\033[1;2r\033[2;1H\033E", 0, 0 },
+		/* one of just the two: SD takes KLM, and xyz is what follows */
+		{ "\033[2;3r\033[T", 2, 0 },
+		{ "\033[2;3r\033[2;1H\033[L", 2, 0 },
+	};
+	for (size_t i = 0; i < sizeof move / sizeof *move; i++) {
+		for (int alt = 0; alt < 2; alt++) {
+			vt = mk(10, 6, 10);
+			w(vt, alt ? "\033[?47h" : "");
+			w(vt, "top\r\nabcdefghijKLM\r\nxyz");
+			bool ok = vt->line[1]->wrap == 10;
+			w(vt, move[i].seq);
+			checks++;
+			struct row *l = vt->line[move[i].y];
+			bool there = !strcmp(row(vt, move[i].y), "abcdefghij");
+			if (!ok || !there || l->wrap != move[i].wraps || fuzz_broken(vt)) {
+				failures++;
+				fprintf(stderr, "%s:%d: FAIL: rows move, case %zu%s: row \"%s\" wrap %d, expected %d\n",
+					__FILE__, __LINE__, i, alt ? " (alternate screen)" : "", row(vt, move[i].y),
+					l->wrap, move[i].wraps);
+			}
+			vt_free(vt);
+		}
+	}
+
+	/* and in another width they are what they were: one line, or two */
+	vt = mk(10, 4, 10);
+	w(vt, "abcdefghijKLM\r\nxyz\033[2;1H\033[M");
+	CHECK(vt_resize(vt, 20, 4));
+	CHECK_STR(row(vt, 0), "abcdefghij");
+	CHECK_STR(row(vt, 1), "xyz");
+	vt_free(vt);
+	vt = mk(10, 4, 10);
+	w(vt, "\033[2;4rabcdefghijKLM\r\nxyz\033[4;1H\n");
+	CHECK(vt_resize(vt, 20, 4));
+	CHECK_STR(row(vt, 0), "abcdefghij");
+	CHECK_STR(row(vt, 1), "xyz");
+	vt_free(vt);
+	vt = mk(10, 4, 10);
+	w(vt, "\033[1;3r\033[2;1HabcdefghijKLM\n");
+	CHECK(vt_resize(vt, 20, 4));
+	CHECK_STR(row(vt, 0), "abcdefghijKLM");
+	vt_free(vt);
+	/* a region below the first row, with the line in it */
+	vt = mk(10, 6, 10);
+	w(vt, "top\033[2;6r\033[3;1HabcdefghijKLM\033[6;1H\n");
+	CHECK_STR(row(vt, 1), "abcdefghij");
+	CHECK(vt->pri[1]->wrap == 10 && vt->pri[0]->wrap == 0);
+	vt_free(vt);
+
+	/* The history's newest line is the row before the first: rows that roll
+	 * into it follow it as before, a new first row does not. */
+	vt = mk(10, 2, 5);
+	w(vt, "abcdefghijKLM\r\nx");
+	CHECK(vt->hist_count == 1 && vt_abs_wraps(vt, vt_abs_first(vt)) == 10);
+	w(vt, "\033[S");
+	CHECK(vt->hist_count == 2 && vt_abs_wraps(vt, vt_abs_first(vt)) == 10);
+	vt_free(vt);
+	static const char *const first[] = { "\033[T", "\033[H\033M", "\033[H\033[L" };
+	for (size_t i = 0; i < sizeof first / sizeof *first; i++) {
+		vt = mk(10, 2, 5);
+		w(vt, "abcdefghijKLM\r\nx");
+		w(vt, first[i]);
+		CHECK(vt->hist_count == 1 && vt_abs_wraps(vt, vt_abs_first(vt)) == 0);
+		CHECK_STR(row(vt, 1), "KLM");
+		vt_free(vt);
+	}
+	/* not from behind the alternate screen */
+	vt = mk(10, 2, 5);
+	w(vt, "abcdefghijKLM\r\nx\033[?47h\033[T");
+	CHECK(vt_abs_wraps(vt, vt_abs_first(vt)) == 10);
+	vt_free(vt);
+
+	/* The row put() has just wrapped keeps its join where that scrolls: the
+	 * line goes on in the new row, in a region as at the bottom of the
+	 * screen, with a wide glyph that did not fit as well, and from the row
+	 * that rolls into the history. */
+	vt = mk(10, 2, 5);
+	w(vt, "\r\nabcdefghijKLM");
+	CHECK(vt->pri[0]->wrap == 10);
+	CHECK_STR(row(vt, 1), "KLM");
+	vt_free(vt);
+	vt = mk(10, 4, 5);
+	w(vt, "\033[2;3r\033[3;1Haaaaaaaaa\xe6\xbc\xa2");
+	CHECK(vt->pri[1]->wrap == 9 && vt->pri[2]->c[0].cp == 0x6f22);
+	vt_free(vt);
+	vt = mk(10, 1, 5);
+	w(vt, "abcdefghijKLM");
+	CHECK(vt->hist_count == 1 && vt_abs_wraps(vt, vt_abs_first(vt)) == 10);
+	vt_free(vt);
+	/* LF there is not put(): the row above the new one ends its line. It had
+	 * its join from when the row below the region was the next. */
+	vt = mk(10, 4, 5);
+	w(vt, "\033[2;1HabcdefghijKLM\033[1;2r\033[2;1H\n");
+	CHECK_STR(row(vt, 0), "abcdefghij");
+	CHECK_STR(row(vt, 2), "KLM");
+	CHECK(vt->pri[0]->wrap == 0);
+	vt_free(vt);
+
+	/* J1. Below a scroll region the cursor stays in the last row of the
+	 * screen, and the character goes over the row's first cell: the row
+	 * goes on nowhere. One row higher there is a next row. */
+	vt = mk(10, 4, 5);
+	w(vt, "\033[1;2r\033[4;1HabcdefghijKLM");
+	CHECK_STR(row(vt, 3), "KLMdefghij");
+	CHECK(vt->pri[3]->wrap == 0);
+	vt_free(vt);
+	vt = mk(10, 4, 5);
+	w(vt, "\033[1;2r\033[4;1Haaaaaaaaa\xe6\xbc\xa2");
+	CHECK(vt->pri[3]->wrap == 0 && vt->pri[3]->c[0].cp == 0x6f22);
+	vt_free(vt);
+	vt = mk(10, 4, 5);
+	w(vt, "\033[1;2r\033[3;1HabcdefghijKLM");
+	CHECK(vt->pri[2]->wrap == 10);
+	CHECK_STR(row(vt, 3), "KLM");
+	vt_free(vt);
 }
 
 
@@ -3896,6 +4051,7 @@ int main(void)
 	test_wrap_flag_esc();
 	test_wrap_row();
 	test_joins();
+	test_rows_move();
 	test_resize_alt_and_view();
 	test_sgr_details();
 	test_cnl_cpl_1048_decom();

@@ -147,6 +147,22 @@ static void check(const struct vt *vt)
 			for (int x = wrap; wrap && x < vt->cols; x++)
 				if (!end_blank(l[x], screens[s][r]->tail))
 					die("cell behind a row's wrap is not of its tail", vt);
+			/* the last row of a screen does not go on (I3) */
+			if (r == vt->rows - 1 && wrap)
+				die("last row of a screen goes on", vt);
+			/* On the main screen a join short of the last column is one
+			 * the layout would make: into a row without content or, one
+			 * cell short, into one that begins with a wide glyph; from
+			 * the history's newest line into the first row too (I8). */
+			int join = s ? 0 : r ? screens[s][r - 1]->wrap : vt->hist_count ?
+				vt->hist_wrap[(vt->hist_head - 1 + vt->hist_cap) % vt->hist_cap] : 0;
+			if (join && join != vt->cols) {
+				int n = used;
+				while (n > 0 && end_blank(l[n - 1], screens[s][r]->tail))
+					n--;
+				if ((wrap || n) && !(join == vt->cols - 1 && (l[0].attr & ATTR_WIDE)))
+					die("join the layout would not make at this width", vt);
+			}
 			for (int x = used; x < vt->cols; x++)
 				if (l[x].cp != ' ' || l[x].fg != COL_DEFAULT_FG ||
 				    l[x].bg != COL_DEFAULT_BG || l[x].attr)
