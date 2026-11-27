@@ -43,15 +43,32 @@ compositor offers only an older one, mwt draws at scale 1, blurry on a HiDPI out
 A window of another width lays the lines of the main screen and of the history out
 anew: rows that went on in the next are one line, wrapped where the new width ends.
 Only what autowrap joined is one line; rows a program broke itself (vim, a table) stay
-rows and are wrapped each on its own. Blanks at the end of a line are no text to mwt
-and are not kept, so a line that ended in blanks on a row of its own loses that row. In
-a window one column wide, wide characters are gone, as they are when written there.
+rows and are wrapped each on its own. In a window one column wide, wide characters are
+gone, as they are when written there.
+
+Blanks at the end of a line are no text to mwt and are not laid out, but for those
+between the text and the cursor behind them, as after a prompt: the cursor keeps its
+place behind them. A row that holds nothing else, erased or with only the blanks its
+line ended with, stays an empty row. Blanks a row was erased with up to its last
+column, in a color or with an attribute (`CSI K` after `CSI 44 m`, a status line in
+reverse), are put behind the line's text again, up to the new last column. Where the
+text fills a row of the new width to its end, there is no cell to keep one in: they are
+gone then, in a wider window again too. Such blanks that end before the last column are
+text.
 
 Text that reached the last row of the screen still does afterwards: narrower, the rows
 that no longer fit go into the history from the top, and wider, they come back. Text
 that ended further up moves with its rows, and nothing comes back from the history, so
 a screen that was erased (`CSI 2 J`) stays so. What no longer fits below the cursor is
-lost, once the cursor's row is the first: the cursor stays on the screen.
+lost, once the cursor's row is the first: the cursor stays on the screen. The last row
+ends its line then, in a shorter window as well: what is written below it later is a
+line of its own.
+
+bash draws its line again after a resize, by the rows it counted at the old width:
+readline does not know that the line was laid out anew. After many columns in one step,
+as in a tiling compositor, the line with the prompt can show twice; dragged column by
+column it does not. Seen with bash 5.3, a line of 50 to 75 characters and a window
+going from 80 to 40 columns.
 
 Narrower, the same text takes more rows. Where the history is full, its oldest lines
 fall off its far end for them, and a wider window does not bring them back: narrower
@@ -95,8 +112,9 @@ supported; their text is shown, the target is dropped. A URL without a scheme
 drawing or one of ``<>"`{}|\^``, without punctuation at its end or a closing bracket it
 did not open. Lines that wrap are joined, lines a program broke itself (vim, a table)
 are not, nor the screen with the history once it was cleared. A wide character that did
-not fit at the end of a line goes on with the URL, unless the cell left over has a
-colored background: that cell is text then, a blank, also in a copy and in another
+not fit at the end of a line goes on with the URL, unless the cell left over is
+anything but a default blank: one with a colored background or an attribute, or a
+character written there earlier. That cell is text then, also in a copy and in another
 width. A URL is looked for at most 4096 cells either way.
 
 Ctrl+click opens the URL in the text at the click, which output may have changed since

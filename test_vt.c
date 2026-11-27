@@ -1483,8 +1483,17 @@ static size_t reflow_text(const struct vt *vt, uint32_t *out, size_t cap)
 				    l[k].attr)
 					wraps = 0;
 		}
+		/* blanks at the end are no text: default ones, or those a row was
+		 * erased with up to the last column, which are put there again */
+		struct cell f = { 0 };
+		if (!wraps && len == vt->cols)
+			f = l[len - 1];
 		if (wraps)
 			len = wraps;
+		else if (f.cp == ' ' && (f.bg != COL_DEFAULT_BG || f.attr))
+			while (len > 0 && l[len - 1].cp == ' ' && l[len - 1].fg == f.fg &&
+			       l[len - 1].bg == f.bg && l[len - 1].attr == f.attr)
+				len--;
 		else
 			while (len > 0 && l[len - 1].cp == ' ' && l[len - 1].bg == COL_DEFAULT_BG &&
 			       !l[len - 1].attr)
@@ -1504,15 +1513,17 @@ static size_t reflow_text(const struct vt *vt, uint32_t *out, size_t cap)
 }
 
 /* A line of random text for the reflow tests, ended by CR LF: letters, blanks
- * within it, wide glyphs, background colours and underlines. No blank at its
- * end: one there is no text to the terminal, which a reflow would not keep. */
-static void reflow_line(char *s, int cols)
+ * within it, wide glyphs, colours and underlines. No blank at its end: one
+ * there is no text to the terminal, which a reflow would not keep. With bg the
+ * colours are backgrounds, and rows scrolled in are erased with them up to
+ * their last column; without, foregrounds, which erase nothing. */
+static void reflow_line(char *s, int cols, bool bg)
 {
 	int n = 0;
 	for (int k = (int)(fuzz_rand() % (unsigned)(2 * cols)); k > 0; k--) {
 		switch (fuzz_rand() % 12) {
 		case 0: n += sprintf(s + n, "\xe6\xbc\xa2"); break;
-		case 1: n += sprintf(s + n, "\033[%um", 40 + fuzz_rand() % 8); break;
+		case 1: n += sprintf(s + n, "\033[%um", (bg ? 40 : 30) + fuzz_rand() % 8); break;
 		case 2: n += sprintf(s + n, "\033[%cm", fuzz_rand() % 2 ? '4' : '0'); break;
 		case 3: s[n++] = ' '; break;
 		default: s[n++] = (char)('a' + fuzz_rand() % 26);
@@ -1640,9 +1651,9 @@ static void test_reflow(void)
 	vt = mk(20, 2, 10);
 	w(vt, "ab\033[1;18H");
 	CHECK(vt_resize(vt, 12, 2));
-	CHECK(vt->c.x == 11 && !vt->c.wrapnext);
+	CHECK(vt->c.x == 5 && vt->c.y == 1 && !vt->c.wrapnext && vt->pri[0]->wrap == 12);
 	CHECK(vt_resize(vt, 30, 2));
-	CHECK(vt->c.x == 11);
+	CHECK(vt->c.x == 17 && vt->c.y == 0 && vt->pri[0]->wrap == 0);
 	vt_free(vt);
 	/* on a cell of the text, it stays on that cell */
 	vt = mk(10, 4, 10);
@@ -1765,59 +1776,62 @@ static void test_reflow(void)
 	vt_free(vt);
 
 	/* Narrower or wider and back leaves a full screen and its history as they
-	 * were, cell for cell, against a second terminal that was never resized. */
+	 * were, cell for cell, against a second terminal that was never resized.
+	 * With rows erased in a colour, all but those blanks: where the text filled
+	 * a row of the other width to its end, there was no cell to keep one in. */
+	enum { TEXT_MAX = 1 << 16 };
+	static uint32_t ta[TEXT_MAX], tb[TEXT_MAX];
 	fuzz_state = 0x243f6a8885a308d3ULL;
-	int bad = 0;
-	for (int round = 0; round < 400; round++) {
+	int bad = 0, filled = 0;
+	for (int round = 0; round < 600; round++) {
+		bool bg = round % 3 == 2;
 		int cols = 2 + (int)(fuzz_rand() % 30), rows = 2 + (int)(fuzz_rand() % 8);
 		struct vt *a = mk(cols, rows, 4096), *b = mk(cols, rows, 4096);
 		for (int i = rows + (int)(fuzz_rand() % 20); i > 0; i--) {
 			char s[REFLOW_LINE];
-			reflow_line(s, cols);
+			reflow_line(s, cols, bg);
 			w(a, s);
 			w(b, s);
 		}
-		/* the cursor's row blank, not filled with the colour the last
-		 * line left: text below the cursor may not fit, and is lost then */
-		w(a, "\033[m\r\n");
-		w(b, "\033[m\r\n");
 		int other = 2 + (int)(fuzz_rand() % 60);
 		if (!vt_resize(b, other, rows) || !vt_resize(b, cols, rows) || fuzz_broken(b)) {
 			bad++;
 		} else {
+			size_t na = reflow_text(a, ta, TEXT_MAX), nb = reflow_text(b, tb, TEXT_MAX);
 			bad += a->c.x != b->c.x || a->c.y != b->c.y || a->hist_count != b->hist_count ||
-			       a->scrolled != b->scrolled;
-			for (int r = 0; r < rows; r++)
-				bad += !fuzz_rows(a->pri[r], b->pri[r], cols);
+			       a->scrolled != b->scrolled || na != nb || memcmp(ta, tb, na * sizeof *ta);
+			for (int r = 0; r < rows; r++) {
+				bool same = fuzz_rows(a->pri[r], b->pri[r], cols);
+				bad += bg ? a->pri[r]->wrap != b->pri[r]->wrap : !same;
+				filled += bg && same && a->pri[r]->c[cols - 1].bg != COL_DEFAULT_BG;
+			}
 			for (int64_t i = vt_abs_first(a); i < (int64_t)a->scrolled; i++) {
 				int la, lb;
 				const struct cell *ca = vt_abs_line(a, i, &la), *cb = vt_abs_line(b, i, &lb);
-				bad += !ca || !cb || la != lb || !fuzz_cells(ca, cb, la) ||
-				       vt_abs_wraps(a, i) != vt_abs_wraps(b, i);
+				bool same = ca && cb && la == lb && fuzz_cells(ca, cb, la);
+				bad += bg ? vt_abs_wraps(a, i) != vt_abs_wraps(b, i) :
+					    !same || vt_abs_wraps(a, i) != vt_abs_wraps(b, i);
 			}
 		}
 		vt_free(a);
 		vt_free(b);
 	}
 	CHECK(bad == 0);
+	CHECK(filled > 100); /* and most of those blanks are back */
 
 	/* Through any run of sizes the text stays what it was: every cell, its
 	 * colours and where its line ends, with the cursor behind it all, on the
 	 * main screen and behind the alternate one. */
-	enum { TEXT_MAX = 1 << 16 };
-	static uint32_t ta[TEXT_MAX], tb[TEXT_MAX];
 	bad = 0;
 	for (int round = 0; round < 300; round++) {
 		int cols = 2 + (int)(fuzz_rand() % 30), rows = 1 + (int)(fuzz_rand() % 8);
 		struct vt *a = mk(cols, rows, 4096), *b = mk(cols, rows, 4096);
 		for (int i = (int)(fuzz_rand() % 30); i > 0; i--) {
 			char s[REFLOW_LINE];
-			reflow_line(s, cols);
+			reflow_line(s, cols, round % 2);
 			w(a, s);
 			w(b, s);
 		}
-		w(a, "\033[m\r\n");
-		w(b, "\033[m\r\n");
 		size_t na = reflow_text(a, ta, TEXT_MAX);
 		if (round % 3 == 0)
 			w(b, "\033[?1049h");
@@ -1852,11 +1866,24 @@ static void test_reflow(void)
 	CHECK_STR(row(vt, 1), "\xe6\xbc\xa2");
 	vt_free(vt);
 
-	/* a cursor further behind the text than the new width goes: the last
-	 * column, with no wrap pending, which is for the one right behind it */
+	/* The blanks between the text and the cursor behind them are text, as if
+	 * written: where they fill the row, the cursor waits behind them to wrap.
+	 * Not those before the saved cursor, which may be anywhere: further behind
+	 * the text than the new width goes it is in the last column, with no wrap
+	 * pending. */
 	vt = mk(10, 3, 10);
 	w(vt, "abc\033[2C");
 	CHECK(vt_resize(vt, 5, 3));
+	CHECK(vt->c.x == 4 && vt->c.y == 0 && vt->c.wrapnext);
+	w(vt, "X");
+	CHECK_STR(row(vt, 0), "abc");
+	CHECK_STR(row(vt, 1), "X");
+	CHECK(vt_abs_wraps(vt, 0) == 5);
+	vt_free(vt);
+	vt = mk(10, 3, 10);
+	w(vt, "abc\033[2C\0337\r\nxy");
+	CHECK(vt_resize(vt, 5, 3));
+	w(vt, "\0338");
 	CHECK(vt->c.x == 4 && vt->c.y == 0 && !vt->c.wrapnext);
 	vt_free(vt);
 
@@ -1893,6 +1920,254 @@ static void test_reflow(void)
 	CHECK(vt->scrolled == 4 && vt_abs_first(vt) == 2 && vt->hist_count == 2);
 	CHECK_STR(hist_line(vt, 1), "4");
 	CHECK_STR(row(vt, 1), "6");
+	vt_free(vt);
+}
+
+/* Where a line ends, for a reflow: the blanks before the cursor, the blanks a
+ * row was erased with, an empty row the line went on into, and a row whose next
+ * fell off the screen. */
+static void test_reflow_ends(void)
+{
+	/* A prompt ends in a blank with the cursor behind it. Narrower by so much
+	 * that the prompt fills the row, the cursor waits behind the blank and not
+	 * on it; wider again it is where it was, and what is typed comes after the
+	 * blank, not over it. */
+	struct vt *vt = mk(20, 2, 10);
+	w(vt, "user@host:~$ ");
+	CHECK(vt_resize(vt, 13, 2));
+	CHECK(vt->c.x == 12 && vt->c.y == 0 && vt->c.wrapnext);
+	CHECK(vt_resize(vt, 20, 2));
+	CHECK(vt->c.x == 13 && vt->c.y == 0 && !vt->c.wrapnext);
+	w(vt, "ls");
+	CHECK_STR(row(vt, 0), "user@host:~$ ls");
+	vt_free(vt);
+	/* narrower still, the blank goes to the next row and the cursor with it */
+	vt = mk(20, 2, 10);
+	w(vt, "user@host:~$ ");
+	CHECK(vt_resize(vt, 12, 2));
+	CHECK(vt->c.x == 1 && vt->c.y == 1 && vt->pri[0]->wrap == 12);
+	w(vt, "ls");
+	CHECK(vt_resize(vt, 20, 2));
+	CHECK_STR(row(vt, 0), "user@host:~$ ls");
+	CHECK(vt->c.x == 15 && vt->c.y == 0);
+	vt_free(vt);
+	/* a cursor moved one behind the text: the next character does not land
+	 * on the last one */
+	vt = mk(20, 4, 10);
+	w(vt, "abcdefghij\033[C");
+	CHECK(vt_resize(vt, 10, 4));
+	CHECK(vt->c.x == 1 && vt->c.y == 1 && vt->pri[0]->wrap == 10);
+	w(vt, "X");
+	CHECK_STR(row(vt, 0), "abcdefghij");
+	CHECK_STR(row(vt, 1), " X");
+	vt_free(vt);
+	/* a blank written into the last column, a wrap pending behind it: the
+	 * blank is text too, and in a narrower row the cursor waits behind it */
+	vt = mk(10, 3, 10);
+	w(vt, "abcdefghi ");
+	CHECK(vt->c.x == 9 && vt->c.wrapnext);
+	CHECK(vt_resize(vt, 5, 3));
+	CHECK(vt->c.x == 4 && vt->c.y == 1 && vt->c.wrapnext && vt->pri[1]->used == 5);
+	w(vt, "X");
+	CHECK_STR(row(vt, 1), "fghi");
+	CHECK_STR(row(vt, 2), "X");
+	vt_free(vt);
+	/* behind the alternate screen the same, by the place the cursor left; a
+	 * wrap that was pending there is the place behind its cell */
+	vt = mk(20, 2, 10);
+	w(vt, "user@host:~$ \033[?47h");
+	CHECK(vt->pri_x == 13);
+	CHECK(vt_resize(vt, 13, 2));
+	CHECK(vt->pri_x == 13 && vt->pri_y == 0);
+	CHECK(vt_resize(vt, 20, 2));
+	CHECK(vt->pri_x == 13 && vt->pri_y == 0);
+	vt_free(vt);
+	vt = mk(10, 3, 10);
+	w(vt, "0123456789\033[?47h");
+	CHECK(vt->pri_x == 10 && vt->pri_y == 0);
+	CHECK(vt_resize(vt, 5, 3));
+	CHECK(vt->pri_x == 5 && vt->pri_y == 1);
+	vt_free(vt);
+
+	/* Rows erased with a background colour up to the last column: the blanks
+	 * are no text and take no row of their own in a narrower window. They are
+	 * put behind the text again, up to the new last column, wider too. */
+	vt = mk(10, 4, 10);
+	w(vt, "\033[44m\033[2J\033[Hab\033[0m\r\ncd\033[44m\033[K\033[0m\r\n$ ");
+	CHECK(vt_resize(vt, 9, 4));
+	CHECK(vt->hist_count == 0 && vt->c.x == 2 && vt->c.y == 2);
+	CHECK_STR(row(vt, 0), "ab");
+	CHECK_STR(row(vt, 1), "cd");
+	CHECK_STR(row(vt, 2), "$");
+	CHECK(vt->pri[0]->c[1].bg == 4 && vt->pri[0]->c[8].bg == 4 && vt->pri[0]->used == 9);
+	CHECK(vt->pri[1]->c[1].bg == COL_DEFAULT_BG && vt->pri[1]->c[2].bg == 4 && vt->pri[1]->c[8].bg == 4);
+	CHECK(vt->pri[2]->c[1].bg == COL_DEFAULT_BG && vt->pri[2]->c[2].bg == 4 && vt->pri[2]->c[8].bg == 4);
+	CHECK(vt->pri[3]->c[0].bg == 4 && vt->pri[3]->c[8].bg == 4 && vt->pri[3]->c[8].cp == ' ');
+	CHECK(vt_resize(vt, 12, 4));
+	CHECK(vt->hist_count == 0 && vt->c.x == 2 && vt->c.y == 2);
+	CHECK(vt->pri[1]->c[2].bg == 4 && vt->pri[1]->c[11].bg == 4 && vt->pri[3]->c[11].bg == 4);
+	vt_free(vt);
+	/* behind text that takes more rows now they are behind its last row, and
+	 * back behind the one row it was; in the history as on the screen */
+	vt = mk(10, 3, 10);
+	w(vt, "\033[41mabcdefgh\033[K\033[m\r\nx\r\ny\r\nz");
+	CHECK(vt->hist_count == 1);
+	CHECK(vt_resize(vt, 5, 3));
+	CHECK(vt->hist_count == 2);
+	CHECK_STR(hist_line(vt, 2), "abcde");
+	CHECK_STR(hist_line(vt, 1), "fgh");
+	int len;
+	const struct cell *l = vt_abs_line(vt, vt_abs_first(vt) + 1, &len);
+	CHECK(l && len == 5 && l[2].bg == 1 && l[3].cp == ' ' && l[3].bg == 1 && l[4].bg == 1);
+	CHECK(vt_abs_wraps(vt, vt_abs_first(vt)) == 5 && vt_abs_wraps(vt, vt_abs_first(vt) + 1) == 0);
+	CHECK(vt_resize(vt, 10, 3));
+	CHECK(vt->hist_count == 1);
+	l = vt_abs_line(vt, vt_abs_first(vt), &len);
+	CHECK(l && len == 10 && l[7].cp == 'h' && l[8].cp == ' ' && l[8].bg == 1 && l[9].bg == 1);
+	vt_free(vt);
+	/* Where the text fills a row of the new width to its end, there is no
+	 * cell to keep such a blank in: they are gone then, also wider again. */
+	vt = mk(10, 3, 10);
+	w(vt, "\033[41mabcdef\033[K\033[m\r\nx");
+	CHECK(vt_resize(vt, 6, 3));
+	CHECK_STR(row(vt, 0), "abcdef");
+	CHECK_STR(row(vt, 1), "x");
+	CHECK(vt_resize(vt, 10, 3));
+	CHECK(vt->pri[0]->c[5].bg == 1 && vt->pri[0]->c[6].bg == COL_DEFAULT_BG);
+	vt_free(vt);
+	/* Blanks with a colour or an attribute that do not reach the last column
+	 * are text, a default blank after them or not. */
+	vt = mk(10, 4, 10);
+	w(vt, "ab\033[7m   \033[m\r\nX");
+	CHECK(vt_resize(vt, 3, 4));
+	CHECK(vt->pri[0]->wrap == 3 && (vt->pri[0]->c[2].attr & ATTR_REVERSE));
+	CHECK(vt->pri[1]->used == 2 && (vt->pri[1]->c[1].attr & ATTR_REVERSE) && vt->pri[1]->wrap == 0);
+	CHECK_STR(row(vt, 2), "X");
+	vt_free(vt);
+	/* only blanks like the last one are what the row was erased with: others
+	 * before them, here underlined, are text and stay as they are */
+	vt = mk(10, 3, 10);
+	w(vt, "ab\033[41;4m  \033[24m\033[K\033[m\r\nX");
+	CHECK(vt_resize(vt, 9, 3));
+	CHECK((vt->pri[0]->c[2].attr & ATTR_UNDERLINE) && (vt->pri[0]->c[3].attr & ATTR_UNDERLINE));
+	CHECK(!(vt->pri[0]->c[4].attr & ATTR_UNDERLINE) && vt->pri[0]->c[8].bg == 1);
+	CHECK(vt_resize(vt, 3, 3));
+	CHECK(vt->pri[1]->c[0].attr & ATTR_UNDERLINE);
+	CHECK(vt->pri[1]->c[1].bg == 1 && !(vt->pri[1]->c[1].attr & ATTR_UNDERLINE) && vt->pri[1]->used == 3);
+	vt_free(vt);
+	/* reverse blanks up to the last column are a row erased, as a status line */
+	vt = mk(10, 3, 10);
+	w(vt, "\033[7mfile.c    \033[m\r\nX");
+	CHECK(vt->pri[0]->used == 10);
+	CHECK(vt_resize(vt, 8, 3));
+	CHECK_STR(row(vt, 1), "X");
+	CHECK(vt->pri[0]->used == 8 && (vt->pri[0]->c[7].attr & ATTR_REVERSE) && vt->pri[0]->wrap == 0);
+	vt_free(vt);
+
+	/* An empty row a line went on into, erased since, stays a row: the line
+	 * goes on into it from where its text ends now, and nothing below it moves
+	 * up. Back at the first width all is as it was. */
+	vt = mk(5, 3, 10);
+	w(vt, "abcdefg\033[2K\r\nX");
+	CHECK(vt->pri[0]->wrap == 5 && vt->c.x == 1 && vt->c.y == 2);
+	CHECK(vt_resize(vt, 6, 3));
+	CHECK_STR(row(vt, 0), "abcde");
+	CHECK_STR(row(vt, 1), "");
+	CHECK_STR(row(vt, 2), "X");
+	CHECK(vt_abs_wraps(vt, 0) == 5 && vt->c.x == 1 && vt->c.y == 2 && vt->hist_count == 0);
+	CHECK(vt_resize(vt, 3, 3));
+	CHECK_STR(hist_line(vt, 1), "abc");
+	CHECK_STR(row(vt, 0), "de");
+	CHECK_STR(row(vt, 1), "");
+	CHECK_STR(row(vt, 2), "X");
+	CHECK(vt->pri[0]->wrap == 2 && vt->hist_count == 1 && vt->c.y == 2);
+	CHECK(vt_resize(vt, 5, 3));
+	CHECK_STR(row(vt, 0), "abcde");
+	CHECK_STR(row(vt, 1), "");
+	CHECK_STR(row(vt, 2), "X");
+	CHECK(vt->pri[0]->wrap == 5 && vt->hist_count == 0 && vt->c.x == 1 && vt->c.y == 2);
+	vt_free(vt);
+	/* the same for a row that holds only the blanks its line ended with */
+	vt = mk(5, 3, 10);
+	w(vt, "abcde  \r\nX");
+	CHECK(vt->pri[0]->wrap == 5);
+	CHECK(vt_resize(vt, 4, 3));
+	CHECK(vt->hist_count == 1);
+	CHECK_STR(hist_line(vt, 1), "abcd");
+	CHECK_STR(row(vt, 0), "e");
+	CHECK_STR(row(vt, 1), "");
+	CHECK_STR(row(vt, 2), "X");
+	CHECK(vt_resize(vt, 5, 3));
+	CHECK_STR(row(vt, 0), "abcde");
+	CHECK_STR(row(vt, 1), "");
+	CHECK_STR(row(vt, 2), "X");
+	CHECK(vt->hist_count == 0);
+	vt_free(vt);
+
+	/* A last row whose next fell off the screen ends its line: what is
+	 * written below it later is not joined to it by the next width. */
+	vt = mk(10, 3, 10);
+	w(vt, "0123456789abcde\033[1;4H");
+	CHECK(vt_resize(vt, 4, 3));
+	CHECK_STR(row(vt, 2), "89ab");
+	CHECK(vt->pri[1]->wrap == 4 && vt->pri[2]->wrap == 0);
+	w(vt, "\033[3;1H\r\nXY");
+	CHECK(vt_resize(vt, 20, 3));
+	CHECK_STR(row(vt, 0), "0123456789ab");
+	CHECK_STR(row(vt, 1), "XY");
+	vt_free(vt);
+	/* in a shorter window too, on either screen */
+	vt = mk(5, 3, 10);
+	w(vt, "abcdefgh\033[H");
+	CHECK(vt->pri[0]->wrap == 5);
+	CHECK(vt_resize(vt, 5, 1));
+	CHECK_STR(row(vt, 0), "abcde");
+	CHECK(vt->pri[0]->wrap == 0);
+	vt_free(vt);
+	vt = mk(5, 3, 10);
+	w(vt, "\033[?47h\033[Habcdefgh\033[H");
+	CHECK(vt->alt[0]->wrap == 5);
+	CHECK(vt_resize(vt, 5, 1));
+	CHECK(vt->alt[0]->wrap == 0);
+	vt_free(vt);
+	/* not a row that is still followed by its next */
+	vt = mk(5, 3, 10);
+	w(vt, "abcdefgh\033[H");
+	CHECK(vt_resize(vt, 5, 2));
+	CHECK(vt->pri[0]->wrap == 5);
+	vt_free(vt);
+
+	/* A row of blanks that goes on in the next is text, and the end of the
+	 * screen's text when nothing comes after it: narrower, it takes the rows
+	 * it needs, and what is above the cursor goes into the history for them. */
+	vt = mk(5, 4, 10);
+	w(vt, "ab\r\n\r\n       \033[2;1H");
+	CHECK(vt->pri[2]->wrap == 5 && vt->c.y == 1);
+	CHECK(vt_resize(vt, 2, 4));
+	CHECK(vt->hist_count == 1 && vt->c.x == 0 && vt->c.y == 0);
+	CHECK_STR(hist_line(vt, 1), "ab");
+	vt_free(vt);
+
+	/* One column has no room for a wide glyph. A cursor on it is behind what
+	 * came before, and the next character does not write over that. */
+	vt = mk(10, 3, 10);
+	w(vt, "a\xe6\xbc\xa2\033[1;2H");
+	CHECK(vt_resize(vt, 1, 3));
+	CHECK_STR(row(vt, 0), "a");
+	CHECK(vt->c.x == 0 && vt->c.y == 0 && vt->c.wrapnext);
+	w(vt, "X");
+	CHECK_STR(row(vt, 0), "a");
+	CHECK_STR(row(vt, 1), "X");
+	vt_free(vt);
+	vt = mk(10, 3, 10);
+	w(vt, "a\xe6\xbc\xa2\033[1;3H"); /* on its right half */
+	CHECK(vt_resize(vt, 1, 3));
+	CHECK(vt->c.x == 0 && vt->c.y == 0 && vt->c.wrapnext);
+	vt_free(vt);
+	vt = mk(10, 3, 10);
+	w(vt, "\xe6\xbc\xa2\033[1;2H");
+	CHECK(vt_resize(vt, 1, 3));
+	CHECK(vt->c.x == 0 && vt->c.y == 0 && !vt->c.wrapnext);
 	vt_free(vt);
 }
 
@@ -2660,6 +2935,7 @@ int main(void)
 	test_resize();
 	test_resize_back();
 	test_reflow();
+	test_reflow_ends();
 	test_origin();
 	test_xterm_details();
 	test_ascii_runs();

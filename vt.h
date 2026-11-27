@@ -117,8 +117,12 @@ struct vt {
 	int *hist_wrap;            /* as row.wrap, never above hist_len */
 	int hist_cap, hist_count, hist_head; /* head: index of next slot */
 	int view;                 /* lines scrolled back, 0 = live */
-	uint64_t scrolled;        /* lines pushed into history, less those a taller
-	                           * window took back (vt_resize) */
+	uint64_t scrolled;        /* What the lines are counted from: abs = row +
+	                           * scrolled - view. The lines pushed into history,
+	                           * less those a taller window took back; another
+	                           * width sets it to the rows before the screen
+	                           * then, past those that fell off the history's
+	                           * far end (vt_resize). */
 
 	/* parser */
 	int state;

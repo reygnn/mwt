@@ -191,7 +191,8 @@ expect "the line shows after a row of marks" '.*~\$ echo sichtbar'
 T -k Return
 
 # Back at 80 columns the zeros are laid out anew, 80 and 20 of them, the cursor
-# behind the last: ESC[1K clears the row it is in up to there, the 20.
+# behind the last: ESC[1K clears the row it is in up to there, the 20. The 80
+# still go on into that row, so the screen reads as one line.
 size="$W $H"
 swaymsg -q '[app_id="mwt"] resize set 1000 460'
 for ((i = 0; i < 50; i++)); do [ "$(window_rect)" != "$size" ] && break; sleep 0.1; done
@@ -200,7 +201,7 @@ T 'printf "%0100d" 0; sleep 1.5; printf "\033[1K|\n"' -k Return
 # the zeros out, the cursor in the last column: then back to 80 columns
 for ((i = 0; i < 10; i++)); do shown | grep -q '^0\{50\}' && break; sleep 0.1; done
 swaymsg -q "[app_id=\"mwt\"] resize set $size, move position 20 20"
-expect "ESC[1K after the window shrank" ' *|'
+expect "ESC[1K after the window shrank" '0\{80\} *|'
 C l
 T 'stty size' -k Return
 expect "back to 80 columns" '24 80'
