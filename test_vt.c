@@ -3944,6 +3944,18 @@ static void test_height(void)
 	CHECK_STR(row(vt, 4), "");
 	CHECK(vt->c.y == 1 && vt->hist_count == 0);
 	vt_free(vt);
+	/* A taller window takes as many rows back from the history as it grew
+	 * (V3, D12), above a screen that is not full too: here one that was
+	 * cleared, and the rows from before are over its text again. */
+	vt = mk(10, 4, 10);
+	w(vt, "l1\r\nl2\r\nl3\r\nl4\r\nl5\r\nl6\033[H\033[2Jx");
+	CHECK(vt->hist_count == 2 && vt->c.y == 0);
+	CHECK(vt_resize(vt, 10, 6));
+	CHECK(vt->hist_count == 0 && vt->c.y == 2);
+	CHECK_STR(row(vt, 0), "l1");
+	CHECK_STR(row(vt, 1), "l2");
+	CHECK_STR(row(vt, 2), "x");
+	vt_free(vt);
 	/* a row erased in a colour is an end as text is, and so is a row a
 	 * line goes on from */
 	vt = mk(10, 6, 10);
