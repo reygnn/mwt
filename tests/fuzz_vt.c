@@ -94,11 +94,9 @@ static void die(const char *what, const struct vt *vt)
 }
 
 /* What is none of a row's content at its end (REFLOW.md 3.1): a blank of its
- * tail, not written; with the default for a tail any blank nothing shows of. */
+ * tail, not written. */
 static bool end_blank(struct cell c, uint32_t tail)
 {
-	if (tail == COL_DEFAULT_BG)
-		return c.cp == ' ' && c.bg == COL_DEFAULT_BG && !(c.attr & ~ATTR_TEXT);
 	return c.cp == ' ' && c.fg == COL_DEFAULT_FG && c.bg == tail && !c.attr;
 }
 

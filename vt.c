@@ -91,42 +91,21 @@ static bool is_default_blank(struct cell c)
 	return c.cp == ' ' && c.fg == COL_DEFAULT_FG && c.bg == COL_DEFAULT_BG && !c.attr;
 }
 
-/* Whether nothing of the cell shows: a blank in the default background and
- * with no attribute, erased or written (ATTR_TEXT), in any foreground. */
-static bool shows_nothing(struct cell c)
-{
-	return c.cp == ' ' && c.bg == COL_DEFAULT_BG && !(c.attr & ~ATTR_TEXT);
-}
-
-/* The cells of a row that are text: without the blanks at its end of which
- * nothing shows, but none of the first min. Those a program wrote go too: a
- * row padded with blanks is no line that long. */
-static int text_len(const struct cell *l, int len, int min)
-{
-	while (len > min && shows_nothing(l[len - 1]))
-		len--;
-	return len;
-}
-
 /* A blank as the erase that set a row's tail left it: in that colour, and
- * not written. */
+ * not written. It is none of a row's content where it ends the row. A blank
+ * a program wrote is, in the default colours too, where nothing shows of it:
+ * a terminal of another width shows it given the same bytes (REFLOW.md 3.1,
+ * D1). */
 static bool is_tail_blank(struct cell c, uint32_t tail)
 {
 	return c.cp == ' ' && c.fg == COL_DEFAULT_FG && c.bg == tail && !c.attr;
 }
 
-/* A cell that is none of a row's content where it ends the row (REFLOW.md
- * 3.1): a blank of the row's tail. With the default for a tail, any blank
- * nothing shows of, written too (D1 is not decided). */
-static bool is_end_blank(struct cell c, uint32_t tail)
-{
-	return tail == COL_DEFAULT_BG ? shows_nothing(c) : is_tail_blank(c, tail);
-}
-
-/* How many of the len cells of a row without a join are its content */
+/* How many of the len cells of a row without a join are its content: up to
+ * the last that is written, or is no blank of the row's tail */
 static int content_len(const struct cell *l, int len, uint32_t tail)
 {
-	while (len > 0 && is_end_blank(l[len - 1], tail))
+	while (len > 0 && is_tail_blank(l[len - 1], tail))
 		len--;
 	return len;
 }
@@ -325,7 +304,7 @@ static void row_changed(struct vt *vt, int y)
 {
 	struct row *l = vt->line[y];
 	for (int k = l->wrap; l->wrap && k < l->used; k++)
-		if (!is_end_blank(l->c[k], l->tail))
+		if (!is_tail_blank(l->c[k], l->tail))
 			l->wrap = 0;
 	if (vt->mode & MODE_ALTSCREEN)
 		return;
@@ -348,12 +327,14 @@ static void push_hist(struct vt *vt, const struct row *row)
 {
 	if (vt->hist_cap <= 0)
 		return;
-	/* trim trailing default blanks, but none of the cells before a wrap, and
-	 * none of a row whose end was erased in a colour: it has cells to its
-	 * last column; a screen row is blank from row.used on, so the search
-	 * starts there */
+	/* The row's content is kept, the blanks a program wrote at its end with
+	 * it (H1), and the cells before a wrap whatever they are. Not the blanks
+	 * of an erase behind it: they are there again where the row is shown.
+	 * Those of an erase in a colour are kept, to the last column. A screen
+	 * row is blank from row.used on, so the search starts there. */
 	const struct cell *l = row->c;
-	int len = text_len(l, row->used, row->tail != COL_DEFAULT_BG ? row->used : row->wrap);
+	int len = row->tail != COL_DEFAULT_BG ? row->used :
+		  MAX(content_len(l, row->used, row->tail), row->wrap);
 	int slot = vt->hist_head;
 	struct cell *dst = vt->hist[slot];
 	/* a slot keeps its cells: once the history is full, a line that fits
@@ -764,7 +745,7 @@ static struct row **copy_screen(const struct vt *vt, struct row **old, int shift
 		 * the cells behind it are of another colour than that (X1) */
 		s[r]->tail = cols > vt->cols ? COL_DEFAULT_BG : o->tail;
 		for (int k = s[r]->wrap; s[r]->wrap && k < s[r]->used; k++)
-			if (!is_end_blank(s[r]->c[k], s[r]->tail))
+			if (!is_tail_blank(s[r]->c[k], s[r]->tail))
 				s[r]->wrap = 0;
 		if (cols < vt->cols && (s[r]->c[cols - 1].attr & ATTR_WIDE))
 			s[r]->c[cols - 1] = b;
@@ -857,12 +838,12 @@ static uint32_t line_tail(const struct vt *vt, int g)
  * column: counted as text, a row erased in a colour took two rows one column
  * narrower. Which they are the row says, not where they happen to be: blanks
  * of an erase in another colour, or of one that ended before the last
- * column, are text wherever another width puts them. With the default for a
- * tail, blanks that were written go as well if nothing shows of them
- * (content_len()). The first keep cells are text whatever they hold: the blanks
- * between a prompt and the cursor behind them, without which the cursor had
- * no place to be, and those before a cursor in a row that holds nothing:
- * clamped into a narrower row, it was not back in its column in a wider one. */
+ * column, are text wherever another width puts them. So are blanks a program
+ * wrote, in the default colours too (content_len()). The first keep cells are
+ * text whatever they hold: the cells between the text and a cursor moved
+ * behind it, without which the cursor had no place to be, and those before
+ * a cursor in a row that holds nothing: clamped into a narrower row, it was
+ * not back in its column in a wider one. */
 static const struct cell *old_row(const struct vt *vt, int g, int keep, int *n, bool *more)
 {
 	int len, wrap;
@@ -1301,7 +1282,7 @@ static bool put(struct vt *vt, uint32_t cp)
 		 * where that is blank: no text, so a copy, a URL and a reflow pass
 		 * over it. With anything else there the cell is the line's. */
 		struct row *l = vt->line[c->y];
-		bool gap = !c->wrapnext && is_end_blank(l->c[vt->cols - 1], l->tail);
+		bool gap = !c->wrapnext && is_tail_blank(l->c[vt->cols - 1], l->tail);
 		/* Not where the cursor stays in its row, the last of the screen
 		 * below a scroll region: the character goes over the row's first
 		 * cell, and the row goes on nowhere (J1). */

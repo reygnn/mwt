@@ -479,12 +479,9 @@ static size_t fuzz_gen(char *o, size_t cap)
 }
 
 /* What is none of a row's content at its end (REFLOW.md 3.1): a blank of its
- * tail, not written; with the default for a tail any blank nothing shows of,
- * until D1 is decided. */
+ * tail, not written. */
 static bool end_blank(struct cell c, uint32_t tail)
 {
-	if (tail == COL_DEFAULT_BG)
-		return c.cp == ' ' && c.bg == COL_DEFAULT_BG && !(c.attr & ~ATTR_TEXT);
 	return c.cp == ' ' && c.fg == COL_DEFAULT_FG && c.bg == tail && !c.attr;
 }
 
@@ -1632,35 +1629,23 @@ static size_t reflow_text(const struct vt *vt, uint32_t *out, size_t cap)
 		const struct cell *l = vt_abs_line(vt, a, &len);
 		uint32_t fill;
 		if (a >= (int64_t)vt->scrolled) {
-			/* the main screen's rows, also behind the alternate screen,
-			 * by the rule of vt_abs_wraps */
+			/* the main screen's rows, also behind the alternate screen */
 			const struct row *r = vt->pri[a - (int64_t)vt->scrolled];
 			l = r->c;
 			len = vt->cols;
 			wraps = r->wrap;
 			fill = r->tail;
-			for (int k = wraps; wraps && k < len; k++)
-				if (fill != COL_DEFAULT_BG ?
-				    l[k].cp != ' ' || l[k].fg != COL_DEFAULT_FG || l[k].bg != fill || l[k].attr :
-				    (l[k].cp != ' ' && l[k].cp != 0) || l[k].bg != COL_DEFAULT_BG ||
-				    (l[k].attr & ~ATTR_TEXT))
-					wraps = 0;
 		} else {
 			fill = vt_abs_tail(vt, a);
 		}
 		/* blanks at the end are no text: those of the erase the row's tail
 		 * is from, in its colour and not written, which are put there
-		 * again; with the default for a tail, all that nothing shows of */
+		 * again */
 		if (wraps) {
 			len = wraps;
 			fill = COL_DEFAULT_BG;
-		} else if (fill != COL_DEFAULT_BG) {
-			while (len > 0 && l[len - 1].cp == ' ' && l[len - 1].fg == COL_DEFAULT_FG &&
-			       l[len - 1].bg == fill && !l[len - 1].attr)
-				len--;
 		} else {
-			while (len > 0 && l[len - 1].cp == ' ' && l[len - 1].bg == COL_DEFAULT_BG &&
-			       !(l[len - 1].attr & ~ATTR_TEXT))
+			while (len > 0 && end_blank(l[len - 1], fill))
 				len--;
 		}
 		for (int x = 0; x < len && n + 6 < cap; x++) {
@@ -2041,13 +2026,49 @@ static void test_reflow(void)
 	CHECK(bad == 0);
 	CHECK(fills > 200 && kept > 50); /* and rows had one, also after the stream */
 
-	/* blanks written at the end of a line are no text: narrower, they take no
-	 * rows of their own */
+	/* Blanks written at the end of a line are content as any written cell
+	 * (REFLOW.md 3.1, D1; G1 before): narrower, they take the rows a terminal
+	 * of that width gives them for the same bytes. Erased ones take none. */
 	vt = mk(10, 4, 10);
 	w(vt, "ab        \r\ncd");
 	CHECK(vt_resize(vt, 4, 4));
 	CHECK_STR(row(vt, 0), "ab");
+	CHECK_STR(row(vt, 1), "");
+	CHECK_STR(row(vt, 2), "");
+	CHECK_STR(row(vt, 3), "cd");
+	CHECK(vt->pri[0]->wrap == 4 && vt->pri[1]->wrap == 4 && vt->pri[2]->used == 2 && !vt->pri[2]->wrap);
+	{
+		struct vt *b = mk(4, 4, 10);
+		w(b, "ab        \r\ncd");
+		const char *why = same_state(vt, b, 0);
+		CHECK(!why);
+		vt_free(b);
+	}
+	vt_free(vt);
+	vt = mk(10, 4, 10);
+	w(vt, "ab        \033[1;3H\033[K\r\ncd");
+	CHECK(vt_resize(vt, 4, 4));
+	CHECK_STR(row(vt, 0), "ab");
 	CHECK_STR(row(vt, 1), "cd");
+	vt_free(vt);
+	/* in the history as on the screen: a row that scrolls off keeps them */
+	vt = mk(10, 2, 10);
+	w(vt, "ab        \r\ncd\r\nef");
+	CHECK(vt->hist_count == 1 && vt->hist_len[(vt->hist_head - 1 + vt->hist_cap) % vt->hist_cap] == 10);
+	CHECK(vt_resize(vt, 4, 5) && vt->hist_count == 0);
+	CHECK_STR(row(vt, 0), "ab");
+	CHECK_STR(row(vt, 3), "cd");
+	CHECK_STR(row(vt, 4), "ef");
+	vt_free(vt);
+	/* and an erased row that scrolls off is as short as its text, also
+	 * where it was erased piece by piece from its end */
+	vt = mk(10, 2, 10);
+	w(vt, "ab        \033[1;3H\033[K\r\ncd\r\nef");
+	CHECK(vt->hist_count == 1 && vt->hist_len[(vt->hist_head - 1 + vt->hist_cap) % vt->hist_cap] == 2);
+	vt_free(vt);
+	vt = mk(10, 2, 10);
+	w(vt, "abcdefgh\033[1;5H\033[2X\033[1;7H\033[2X\r\ncd\r\nef");
+	CHECK(vt->hist_count == 1 && vt->hist_len[(vt->hist_head - 1 + vt->hist_cap) % vt->hist_cap] == 4);
 	vt_free(vt);
 
 	/* the cell a wide glyph did not fit in, written since: text, and the line
@@ -2123,10 +2144,8 @@ static void test_reflow(void)
 /* Plain output, written at one size and resized to another, is what it is
  * written at the other size (REFLOW.md, A2): printable characters of one and
  * two cells, attributes and foreground colours, CR LF. Every row of the screen
- * and the history, where each goes on, the cursor and its pending wrap.
- *
- * Left out until the rule is there: lines that end in a blank, which are
- * shorter by it after the resize (D1). */
+ * and the history, where each goes on, the cursor and its pending wrap. Lines
+ * end in blanks too: a written blank is content (D1). */
 static void test_plain_output(void)
 {
 	int bad = 0, shown = 0, wide = 0, hist = 0, wrapped = 0, pending = 0;
@@ -2149,8 +2168,6 @@ static void test_plain_output(void)
 				else
 					s[n++] = k == 3 ? ' ' : (char)('a' + fuzz_rand() % 26);
 			}
-			if (len)
-				s[n++] = 'z';
 			if (l + 1 < lines || fuzz_rand() % 2)
 				n += (size_t)sprintf(s + n, "\r\n");
 		}
@@ -2608,11 +2625,20 @@ static void test_reflow_ends(void)
 	CHECK(!vt->pri[0]->c[0].attr && !vt->pri[0]->c[1].attr && (vt->pri[0]->c[2].attr & ATTR_TEXT));
 	CHECK(vt->pri[0]->c[4].cp == ' ' && !vt->pri[0]->c[4].attr && !vt->pri[0]->c[5].attr);
 	vt_free(vt);
-	/* A blank that was written and shows nothing is as one that was not: the
-	 * cell a wide glyph did not fit in is still left out of the line. */
+	/* A blank that was written is content, though nothing shows of it: with
+	 * one in the cell a wide glyph did not fit in, that cell is the line's
+	 * (J2, D1). An erased one there is not. */
 	vt = mk(5, 3, 10);
 	w(vt, "abcd \033[1;5H\xe6\xbc\xa2");
-	CHECK(vt->pri[0]->c[4].attr == ATTR_TEXT && vt->pri[0]->wrap == 4 && vt_abs_wraps(vt, 0) == 4);
+	CHECK(vt->pri[0]->c[4].attr == ATTR_TEXT && vt->pri[0]->wrap == 5 && vt_abs_wraps(vt, 0) == 5);
+	CHECK(vt_resize(vt, 8, 3));
+	CHECK(vt->pri[0]->c[4].cp == ' ' && vt->pri[0]->c[5].cp == 0x6f22);
+	vt_free(vt);
+	vt = mk(5, 3, 10);
+	w(vt, "abcd \033[1;5H\033[X\xe6\xbc\xa2");
+	CHECK(vt->pri[0]->wrap == 4);
+	CHECK(vt_resize(vt, 8, 3));
+	CHECK(vt->pri[0]->c[4].cp == 0x6f22);
 	vt_free(vt);
 	/* Blanks with a colour or an attribute that do not reach the last column
 	 * are text, a default blank after them or not. */
@@ -2750,21 +2776,22 @@ static void test_reflow_ends(void)
 	CHECK_STR(row(vt, 2), "X");
 	CHECK(vt->pri[0]->wrap == 5 && vt->hist_count == 0 && vt->c.x == 1 && vt->c.y == 2);
 	vt_free(vt);
-	/* the same for a row that holds only the blanks its line ended with */
+	/* Not so a row that holds the blanks a program wrote behind a full row:
+	 * they are content, and are laid out with the line (D1) */
 	vt = mk(5, 3, 10);
 	w(vt, "abcde  \r\nX");
-	CHECK(vt->pri[0]->wrap == 5);
+	CHECK(vt->pri[0]->wrap == 5 && vt->pri[1]->used == 2);
 	CHECK(vt_resize(vt, 4, 3));
-	CHECK(vt->hist_count == 1);
-	CHECK_STR(hist_line(vt, 1), "abcd");
-	CHECK_STR(row(vt, 0), "e");
-	CHECK_STR(row(vt, 1), "");
+	CHECK(vt->hist_count == 0);
+	CHECK_STR(row(vt, 0), "abcd");
+	CHECK_STR(row(vt, 1), "e");
 	CHECK_STR(row(vt, 2), "X");
+	CHECK(vt->pri[0]->wrap == 4 && vt->pri[1]->used == 3 && !vt->pri[1]->wrap);
 	CHECK(vt_resize(vt, 5, 3));
 	CHECK_STR(row(vt, 0), "abcde");
 	CHECK_STR(row(vt, 1), "");
 	CHECK_STR(row(vt, 2), "X");
-	CHECK(vt->hist_count == 0);
+	CHECK(vt->pri[0]->wrap == 5 && vt->pri[1]->used == 2 && vt->hist_count == 0);
 	vt_free(vt);
 
 	/* A last row whose next fell off the screen ends its line: what is
@@ -3379,7 +3406,7 @@ static void test_joins(void)
 		{ "\033[1;13H\033[41m\033[P", 0 },       /* a red tail, the rest is not */
 		{ "\033[1;11H\033[41m\033[10P", 10 },
 		{ "\033[1;13Hx", 0 },                    /* print */
-		{ "\033[1;13H ", 10 },                   /* a blank nothing shows of (D1) */
+		{ "\033[1;13H ", 0 },                    /* a written blank is content too (D1) */
 		{ "\033[1;13H\033[41m ", 0 },
 		{ "\033[1;13H\033[9b", 10 },             /* REP has nothing to repeat here */
 		{ "\033[1;13Hx\033[1;13H\033[X", 0 },    /* erased again, the join is not back */
@@ -3437,7 +3464,7 @@ static void test_joins(void)
 		{ "\033[2;3H\033[41m\033[K", 0 },        /* the default blanks before it are content */
 		{ "\033[2;3H\033[41m\033[@", 0 },
 		{ "\033[2;3H\033[41m\033[P", 0 },        /* a red tail behind default blanks */
-		{ "\033[2;1H ", 9 },                     /* nothing shows of it (D1) */
+		{ "\033[2;1H ", 0 },                     /* a written blank too (D1) */
 		{ "\033[2;1H\033[4hx\033[4l", 0 },
 		{ "\033[2;3H\033[9b", 9 },
 		{ "\033[2;2Hx\033[2;1H\033[2K", 0 },     /* erased again, the join is not back */

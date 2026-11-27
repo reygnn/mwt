@@ -49,12 +49,15 @@ together stay one line. In a window one column wide, wide characters are gone, a
 are when written there. A line that ended in one behind erased blanks ends with an empty
 row from then on.
 
-Blanks at the end of a line of which nothing shows are no text to mwt, written or
-erased, and are not laid out, but for those before the cursor: the cells before it are
-text whatever they hold. The cursor keeps its place behind a prompt's blank that way,
-and one moved far behind its text takes rows of blanks with it in a narrower window. A
-row that holds nothing, erased or with only the blanks its line ended with, stays an
-empty row.
+Blanks a program wrote at the end of a line are text like any character, also where
+nothing shows of them: a line padded with blanks takes the rows its length needs in a
+narrower window, as it does in a terminal of that width given the same output. `top` and
+`ps` write lines of 79 characters and a blank, which are two rows at 79 columns. Blanks
+an erase left are no text and are not laid out, but for those before the cursor: the
+cells before it are text whatever they hold, and a cursor moved far behind its text
+takes rows of blanks with it in a narrower window. A row that holds nothing but what an
+erase left stays an empty row. A copy leaves the blanks at the end of a line out,
+written or not.
 
 Blanks a row was erased with in a background color, up to its last column (`CSI K`
 after `CSI 44 m`), are no text either: they are put behind the line's text again, up to
@@ -62,10 +65,9 @@ the new last column. The row keeps that color until its end is erased again. A w
 window shows it right of the text again, also where the text filled the row in between
 or a program wrote over the blanks later, into the last column too: a terminal that
 wide would show it there. A line of several rows has the color of its last row, in the
-cell a wide character left over as well. Blanks a program wrote are text where anything
-shows of them, in a background color or with an attribute: a bar of them takes the rows
-its width needs, as a status line in reverse does. So are those of an erase that end
-before the last column.
+cell a wide character left over as well. Blanks of an erase in a color that end before
+the last column are text, as a bar of blanks a program wrote is: it takes the rows its
+width needs, as a status line in reverse does.
 
 Without autowrap (`CSI ? 7 l`) there is no place behind a full row: a cursor behind
 text that fills a row of the new width is on its last character, and stays on it in a
@@ -132,9 +134,9 @@ supported; their text is shown, the target is dropped. A URL without a scheme
 drawing or one of ``<>"`{}|\^``, without punctuation at its end or a closing bracket it
 did not open. Lines that wrap are joined, lines a program broke itself (vim, a table)
 are not, nor the screen with the history once it was cleared. A wide character that did
-not fit at the end of a line goes on with the URL, unless the cell left over is
-anything but a blank of what the row's end was erased in: one in another background or
-with an attribute, or a character written there earlier. That cell is text then, also
+not fit at the end of a line goes on with the URL, unless the cell left over is anything
+but a blank of what the row's end was erased in: one in another background or with an
+attribute, or anything written there earlier, a blank too. That cell is text then, also
 in a copy and in another width. A URL is looked for at most 4096 cells either way.
 
 Ctrl+click opens the URL in the text at the click, which output may have changed since
