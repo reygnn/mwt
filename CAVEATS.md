@@ -47,14 +47,22 @@ rows and are wrapped each on its own. In a window one column wide, wide characte
 gone, as they are when written there.
 
 Blanks at the end of a line are no text to mwt and are not laid out, but for those
-between the text and the cursor behind them, as after a prompt: the cursor keeps its
-place behind them. A row that holds nothing else, erased or with only the blanks its
-line ended with, stays an empty row. Blanks a row was erased with up to its last
-column, in a color or with an attribute (`CSI K` after `CSI 44 m`, a status line in
-reverse), are put behind the line's text again, up to the new last column. Where the
-text fills a row of the new width to its end, there is no cell to keep one in: they are
-gone then, in a wider window again too. Such blanks that end before the last column are
-text.
+before the cursor: the cells before it are text whatever they hold. The cursor keeps its
+place behind a prompt's blank that way, and one moved far behind its text takes rows of
+blanks with it in a narrower window. A row that holds nothing, erased or with only the
+blanks its line ended with, stays an empty row.
+
+Blanks a row was erased with in a background color, up to its last column (`CSI K`
+after `CSI 44 m`), are put behind the line's text again, up to the new last column.
+Where the text fills a row of the new width to its end, there is no cell to keep one in:
+they are gone then, in a wider window again too. Blanks written with an attribute or a
+foreground color are text, and a status line in reverse takes the rows its width needs.
+Written blanks of a background alone that end in the last column cannot be told from an
+erase and are taken for one; those of an erase that end before it are text.
+
+Without autowrap (`CSI ? 7 l`) there is no place behind a full row: a cursor behind
+text that fills a row of the new width is on its last character, and stays on it in a
+wider window.
 
 Text that reached the last row of the screen still does afterwards: narrower, the rows
 that no longer fit go into the history from the top, and wider, they come back. Text

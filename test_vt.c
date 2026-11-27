@@ -2055,13 +2055,97 @@ static void test_reflow_ends(void)
 	CHECK(vt->pri[1]->c[0].attr & ATTR_UNDERLINE);
 	CHECK(vt->pri[1]->c[1].bg == 1 && !(vt->pri[1]->c[1].attr & ATTR_UNDERLINE) && vt->pri[1]->used == 3);
 	vt_free(vt);
-	/* reverse blanks up to the last column are a row erased, as a status line */
+	/* blanks written with an attribute are text, up to the last column too: a
+	 * status line in reverse takes the rows its width needs */
 	vt = mk(10, 3, 10);
 	w(vt, "\033[7mfile.c    \033[m\r\nX");
 	CHECK(vt->pri[0]->used == 10);
 	CHECK(vt_resize(vt, 8, 3));
+	CHECK(vt->pri[0]->wrap == 8 && vt->pri[1]->used == 2 && (vt->pri[1]->c[1].attr & ATTR_REVERSE));
+	CHECK_STR(row(vt, 2), "X");
+	CHECK(vt_resize(vt, 10, 3));
+	CHECK(vt->pri[0]->used == 10 && vt->pri[0]->wrap == 0 && (vt->pri[0]->c[9].attr & ATTR_REVERSE));
 	CHECK_STR(row(vt, 1), "X");
-	CHECK(vt->pri[0]->used == 8 && (vt->pri[0]->c[7].attr & ATTR_REVERSE) && vt->pri[0]->wrap == 0);
+	vt_free(vt);
+	/* with a background as well, which an erase does not leave with one */
+	vt = mk(10, 3, 10);
+	w(vt, "ab\033[41;4m        \033[m\r\nX");
+	CHECK(vt_resize(vt, 9, 3));
+	CHECK(vt->pri[0]->wrap == 9 && vt->pri[1]->used == 1 && (vt->pri[1]->c[0].attr & ATTR_UNDERLINE));
+	vt_free(vt);
+	/* and so are those with a foreground, as a label's padding */
+	vt = mk(10, 3, 10);
+	w(vt, "\033[37;41m  error   \033[m\r\nX");
+	CHECK(vt_resize(vt, 9, 3));
+	CHECK(vt->pri[0]->wrap == 9 && vt->pri[1]->used == 1 && vt->pri[1]->c[0].bg == 1);
+	vt_free(vt);
+
+	/* A wrap that is pending stays so in a window of another height: the next
+	 * character goes to the next row and does not write over the last. The
+	 * saved cursor's too, and on the alternate screen. */
+	vt = mk(4, 3, 10);
+	w(vt, "abcd");
+	CHECK(vt_resize(vt, 4, 5));
+	CHECK(vt->c.x == 3 && vt->c.wrapnext);
+	w(vt, "X");
+	CHECK_STR(row(vt, 0), "abcd");
+	CHECK_STR(row(vt, 1), "X");
+	CHECK(vt_abs_wraps(vt, 0) == 4);
+	vt_free(vt);
+	vt = mk(4, 5, 10);
+	w(vt, "abcd\0337\r\nx");
+	CHECK(vt_resize(vt, 4, 3));
+	w(vt, "\0338");
+	CHECK(vt->c.x == 3 && vt->c.y == 0 && vt->c.wrapnext);
+	w(vt, "\033[?47h\033[Hwxyz");
+	CHECK(vt_resize(vt, 4, 2));
+	w(vt, "Q");
+	CHECK_STR(row(vt, 0), "wxyz");
+	CHECK_STR(row(vt, 1), "Q");
+	vt_free(vt);
+
+	vt = mk(4, 3, 10);
+	w(vt, "\033[?47h\033[Habcd\0337\r\nx");
+	CHECK(vt_resize(vt, 4, 4));
+	w(vt, "\0338");
+	CHECK(vt->c.x == 3 && vt->c.y == 0 && vt->c.wrapnext);
+	vt_free(vt);
+
+	/* The saved cursor behind text that fills the new row waits there too,
+	 * however far behind it was, and is not on the last character. */
+	vt = mk(10, 3, 10);
+	w(vt, "abc\033[2C\0337\r\nxy");
+	CHECK(vt_resize(vt, 3, 3));
+	w(vt, "\0338");
+	CHECK(vt->c.x == 2 && vt->c.wrapnext);
+	w(vt, "Z");
+	CHECK_STR(row(vt, 0), "abc");
+	vt_free(vt);
+
+	/* The cells before the cursor are text in a row that holds nothing as
+	 * well: clamped into a narrower row, the cursor was not back in its column
+	 * in a wider one, and by way of a narrow window it ended elsewhere than
+	 * without. */
+	vt = mk(20, 3, 10);
+	w(vt, "\033[1;18H");
+	CHECK(vt_resize(vt, 12, 3));
+	CHECK(vt->c.x == 5 && vt->c.y == 1 && vt->pri[0]->wrap == 12);
+	CHECK(vt_resize(vt, 3, 3));
+	CHECK(vt_resize(vt, 30, 3));
+	CHECK(vt->c.x == 17 && vt->c.y == 0 && vt->hist_count == 0);
+	vt_free(vt);
+
+	/* A wrap pending on a row that goes on, where the cursor came back to
+	 * after the wrap: the next character goes to the first cell of the next
+	 * row, and there the cursor is in another width. */
+	vt = mk(2, 3, 10);
+	w(vt, "ab\0337c\0338");
+	CHECK(vt->c.x == 1 && vt->c.y == 0 && vt->c.wrapnext && vt->pri[0]->wrap == 2);
+	CHECK(vt_resize(vt, 3, 3));
+	CHECK_STR(row(vt, 0), "abc");
+	CHECK(vt->c.x == 2 && vt->c.y == 0 && !vt->c.wrapnext);
+	w(vt, "X");
+	CHECK_STR(row(vt, 0), "abX");
 	vt_free(vt);
 
 	/* An empty row a line went on into, erased since, stays a row: the line
@@ -2553,6 +2637,20 @@ static void test_wrap_row(void)
 	vt = mk(10, 2, 5);
 	w(vt, "\033[41m\033[K\033[mabcdefghi\xe6\xbc\xa2");
 	CHECK(vt->pri[0]->wrap == 10 && vt_abs_wraps(vt, 0) == 10);
+	vt_free(vt);
+	/* The last cell before the wrap is the ninth then, and writing it ends the
+	 * line as writing the last cell of a full row does (unwrap); before, with
+	 * the cell left over counted, it took writing that one. Writing further
+	 * left leaves the line going on. */
+	vt = mk(3, 3, 5);
+	w(vt, "ab\xe4\xb8\xad\033[1;2Hx");
+	CHECK_STR(row(vt, 0), "ax");
+	CHECK(vt->pri[0]->wrap == 0 && vt_abs_wraps(vt, 0) == 0);
+	vt_free(vt);
+	vt = mk(3, 3, 5);
+	w(vt, "ab\xe4\xb8\xad\033[1;1Hx");
+	CHECK_STR(row(vt, 0), "xb");
+	CHECK(vt->pri[0]->wrap == 2 && vt_abs_wraps(vt, 0) == 2);
 	vt_free(vt);
 
 	static const struct { const char *seq; int wraps; } cases[] = {

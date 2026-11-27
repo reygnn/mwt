@@ -694,12 +694,17 @@ struct reflow {
  * selection would join it to the next (vt_abs_wraps), and the last one never.
  *
  * Blanks at the end of a line are no text: default ones are nothing, and of
- * those with a background or an attribute that reach the last column, what a
- * program erased the row with, *fill is one. They are not laid out but put
- * behind the line's text again, up to the new last column: counted as text, a
- * row erased in a colour took two rows one column narrower. The first keep
- * cells are text whatever they hold: the blanks between a prompt and the
- * cursor behind them, without which the cursor had no place to be. */
+ * those an erase in a background colour leaves (blank()), where they reach the
+ * last column, *fill is one. They are not laid out but put behind the line's
+ * text again, up to the new last column: counted as text, a row erased in a
+ * colour took two rows one column narrower. Blanks with an attribute or a
+ * foreground were written and are text; so are those of an erase that end
+ * before the last column. Written ones of a background alone that happen to
+ * end in the last column cannot be told from an erase, and count as one. The
+ * first keep cells are text whatever they hold: the blanks between a prompt
+ * and the cursor behind them, without which the cursor had no place to be, and
+ * those before a cursor in a row that holds nothing: clamped into a narrower
+ * row, it was not back in its column in a wider one. */
 static const struct cell *old_row(const struct vt *vt, int g, int keep, int *n, bool *more,
 				  const struct cell **fill)
 {
@@ -724,9 +729,9 @@ static const struct cell *old_row(const struct vt *vt, int g, int keep, int *n, 
 		return l;
 	}
 	const struct cell *f = len == vt->cols ? &l[len - 1] : NULL;
-	if (f && f->cp == ' ' && (f->bg != COL_DEFAULT_BG || f->attr)) {
-		while (len > 0 && l[len - 1].cp == ' ' && l[len - 1].fg == f->fg &&
-		       l[len - 1].bg == f->bg && l[len - 1].attr == f->attr)
+	if (f && f->cp == ' ' && f->fg == COL_DEFAULT_FG && f->bg != COL_DEFAULT_BG && !f->attr) {
+		while (len > 0 && l[len - 1].cp == ' ' && l[len - 1].fg == COL_DEFAULT_FG &&
+		       l[len - 1].bg == f->bg && !l[len - 1].attr)
 			len--;
 		*fill = f;
 	} else {
@@ -767,7 +772,9 @@ static void reflow_row_done(struct reflow *rf, int wrap)
 
 /* The marks of row g in its cells from lo up to hi are in the row being filled:
  * at col and counted on from there, or with step 0 all at col, for a glyph that
- * is gone. */
+ * is gone. Behind a row that is full, col its width, they wait in its last
+ * column for the wrap, as after the character that filled it; further behind
+ * text that leaves room, they are in the last column at most. */
 static void reflow_mark(struct reflow *rf, int g, int lo, int hi, int col, int step)
 {
 	for (int k = 0; k < rf->nm; k++) {
@@ -775,11 +782,8 @@ static void reflow_mark(struct reflow *rf, int g, int lo, int hi, int col, int s
 		if (m->g != g || m->x < lo || m->x >= hi)
 			continue;
 		m->row = rf->row;
-		m->col = col + step * (m->x - lo);
-		/* behind the last column it waits there: right behind the text, as
-		 * after the character that filled the row */
-		m->pend = m->col == rf->cols && (m->x == lo || !step);
-		m->col = MIN(m->col, rf->cols - 1);
+		m->col = MIN(col + step * (m->x - lo), rf->cols - 1);
+		m->pend = col == rf->cols;
 	}
 }
 
@@ -802,11 +806,19 @@ static void reflow_walk(struct reflow *rf)
 		const struct cell *l = old_row(vt, g, rf->m[0].g == g ? MIN(rf->m[0].x, vt->cols) : 0,
 					       &n, &more, &fill);
 		for (int k = 0; k < rf->nm; k++) {
-			marked |= rf->m[k].g == g;
-			/* in a row that goes on, what is behind its text, the cell a
-			 * wide glyph did not fit in, is its last cell's */
-			if (rf->m[k].g == g && more && rf->m[k].x >= n)
-				rf->m[k].x = n - 1;
+			struct mark *m = &rf->m[k];
+			/* In a row that goes on, a wrap pending behind its last column
+			 * is the first cell of the next row, where the next character
+			 * goes: the cursor came back to it after the wrap (DECRC). What
+			 * else is behind its text, the cell a wide glyph did not fit
+			 * in, is its last cell's. */
+			if (m->g == g && more && m->x >= vt->cols) {
+				m->g = g + 1;
+				m->x = 0;
+			} else if (m->g == g && more && m->x >= n) {
+				m->x = n - 1;
+			}
+			marked |= m->g == g;
 		}
 		/* A row with no text that the line went on into, erased since or
 		 * holding the blanks it ended with, stays a row: the text goes on
@@ -1057,12 +1069,20 @@ bool vt_resize(struct vt *vt, int cols, int rows)
 	reset_tabs(vt);
 	vt->top = 0;
 	vt->bot = rows - 1;
+	/* A wrap that is pending stays so in a window of the same width: the cursor
+	 * is in the last column still. Dropped, the next character wrote over the
+	 * one before it. */
+	bool wn[3] = { vt->c.wrapnext, vt->saved_pri.wrapnext, vt->saved_alt.wrapnext };
 	clamp_cursor(&vt->c, cols, rows);
 	clamp_cursor(&vt->saved_pri, cols, rows);
 	clamp_cursor(&vt->saved_alt, cols, rows);
-	/* a cursor right behind a row its text now fills waits there to wrap, as
-	 * after the character that filled it */
-	if (vt->mode & MODE_AUTOWRAP) {
+	if (!anew) {
+		vt->c.wrapnext = wn[0];
+		vt->saved_pri.wrapnext = wn[1];
+		vt->saved_alt.wrapnext = wn[2];
+	} else if (vt->mode & MODE_AUTOWRAP) {
+		/* a cursor right behind a row its text now fills waits there to
+		 * wrap, as after the character that filled it */
 		vt->c.wrapnext = pend[0];
 		vt->saved_pri.wrapnext = pend[1];
 	}
