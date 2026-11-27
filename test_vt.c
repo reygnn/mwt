@@ -623,14 +623,12 @@ static bool fuzz_same(const struct vt *a, const struct vt *b,
  *
  * What it can leave out, each until the step of REFLOW.md 8.4 that makes it
  * hold:
- *   SAME_BUT_SAVED  the saved cursor. One never set is carried along with the
- *                   content like one the program saved (D20, step 6).
  *   SAME_BUT_INNER  the tail of a row that goes on, and with it the cell a
  *                   wide glyph did not fit in. Another width lays the line
  *                   out anew and has only the line's tail, its last row's
  *                   (L2, L5, D8); a round trip has the others back with the
  *                   origin (O3, step 9). */
-enum { SAME_BUT_SAVED = 1, SAME_BUT_INNER = 2 };
+enum { SAME_BUT_INNER = 2 };
 
 static const char *same_cells(const struct cell *a, const struct cell *b, int n)
 {
@@ -670,9 +668,8 @@ static const char *same_state(const struct vt *a, const struct vt *b, int but)
 			 !alt && b->c.wrapnext ? "+" : "");
 		return why;
 	}
-	if (!(but & SAME_BUT_SAVED) &&
-	    (a->saved_pri.x != b->saved_pri.x || a->saved_pri.y != b->saved_pri.y ||
-	     a->saved_pri.wrapnext != b->saved_pri.wrapnext)) {
+	if (a->saved_pri.x != b->saved_pri.x || a->saved_pri.y != b->saved_pri.y ||
+	    a->saved_pri.wrapnext != b->saved_pri.wrapnext || a->pri_saved != b->pri_saved) {
 		snprintf(why, sizeof why, "the saved cursor: %d,%d%s and %d,%d%s", a->saved_pri.x,
 			 a->saved_pri.y, a->saved_pri.wrapnext ? "+" : "", b->saved_pri.x,
 			 b->saved_pri.y, b->saved_pri.wrapnext ? "+" : "");
@@ -1423,10 +1420,10 @@ static void test_resize(void)
 	vt = mk(10, 6, 10);
 	w(vt, "1\r\n2\r\n3\r\n4\r\n5\r\n6\0337\033[4;1H\033[?47h\033[H");
 	vt_resize(vt, 10, 3);
-	CHECK(vt->hist_count == 1 && vt->saved_pri.y == 2);
+	CHECK(vt->hist_count == 3 && vt->saved_pri.y == 2);
 	w(vt, "\033[?47l");
-	CHECK_STR(row(vt, 0), "2");
-	CHECK_STR(row(vt, 2), "4");
+	CHECK_STR(row(vt, 0), "4");
+	CHECK_STR(row(vt, 2), "6");
 	vt_free(vt);
 
 	/* and one saved above it moves up with its line, into the top row when
@@ -1972,7 +1969,7 @@ static void test_reflow(void)
 			bad++;
 		} else {
 			size_t na = reflow_text(a, ta, TEXT_MAX), nb = reflow_text(b, tb, TEXT_MAX);
-			bad += same_state(a, b, SAME_BUT_SAVED | SAME_BUT_INNER) || na != nb ||
+			bad += same_state(a, b, SAME_BUT_INNER) || na != nb ||
 			       memcmp(ta, tb, na * sizeof *ta);
 			for (int r = 0; r < rows; r++)
 				filled += !(a->pri[r]->c[cols - 1].attr & ATTR_TEXT) &&
@@ -2128,8 +2125,8 @@ static void test_reflow(void)
  * two cells, attributes and foreground colours, CR LF. Every row of the screen
  * and the history, where each goes on, the cursor and its pending wrap.
  *
- * Left out until the rule is there: the saved cursor (D20), and lines that end
- * in a blank, which are shorter by it after the resize (D1). */
+ * Left out until the rule is there: lines that end in a blank, which are
+ * shorter by it after the resize (D1). */
 static void test_plain_output(void)
 {
 	int bad = 0, shown = 0, wide = 0, hist = 0, wrapped = 0, pending = 0;
@@ -2164,7 +2161,7 @@ static void test_plain_output(void)
 		struct vt *a = mk(w0, r0, 4096), *b = mk(w1, r1, 4096);
 		vt_write(a, s, n);
 		vt_write(b, s, n);
-		const char *why = vt_resize(a, w1, r1) ? same_state(a, b, SAME_BUT_SAVED) : "no memory";
+		const char *why = vt_resize(a, w1, r1) ? same_state(a, b, 0) : "no memory";
 		if (why) {
 			bad++;
 			if (shown++ < 5)
@@ -3762,6 +3759,185 @@ static void test_rows_move(void)
 }
 
 
+/* a row of the main screen, shown or not */
+static const char *pri_row(struct vt *vt, int r)
+{
+	struct row **shown = vt->line;
+	vt->line = vt->pri;
+	const char *s = row(vt, r);
+	vt->line = shown;
+	return s;
+}
+
+/* Another height alone shows the rows another width would (REFLOW.md 4.6,
+ * D12; G8 before): the end of the text stays on the screen in a shorter
+ * window, rows go into the history from the top as far as the cursor's row
+ * stays, and what is below the screen then is lost. Each case is rows "r1"
+ * to "r5" of six, the cursor's row, the new height: the first row shown, how
+ * many went into the history, and the cursor's row then. */
+static void test_height(void)
+{
+	struct vt *vt;
+	static const struct { int cy, rows; const char *first; int hist, y; } h[] = {
+		{ 1, 3, "r2", 1, 0 },    /* the end does not fit: the cursor's row is the first */
+		{ 4, 3, "r3", 2, 2 },    /* the cursor in the last row of text: as it was */
+		{ 2, 3, "r3", 2, 0 },
+		{ 3, 3, "r3", 2, 1 },    /* the end fits before the cursor is the first */
+		{ 0, 3, "r1", 0, 0 },    /* nothing above the cursor to give */
+		{ 0, 5, "r1", 0, 0 },    /* the end fits */
+		{ 1, 4, "r2", 1, 0 },
+		{ 2, 4, "r2", 1, 1 },
+		{ 5, 3, "r4", 3, 2 },    /* the cursor below the text is the end */
+		{ 5, 1, "", 5, 0 },
+		{ 1, 1, "r2", 1, 0 },
+		{ 1, 9, "r1", 0, 1 },    /* taller: nothing to take back */
+	};
+	for (size_t i = 0; i < sizeof h / sizeof *h; i++) {
+		for (int alt = 0; alt < 2; alt++) {
+			char s[32];
+			vt = mk(10, 6, 10);
+			w(vt, "r1\r\nr2\r\nr3\r\nr4\r\nr5");
+			snprintf(s, sizeof s, "\033[%d;1H%s", h[i].cy + 1, alt ? "\033[?47h" : "");
+			w(vt, s);
+			bool ok = vt_resize(vt, 10, h[i].rows) && !fuzz_broken(vt);
+			int y = alt ? vt->pri_y : vt->c.y;
+			checks++;
+			if (!ok || strcmp(pri_row(vt, 0), h[i].first) || vt->hist_count != h[i].hist || y != h[i].y) {
+				failures++;
+				fprintf(stderr, "%s:%d: FAIL: height, case %zu%s: first row \"%s\", %d in the history, "
+					"cursor row %d\n", __FILE__, __LINE__, i, alt ? " (behind the alternate screen)" : "",
+					pri_row(vt, 0), vt->hist_count, y);
+			}
+			vt_free(vt);
+		}
+	}
+	/* shorter and taller again: one row is lost where two were */
+	vt = mk(10, 6, 10);
+	w(vt, "r1\r\nr2\r\nr3\r\nr4\r\nr5\033[2;1H");
+	CHECK(vt_resize(vt, 10, 3));
+	CHECK_STR(row(vt, 0), "r2");
+	CHECK_STR(row(vt, 2), "r4");
+	CHECK_STR(hist_line(vt, 1), "r1");
+	CHECK(vt_resize(vt, 10, 6));
+	CHECK_STR(row(vt, 0), "r1");
+	CHECK_STR(row(vt, 3), "r4");
+	CHECK_STR(row(vt, 4), "");
+	CHECK(vt->c.y == 1 && vt->hist_count == 0);
+	vt_free(vt);
+	/* a row erased in a colour is an end as text is, and so is a row a
+	 * line goes on from */
+	vt = mk(10, 6, 10);
+	w(vt, "r1\r\nr2\033[5;1H\033[41m\033[K\033[m\033[3;1H");
+	CHECK(vt_resize(vt, 10, 3) && vt->hist_count == 2 && vt->c.y == 0);
+	CHECK(vt->pri[2]->tail == 1);
+	vt_free(vt);
+	vt = mk(10, 6, 10);
+	w(vt, "r1\r\nr2\033[4;1Habcdefghijk\r\033[K\033[2;1H");
+	CHECK(vt->pri[3]->wrap == 10);
+	CHECK(vt_resize(vt, 10, 3) && vt->hist_count == 1 && vt->c.y == 0);
+	CHECK_STR(row(vt, 2), "abcdefghij");
+	/* and the row it went on into is below the screen: the line ends */
+	CHECK(vt->pri[2]->wrap == 0);
+	vt_free(vt);
+	/* the same rows as with another width at once, which went this way before */
+	for (int cy = 0; cy < 6; cy++) {
+		for (int rows = 1; rows < 9; rows++) {
+			char s[16];
+			struct vt *a = mk(10, 6, 10), *b = mk(10, 6, 10);
+			snprintf(s, sizeof s, "\033[%d;1H", cy + 1);
+			w(a, "r1\r\nr2\r\nr3\r\nr4\r\nr5");
+			w(b, "r1\r\nr2\r\nr3\r\nr4\r\nr5");
+			w(a, s);
+			w(b, s);
+			CHECK(vt_resize(a, 10, rows) && vt_resize(b, 11, rows));
+			bool same = a->hist_count == b->hist_count && a->c.y == b->c.y;
+			for (int r = 0; same && r < rows; r++) {
+				char ra[16]; /* row() has one buffer */
+				snprintf(ra, sizeof ra, "%s", row(a, r));
+				same = !strcmp(ra, row(b, r));
+			}
+			CHECK(same);
+			vt_free(a);
+			vt_free(b);
+		}
+	}
+}
+
+/* A saved cursor that was never set is none (REFLOW.md S6, C5, D20; G15
+ * before): DECRC goes home at any size, and no resize carries the home
+ * position along with the text as if a program had saved it there. */
+static void test_saved_none(void)
+{
+	struct vt *vt;
+	static const char *const lines = "1\r\n2\r\n3\r\n4\r\n5\r\n6";
+
+	/* another width: the text of the first row moves, the place does not */
+	static const struct { const char *seq; bool saved; } set[] = {
+		{ "", false },
+		{ "\0337", true },                       /* DECSC */
+		{ "\033[s", true },                      /* SCOSC */
+		{ "\033[?1048h", true },
+		{ "\033[?1049h\033[?1049l", true },
+		{ "\033[?47h\033[?47l", false },         /* saves none */
+		{ "\0337\033c", false },                 /* RIS */
+		{ "\0337\033[!p", false },               /* DECSTR */
+		{ "\0337\033[?47h\033[!p\033[?47l", true }, /* DECSTR on the other screen: its own */
+		{ "\033[?47h\0337\033[?47l", false },    /* DECSC there: that screen's */
+	};
+	for (size_t i = 0; i < sizeof set / sizeof *set; i++) {
+		for (int height = 0; height < 2; height++) {
+			vt = mk(10, 3, 10);
+			w(vt, "top\r\n");
+			w(vt, set[i].seq);                   /* in the second row, if it saves */
+			w(vt, lines);                        /* scrolls: four rows in the history */
+			bool ok = vt->pri_saved == set[i].saved && vt->saved_pri.y == set[i].saved;
+			ok = ok && (height ? vt_resize(vt, 10, 8) : vt_resize(vt, 20, 3));
+			/* A place that was saved goes with the text in its row: four
+			 * rows down with the history back in a taller window. None
+			 * is the first row at any size. */
+			int y = !set[i].saved ? 0 : height ? 5 : 1;
+			checks++;
+			if (!ok || vt->pri_saved != set[i].saved || vt->saved_pri.x != 0 || vt->saved_pri.y != y) {
+				failures++;
+				fprintf(stderr, "%s:%d: FAIL: saved cursor, case %zu%s: %s, at %d,%d\n", __FILE__,
+					__LINE__, i, height ? " (height)" : "", vt->pri_saved ? "saved" : "none",
+					vt->saved_pri.x, vt->saved_pri.y);
+			}
+			w(vt, "\0338");
+			checks++;
+			if (vt->c.y != vt->saved_pri.y || vt->c.x != 0) {
+				failures++;
+				fprintf(stderr, "%s:%d: FAIL: DECRC, case %zu\n", __FILE__, __LINE__, i);
+			}
+			vt_free(vt);
+		}
+	}
+	/* as a terminal of that size given the same bytes has it */
+	for (int cols = 4; cols < 30; cols += 5) {
+		struct vt *a = mk(10, 3, 10), *b = mk(cols, 5, 10);
+		w(a, lines);
+		w(b, lines);
+		CHECK(vt_resize(a, cols, 5));
+		w(a, "\0338x");
+		w(b, "\0338x");
+		CHECK(a->c.x == b->c.x && a->c.y == b->c.y && a->c.y == 0);
+		char ra[32]; /* row() has one buffer */
+		snprintf(ra, sizeof ra, "%s", row(a, 0));
+		CHECK_STR(ra, row(b, 0));
+		vt_free(a);
+		vt_free(b);
+	}
+	/* DECSTR leaves a pending wrap in what it resets, as xterm: a resize
+	 * leaves that as it is, with another width too */
+	vt = mk(10, 3, 10);
+	w(vt, "abcdefghij\033[!p");
+	CHECK(vt->saved_pri.wrapnext && !vt->pri_saved);
+	CHECK(vt_resize(vt, 20, 3) && vt->saved_pri.wrapnext && vt->saved_pri.x == 0);
+	CHECK(vt_resize(vt, 20, 5) && vt->saved_pri.wrapnext);
+	vt_free(vt);
+}
+
+
 /* A resize in the alternate screen keeps each screen's cursor line, and the
  * primary's lines above go to the history; a view scrolled back comes down. */
 static void test_resize_alt_and_view(void)
@@ -4052,6 +4228,8 @@ int main(void)
 	test_wrap_row();
 	test_joins();
 	test_rows_move();
+	test_height();
+	test_saved_none();
 	test_resize_alt_and_view();
 	test_sgr_details();
 	test_cnl_cpl_1048_decom();

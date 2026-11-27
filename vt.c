@@ -576,10 +576,12 @@ static void advance(struct vt *vt, int x, bool wrap)
 
 static void save_cursor(struct vt *vt)
 {
-	if (vt->mode & MODE_ALTSCREEN)
+	if (vt->mode & MODE_ALTSCREEN) {
 		vt->saved_alt = vt->c;
-	else
+	} else {
 		vt->saved_pri = vt->c;
+		vt->pri_saved = true;
+	}
 }
 
 static void restore_cursor(struct vt *vt)
@@ -662,6 +664,8 @@ static void soft_reset(struct vt *vt)
 	struct vt_cursor *saved = vt->mode & MODE_ALTSCREEN ? &vt->saved_alt : &vt->saved_pri;
 	*saved = vt->c;
 	saved->x = saved->y = 0; /* and keeps a pending wrap, as xterm */
+	if (saved == &vt->saved_pri)
+		vt->pri_saved = false;
 }
 
 void vt_reset(struct vt *vt)
@@ -672,6 +676,7 @@ void vt_reset(struct vt *vt)
 	vt->cursor_style = CURSOR_BLOCK;
 	default_cursor(&vt->c);
 	vt->saved_pri = vt->saved_alt = vt->c;
+	vt->pri_saved = false;
 	vt->top = 0;
 	vt->bot = vt->rows - 1;
 	vt->state = ST_GROUND;
@@ -1020,6 +1025,18 @@ static void reflow_free(const struct vt *vt, struct reflow *rf)
 	rf->buf = NULL;
 }
 
+/* The last row of the main screen that has content, or a tail in a colour;
+ * the cursor's row cy if none comes after it (REFLOW.md 4.6, e0) */
+static int screen_end(const struct vt *vt, int cy)
+{
+	int e = vt->rows - 1;
+	while (e > cy && !vt->pri[e]->wrap &&
+	       !content_len(vt->pri[e]->c, vt->pri[e]->used, vt->pri[e]->tail) &&
+	       vt->pri[e]->tail == COL_DEFAULT_BG)
+		e--;
+	return e;
+}
+
 /* The main screen and the history for cols by rows, in *rf, with vt left as it
  * is; false when out of memory, and then nothing is allocated. m[0] is the
  * cursor, or the place it left behind for the alternate screen, m[1] the saved
@@ -1037,10 +1054,7 @@ static void reflow_free(const struct vt *vt, struct reflow *rf)
  * a shorter window. */
 static bool reflow(const struct vt *vt, int cols, int rows, struct reflow *rf, struct mark *m)
 {
-	int cy = m[0].g - vt->hist_count, e = vt->rows - 1;
-	while (e > cy && !vt->pri[e]->wrap && vt->pri[e]->tail == COL_DEFAULT_BG &&
-	       !text_len(vt->pri[e]->c, vt->pri[e]->used, 0))
-		e--;
+	int e = screen_end(vt, m[0].g - vt->hist_count);
 	*rf = (struct reflow){ .vt = vt, .cols = cols, .rows = rows, .m = m, .nm = 4 };
 	m[2] = (struct mark){ .g = vt->hist_count };
 	m[3] = (struct mark){ .g = vt->hist_count + e, .x = vt->cols };
@@ -1117,12 +1131,17 @@ bool vt_resize(struct vt *vt, int cols, int rows)
 		m[1] = (struct mark){ .g = vt->hist_count + s->y, .x = s->x + s->wrapnext };
 		npri = reflow(vt, cols, rows, &rf, m) ? rf.scr : NULL;
 	} else {
-		/* keep the cursor line visible: lines above it go into history */
-		pshift = MAX(0, *py - (rows - 1));
+		/* Another height alone: the rows stay as they are, and which of
+		 * them the screen shows is decided as with another width
+		 * (REFLOW.md 4.6, V1 to V5). In a shorter window the end of the
+		 * text stays on the screen and rows go into the history from the
+		 * top, as far as the cursor's row stays too; what is below the
+		 * screen then is lost. */
+		pshift = MIN(MAX(0, screen_end(vt, *py) - (rows - 1)), *py);
 		/* And a taller main screen takes the newest ones back above its
 		 * text, as xterm does: what a shorter window pushed off returns with
 		 * the window. They fit: the history is as wide as the screen. Never
-		 * both: a cursor row that fit before fits a taller screen. */
+		 * both: an end that fit before fits a taller screen. */
 		pull = CLAMP(rows - vt->rows, 0, vt->hist_count);
 		npri = copy_screen(vt, vt->pri, pshift - pull, cols, rows);
 	}
@@ -1168,11 +1187,15 @@ bool vt_resize(struct vt *vt, int cols, int rows)
 			vt->c.x = m[0].col;
 			pend[0] = m[0].pend;
 		}
-		/* a saved cursor whose text is no longer on the screen: the nearest row */
+		/* A saved cursor whose text is no longer on the screen: the nearest
+		 * row. None was saved since a reset: DECRC goes home, in a window
+		 * of this size as in one that had it all along (C5). */
 		int64_t sy = m[1].row - rf.top;
-		vt->saved_pri.x = m[1].col;
-		vt->saved_pri.y = (int)CLAMP(sy, 0, rows - 1);
-		pend[1] = m[1].pend && sy == vt->saved_pri.y;
+		if (vt->pri_saved) {
+			vt->saved_pri.x = m[1].col;
+			vt->saved_pri.y = (int)CLAMP(sy, 0, rows - 1);
+			pend[1] = m[1].pend && sy == vt->saved_pri.y;
+		}
 	} else {
 		for (int i = 0; i < pshift; i++)
 			push_hist(vt, vt->pri[i]);
@@ -1195,7 +1218,8 @@ bool vt_resize(struct vt *vt, int cols, int rows)
 		}
 		*py += pull - pshift;
 		/* a saved cursor moves with its screen, to the top row at most */
-		vt->saved_pri.y += pull - MIN(pshift, vt->saved_pri.y);
+		if (vt->pri_saved)
+			vt->saved_pri.y += pull - MIN(pshift, vt->saved_pri.y);
 	}
 	free_screen(vt->pri, vt->rows);
 	free_screen(vt->alt, vt->rows);
@@ -1233,6 +1257,8 @@ bool vt_resize(struct vt *vt, int cols, int rows)
 		vt->c.wrapnext = pend[0];
 		vt->saved_pri.wrapnext = pend[1];
 	}
+	if (!vt->pri_saved)
+		vt->saved_pri.wrapnext = wn[1]; /* as the reset left it */
 	vt->view = 0;
 	vt_mark_all(vt);
 	return true;

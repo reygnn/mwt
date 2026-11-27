@@ -113,6 +113,10 @@ struct vt {
 	bool *tabs;
 
 	struct vt_cursor c, saved_pri, saved_alt;
+	bool pri_saved;           /* saved_pri is a place the program saved (DECSC,
+	                           * SCOSC, 1048, 1049) and goes with the text in
+	                           * a resize. Not since a reset: it is the home
+	                           * position then, at any size (REFLOW.md S6). */
 	int pri_x, pri_y;         /* behind the alternate screen: where the main
 	                           * screen's cursor was when that one took over,
 	                           * pri_x one further with a wrap pending */

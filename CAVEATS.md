@@ -89,11 +89,16 @@ Narrower, the same text takes more rows. Where the history is full, its oldest l
 fall off its far end for them, and a wider window does not bring them back: narrower
 and wider again can leave less history than before.
 
-A shorter window puts the lines above the cursor's that no longer fit into the
-history, and cuts off what is below; a taller one takes the newest lines of the history
+A shorter window keeps the end of the text on the screen, as a narrower one does: rows
+go into the history from the top, as far as the cursor's row stays, and only what is
+below the screen then is cut off. A taller one takes the newest lines of the history
 back onto the screen, as xterm does, also above a screen that was erased while its
 history stayed. Behind the alternate screen the main one gives and takes lines the same
 way; xterm leaves it as it is there, and a shorter window loses its last lines.
+
+A cursor a program saved (DECSC, `CSI s`, `?1048`, `?1049`) goes with the text of its
+row in a resize, to the nearest row where that is no longer on the screen. Without one,
+DECRC goes to the first row and column, as in any window of that size.
 
 The alternate screen is not laid out anew: its program draws it again. A narrower
 window cuts it off, and behind it the main screen is laid out all the same. A resize
