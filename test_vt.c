@@ -566,6 +566,101 @@ static bool fuzz_same(const struct vt *a, const struct vt *b,
 	       sa->titles == sb->titles && !strcmp(sa->title, sb->title);
 }
 
+/* What "the same state" compares after a resize (REFLOW.md, section 5): every
+ * row of the main screen with its cells, where its line goes on and what was
+ * erased behind it; every row of the history as the row interface gives it;
+ * the cursor, the saved cursor and the place behind the alternate screen; the
+ * rows in the history and the number of the first one. Not the alternate
+ * screen and its cursors, the tab stops, the scroll region and the view,
+ * which a resize resets, nor what is to be redrawn. NULL, or what differs.
+ *
+ * What it can leave out, each until the step of REFLOW.md 8.4 that makes it
+ * hold:
+ *   SAME_BUT_SAVED  the saved cursor. One never set is carried along with the
+ *                   content like one the program saved (D20, step 6).
+ *   SAME_BUT_MARKS  ATTR_TEXT of a blank. A reflow marks the erased blanks it
+ *                   lays out as text (G3, step 2). */
+enum { SAME_BUT_SAVED = 1, SAME_BUT_MARKS = 2 };
+
+static const char *same_cells(const struct cell *a, const struct cell *b, int n, int but)
+{
+	static char why[48];
+	uint16_t mask = but & SAME_BUT_MARKS ? ATTR_TEXT : 0;
+	for (int x = 0; x < n; x++) {
+		uint16_t m = a[x].cp == ' ' && b[x].cp == ' ' ? mask : 0;
+		if (a[x].cp != b[x].cp || a[x].fg != b[x].fg || a[x].bg != b[x].bg ||
+		    (a[x].attr | m) != (b[x].attr | m)) {
+			snprintf(why, sizeof why, "column %d", x);
+			return why;
+		}
+	}
+	return NULL;
+}
+
+static const char *same_state(const struct vt *a, const struct vt *b, int but)
+{
+	static char why[96];
+	const char *w;
+	if (a->cols != b->cols || a->rows != b->rows)
+		return "the size";
+	if (a->hist_count != b->hist_count || vt_abs_first(a) != vt_abs_first(b) ||
+	    a->scrolled != b->scrolled) {
+		snprintf(why, sizeof why, "the history: %d rows from %lld, %d rows from %lld",
+			 a->hist_count, (long long)vt_abs_first(a), b->hist_count,
+			 (long long)vt_abs_first(b));
+		return why;
+	}
+	/* behind the alternate screen the cursor is that screen's, and the main
+	 * one has the place it left */
+	bool alt = a->mode & MODE_ALTSCREEN;
+	if (alt != !!(b->mode & MODE_ALTSCREEN))
+		return "the screen that is shown";
+	if (alt ? a->pri_x != b->pri_x || a->pri_y != b->pri_y :
+		  a->c.x != b->c.x || a->c.y != b->c.y || a->c.wrapnext != b->c.wrapnext) {
+		snprintf(why, sizeof why, "the cursor: %d,%d%s and %d,%d%s", alt ? a->pri_x : a->c.x,
+			 alt ? a->pri_y : a->c.y, !alt && a->c.wrapnext ? "+" : "",
+			 alt ? b->pri_x : b->c.x, alt ? b->pri_y : b->c.y,
+			 !alt && b->c.wrapnext ? "+" : "");
+		return why;
+	}
+	if (!(but & SAME_BUT_SAVED) &&
+	    (a->saved_pri.x != b->saved_pri.x || a->saved_pri.y != b->saved_pri.y ||
+	     a->saved_pri.wrapnext != b->saved_pri.wrapnext)) {
+		snprintf(why, sizeof why, "the saved cursor: %d,%d%s and %d,%d%s", a->saved_pri.x,
+			 a->saved_pri.y, a->saved_pri.wrapnext ? "+" : "", b->saved_pri.x,
+			 b->saved_pri.y, b->saved_pri.wrapnext ? "+" : "");
+		return why;
+	}
+	for (int r = 0; r < a->rows; r++) {
+		const struct row *ra = a->pri[r], *rb = b->pri[r];
+		if (ra->wrap != rb->wrap || ra->fill != rb->fill) {
+			snprintf(why, sizeof why, "row %d: wrap %d fill %u and wrap %d fill %u", r,
+				 ra->wrap, (unsigned)ra->fill, rb->wrap, (unsigned)rb->fill);
+			return why;
+		}
+		if ((w = same_cells(ra->c, rb->c, a->cols, but))) {
+			snprintf(why, sizeof why, "row %d, %s", r, w);
+			return why;
+		}
+	}
+	for (int64_t i = vt_abs_first(a); i < (int64_t)a->scrolled; i++) {
+		int la, lb;
+		const struct cell *ca = vt_abs_line(a, i, &la), *cb = vt_abs_line(b, i, &lb);
+		long long r = (long long)(i - (int64_t)a->scrolled);
+		if (!ca || !cb || la != lb || vt_abs_wraps(a, i) != vt_abs_wraps(b, i) ||
+		    vt_abs_fill(a, i) != vt_abs_fill(b, i)) {
+			snprintf(why, sizeof why, "history row %lld: %d cells wrap %d and %d cells wrap %d",
+				 r, la, vt_abs_wraps(a, i), lb, vt_abs_wraps(b, i));
+			return why;
+		}
+		if ((w = same_cells(ca, cb, la, but))) {
+			snprintf(why, sizeof why, "history row %lld, %s", r, w);
+			return why;
+		}
+	}
+	return NULL;
+}
+
 static void fuzz_report(long seed, const char *what, const char *why)
 {
 	failures++;
@@ -1494,8 +1589,7 @@ static size_t reflow_text(const struct vt *vt, uint32_t *out, size_t cap)
 				    (l[k].attr & ~ATTR_TEXT))
 					wraps = 0;
 		} else {
-			int back = (int)((int64_t)vt->scrolled - 1 - a);
-			fill = vt->hist_fill[(vt->hist_head - 1 - back + vt->hist_cap) % vt->hist_cap];
+			fill = vt_abs_fill(vt, a);
 		}
 		/* blanks at the end are no text: those nothing shows of, or those a
 		 * row was erased with up to the last column, which are put there
@@ -1533,23 +1627,6 @@ static size_t reflow_text(const struct vt *vt, uint32_t *out, size_t cap)
 		}
 	}
 	return text;
-}
-
-/* Rows and cells as a reflow leaves them: all that shows, where the line goes on
- * and what was erased behind it. An erased blank it laid out as text has
- * ATTR_TEXT since; what was written had it before. */
-static bool reflow_cells(const struct cell *a, const struct cell *b, int n)
-{
-	for (int x = 0; x < n; x++)
-		if (a[x].cp != b[x].cp || a[x].fg != b[x].fg || a[x].bg != b[x].bg ||
-		    (a[x].attr | ATTR_TEXT) != (b[x].attr | ATTR_TEXT))
-			return false;
-	return true;
-}
-
-static bool reflow_rows(const struct row *a, const struct row *b, int cols)
-{
-	return a->wrap == b->wrap && a->fill == b->fill && reflow_cells(a->c, b->c, cols);
 }
 
 /* A line of random text for the reflow tests, ended by CR LF: letters, blanks
@@ -1839,19 +1916,11 @@ static void test_reflow(void)
 			bad++;
 		} else {
 			size_t na = reflow_text(a, ta, TEXT_MAX), nb = reflow_text(b, tb, TEXT_MAX);
-			bad += a->c.x != b->c.x || a->c.y != b->c.y || a->hist_count != b->hist_count ||
-			       a->scrolled != b->scrolled || na != nb || memcmp(ta, tb, na * sizeof *ta);
-			for (int r = 0; r < rows; r++) {
-				bad += !reflow_rows(a->pri[r], b->pri[r], cols);
+			bad += same_state(a, b, SAME_BUT_SAVED | SAME_BUT_MARKS) || na != nb ||
+			       memcmp(ta, tb, na * sizeof *ta);
+			for (int r = 0; r < rows; r++)
 				filled += !(a->pri[r]->c[cols - 1].attr & ATTR_TEXT) &&
 					  a->pri[r]->c[cols - 1].bg != COL_DEFAULT_BG;
-			}
-			for (int64_t i = vt_abs_first(a); i < (int64_t)a->scrolled; i++) {
-				int la, lb;
-				const struct cell *ca = vt_abs_line(a, i, &la), *cb = vt_abs_line(b, i, &lb);
-				bad += !ca || !cb || la != lb || !reflow_cells(ca, cb, la) ||
-				       vt_abs_wraps(a, i) != vt_abs_wraps(b, i);
-			}
 		}
 		vt_free(a);
 		vt_free(b);
@@ -1998,6 +2067,67 @@ static void test_reflow(void)
 /* Where a line ends, for a reflow: the blanks before the cursor, the blanks a
  * row was erased with, an empty row the line went on into, and a row whose next
  * fell off the screen. */
+/* Plain output, written at one size and resized to another, is what it is
+ * written at the other size (REFLOW.md, A2): printable characters of one and
+ * two cells, attributes and foreground colours, CR LF. Every row of the screen
+ * and the history, where each goes on, the cursor and its pending wrap.
+ *
+ * Left out until the rule is there: the saved cursor (D20), and lines that end
+ * in a blank, which are shorter by it after the resize (D1). */
+static void test_plain_output(void)
+{
+	int bad = 0, shown = 0, wide = 0, hist = 0, wrapped = 0, pending = 0;
+	for (int round = 0; round < 3000; round++) {
+		char s[4096];
+		size_t n = 0;
+		int lines = (int)(fuzz_rand() % 12);
+		for (int l = 0; l < lines; l++) {
+			int len = fuzz_rand() % 5 ? (int)(fuzz_rand() % 60) : 0;
+			for (int i = 0; i < len; i++) {
+				unsigned k = fuzz_rand() % 20;
+				if (k == 0)
+					n += (size_t)sprintf(s + n, "\xe6\xbc\xa2");
+				else if (k == 1)
+					n += (size_t)sprintf(s + n, "\033[%um", 1 + fuzz_rand() % 7);
+				else if (k == 2)
+					n += (size_t)sprintf(s + n, "\033[3%um", fuzz_rand() % 8);
+				else
+					s[n++] = k == 3 ? ' ' : (char)('a' + fuzz_rand() % 26);
+			}
+			if (len)
+				s[n++] = 'z';
+			if (l + 1 < lines || fuzz_rand() % 2)
+				n += (size_t)sprintf(s + n, "\r\n");
+		}
+		int w0 = 2 + (int)(fuzz_rand() % 40), r0 = 1 + (int)(fuzz_rand() % 12);
+		int w1 = 2 + (int)(fuzz_rand() % 40), r1 = 1 + (int)(fuzz_rand() % 12);
+		if (round % 8 == 0)
+			w1 = w0; /* another height alone */
+		struct vt *a = mk(w0, r0, 4096), *b = mk(w1, r1, 4096);
+		vt_write(a, s, n);
+		vt_write(b, s, n);
+		const char *why = vt_resize(a, w1, r1) ? same_state(a, b, SAME_BUT_SAVED) : "no memory";
+		if (why) {
+			bad++;
+			if (shown++ < 5)
+				fprintf(stderr, "plain output %d: %dx%d to %dx%d: %s\n", round, w0, r0, w1,
+					r1, why);
+		}
+		hist += b->hist_count > 0;
+		pending += b->c.wrapnext;
+		for (int r = 0; r < r1; r++) {
+			wrapped += b->pri[r]->wrap == w1;
+			wide += b->pri[r]->wrap == w1 - 1;
+		}
+		vt_free(a);
+		vt_free(b);
+	}
+	CHECK(bad == 0);
+	/* and it had a history, rows that go on, with a cell left over by a wide
+	 * glyph too, and a cursor that waits to wrap */
+	CHECK(hist > 500 && wrapped > 1000 && wide > 100 && pending > 20);
+}
+
 static void test_reflow_ends(void)
 {
 	/* A prompt ends in a blank with the cursor behind it. Narrower by so much
@@ -3336,6 +3466,7 @@ int main(void)
 	test_resize();
 	test_resize_back();
 	test_reflow();
+	test_plain_output();
 	test_reflow_ends();
 	test_origin();
 	test_xterm_details();

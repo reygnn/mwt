@@ -330,7 +330,8 @@ static void push_hist(struct vt *vt, const struct row *row)
 }
 
 /* vt_abs_line, and in *wrap the cells before the line's wrap, as row.wrap */
-static const struct cell *abs_line(const struct vt *vt, int64_t abs, int *len, int *wrap)
+static const struct cell *abs_line(const struct vt *vt, int64_t abs, int *len, int *wrap,
+				   uint32_t *fill)
 {
 	int64_t rel = abs - (int64_t)vt->scrolled;
 	if (rel >= 0) {
@@ -338,6 +339,7 @@ static const struct cell *abs_line(const struct vt *vt, int64_t abs, int *len, i
 			goto none;
 		*len = vt->cols;
 		*wrap = vt->line[rel]->wrap;
+		*fill = vt->line[rel]->fill;
 		return vt->line[rel]->c;
 	}
 	int64_t i = -rel - 1;
@@ -346,16 +348,27 @@ static const struct cell *abs_line(const struct vt *vt, int64_t abs, int *len, i
 	int slot = (int)((vt->hist_head - 1 - i + vt->hist_cap) % vt->hist_cap);
 	*len = vt->hist_len[slot];
 	*wrap = vt->hist_wrap[slot];
+	*fill = vt->hist_fill[slot];
 	return vt->hist[slot];
 none:
 	*len = *wrap = 0;
+	*fill = COL_DEFAULT_BG;
 	return NULL;
 }
 
 const struct cell *vt_abs_line(const struct vt *vt, int64_t abs, int *len)
 {
 	int wrap;
-	return abs_line(vt, abs, len, &wrap);
+	uint32_t fill;
+	return abs_line(vt, abs, len, &wrap, &fill);
+}
+
+uint32_t vt_abs_fill(const struct vt *vt, int64_t abs)
+{
+	int n, wrap;
+	uint32_t fill;
+	abs_line(vt, abs, &n, &wrap, &fill);
+	return fill;
 }
 
 const struct cell *vt_view_line(const struct vt *vt, int r, int *len)
@@ -366,7 +379,8 @@ const struct cell *vt_view_line(const struct vt *vt, int r, int *len)
 int vt_abs_wraps(const struct vt *vt, int64_t abs)
 {
 	int n, wrap;
-	const struct cell *l = abs_line(vt, abs, &n, &wrap);
+	uint32_t fill;
+	const struct cell *l = abs_line(vt, abs, &n, &wrap, &fill);
 	return wrap_holds(l, n, wrap);
 }
 

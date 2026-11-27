@@ -178,6 +178,9 @@ int64_t vt_abs_first(const struct vt *vt); /* oldest abs line in history */
  * did not fit in, or on the alternate screen what a wider window added; with
  * anything else there the line ends in its row. */
 int vt_abs_wraps(const struct vt *vt, int64_t abs);
+/* What was erased behind line abs and has no cell there (row.fill), in the
+ * history as on the screen; COL_DEFAULT_BG for none, and for no such line. */
+uint32_t vt_abs_fill(const struct vt *vt, int64_t abs);
 void vt_scroll_view(struct vt *vt, int delta); /* +up into history */
 void vt_mark_all(struct vt *vt);
 
