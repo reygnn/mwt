@@ -93,6 +93,15 @@ static void die(const char *what, const struct vt *vt)
 	abort();
 }
 
+/* What is none of a row's content at its end (REFLOW.md 3.1): a blank of its
+ * tail, not written; with the default for a tail any blank nothing shows of. */
+static bool end_blank(struct cell c, uint32_t tail)
+{
+	if (tail == COL_DEFAULT_BG)
+		return c.cp == ' ' && c.bg == COL_DEFAULT_BG && !(c.attr & ~ATTR_TEXT);
+	return c.cp == ' ' && c.fg == COL_DEFAULT_FG && c.bg == tail && !c.attr;
+}
+
 static void check(const struct vt *vt)
 {
 	if (vt->c.x < 0 || vt->c.x >= vt->cols || vt->c.y < 0 || vt->c.y >= vt->rows)
@@ -118,6 +127,9 @@ static void check(const struct vt *vt)
 		/* a row whose end was erased in a colour has cells to its last column */
 		if (vt->hist_tail[slot] != COL_DEFAULT_BG && vt->hist_len[slot] != vt->cols)
 			die("history line with a tail in a colour is not full", vt);
+		for (int x = vt->hist_wrap[slot]; vt->hist_wrap[slot] && x < vt->hist_len[slot]; x++)
+			if (!end_blank(vt->hist[slot][x], vt->hist_tail[slot]))
+				die("cell behind a history line's wrap is not of its tail", vt);
 	}
 	struct row **screens[2] = { vt->pri, vt->alt };
 	for (int s = 0; s < 2; s++)
@@ -131,6 +143,10 @@ static void check(const struct vt *vt)
 				die("row wraps past what was written", vt);
 			if (screens[s][r]->tail != COL_DEFAULT_BG && used != vt->cols)
 				die("row with a tail in a colour is not full", vt);
+			/* nothing is checked where a wrap is read (REFLOW.md I2) */
+			for (int x = wrap; wrap && x < vt->cols; x++)
+				if (!end_blank(l[x], screens[s][r]->tail))
+					die("cell behind a row's wrap is not of its tail", vt);
 			for (int x = used; x < vt->cols; x++)
 				if (l[x].cp != ' ' || l[x].fg != COL_DEFAULT_FG ||
 				    l[x].bg != COL_DEFAULT_BG || l[x].attr)

@@ -44,7 +44,8 @@ A window of another width lays the lines of the main screen and of the history o
 anew: rows that went on in the next are one line, wrapped where the new width ends.
 Only what autowrap joined is one line; rows a program broke itself (vim, a table) stay
 rows and are wrapped each on its own. In a window one column wide, wide characters are
-gone, as they are when written there.
+gone, as they are when written there. A line that ended in one behind erased blanks ends
+with an empty row from then on.
 
 Blanks at the end of a line of which nothing shows are no text to mwt, written or
 erased, and are not laid out, but for those before the cursor: the cells before it are

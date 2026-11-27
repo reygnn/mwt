@@ -115,19 +115,20 @@ static bool is_tail_blank(struct cell c, uint32_t tail)
 	return c.cp == ' ' && c.fg == COL_DEFAULT_FG && c.bg == tail && !c.attr;
 }
 
-/* Whether a row of n cells with that tail goes on in the next after wrap of
- * them: wrap, or 0 with anything behind them that is text. What is none: the
- * blanks the row's end was erased in, and with the default for that colour
- * any blank nothing shows of. That is the cell a wide glyph did not fit in
- * (REFLOW.md J2), or on the alternate screen what a wider window added. */
-static int wrap_holds(const struct cell *l, int n, int wrap, uint32_t tail)
+/* A cell that is none of a row's content where it ends the row (REFLOW.md
+ * 3.1): a blank of the row's tail. With the default for a tail, any blank
+ * nothing shows of, written too (D1 is not decided). */
+static bool is_end_blank(struct cell c, uint32_t tail)
 {
-	for (int k = wrap; wrap && k < n; k++)
-		if (tail != COL_DEFAULT_BG ? !is_tail_blank(l[k], tail) :
-		    (l[k].cp != ' ' && l[k].cp != 0) || l[k].bg != COL_DEFAULT_BG ||
-		    (l[k].attr & ~ATTR_TEXT))
-			return 0;
-	return wrap;
+	return tail == COL_DEFAULT_BG ? shows_nothing(c) : is_tail_blank(c, tail);
+}
+
+/* How many of the len cells of a row without a join are its content */
+static int content_len(const struct cell *l, int len, uint32_t tail)
+{
+	while (len > 0 && is_end_blank(l[len - 1], tail))
+		len--;
+	return len;
 }
 
 /* the row has been written up to end (exclusive) */
@@ -273,6 +274,8 @@ static void shift_right(struct vt *vt, struct row *l, int x, int n)
 	l->wrap = x < wrap ? MIN(wrap + n, vt->cols) : wrap;
 }
 
+static void row_changed(struct vt *vt, int y);
+
 static void clear_line(struct vt *vt, int y, int x0, int x1)
 {
 	x0 = CLAMP(x0, 0, vt->cols - 1);
@@ -281,10 +284,12 @@ static void clear_line(struct vt *vt, int y, int x0, int x1)
 		return;
 	fix_wide(vt, vt->line[y], x0, x1);
 	fill_row(vt->line[y], x0, x1 + 1, blank(vt), vt->cols);
-	/* erased to the end, the line ends: also one whose wrap is left of x0,
-	 * where a window grown wider left it on the alternate screen */
+	/* erased to the end, the line ends (J3c): also one whose wrap is left of
+	 * x0, behind a row whose line ends empty or where a window grown wider
+	 * left it on the alternate screen */
 	if (x1 == vt->cols - 1)
 		vt->line[y]->wrap = 0;
+	row_changed(vt, y);
 	mark_row(vt, y);
 }
 
@@ -300,6 +305,42 @@ static void hist_unwrap(struct vt *vt)
 		return;
 	int slot = (vt->hist_head - 1 + vt->hist_cap) % vt->hist_cap;
 	vt->hist_wrap[slot] = 0;
+}
+
+/* Cells of row y of the screen shown have changed, or its tail has. Two joins
+ * are kept right here, so that nothing has to be checked where one is read.
+ *
+ * The row's own: the cells behind it are no content, the one a wide glyph did
+ * not fit in or what a resize left of a row whose line ends empty. With
+ * anything else there the line ends in this row (REFLOW.md I2, J3b).
+ *
+ * That of the row before, on the main screen, which for the first row is the
+ * history's newest: a join short of the last column is one the layout made
+ * for what this row was, empty or beginning with a wide glyph. Once the row
+ * has content, or begins with something else, it is a row of its own (I8,
+ * J9). A join after the last column stays: a full row goes on into whatever
+ * is written here (J6). The alternate screen keeps its joins (X1). */
+static void row_changed(struct vt *vt, int y)
+{
+	struct row *l = vt->line[y];
+	for (int k = l->wrap; l->wrap && k < l->used; k++)
+		if (!is_end_blank(l->c[k], l->tail))
+			l->wrap = 0;
+	if (vt->mode & MODE_ALTSCREEN)
+		return;
+	int *join;
+	if (y > 0)
+		join = &vt->pri[y - 1]->wrap;
+	else if (vt->hist_count)
+		join = &vt->hist_wrap[(vt->hist_head - 1 + vt->hist_cap) % vt->hist_cap];
+	else
+		return;
+	if (!*join || *join == vt->cols)
+		return;
+	if (*join == vt->cols - 1 && (l->c[0].attr & ATTR_WIDE))
+		return;
+	if (l->wrap || content_len(l->c, l->used, l->tail))
+		*join = 0;
 }
 
 static void push_hist(struct vt *vt, const struct row *row)
@@ -393,8 +434,8 @@ int vt_abs_wraps(const struct vt *vt, int64_t abs)
 {
 	int n, wrap;
 	uint32_t tail;
-	const struct cell *l = abs_line(vt, abs, &n, &wrap, &tail);
-	return wrap_holds(l, n, wrap, tail);
+	abs_line(vt, abs, &n, &wrap, &tail);
+	return wrap;
 }
 
 int64_t vt_abs_first(const struct vt *vt)
@@ -688,8 +729,13 @@ static struct row **copy_screen(const struct vt *vt, struct row **old, int shift
 		/* a line cut before its wrap ends there */
 		s[r]->wrap = o->wrap <= cols ? o->wrap : 0;
 		/* kept at this width and in a row that is cut; what a wider
-		 * window adds on the alternate screen are default blanks */
+		 * window adds on the alternate screen are default blanks, an
+		 * erase of the new cells: a join stays where it was, unless
+		 * the cells behind it are of another colour than that (X1) */
 		s[r]->tail = cols > vt->cols ? COL_DEFAULT_BG : o->tail;
+		for (int k = s[r]->wrap; s[r]->wrap && k < s[r]->used; k++)
+			if (!is_end_blank(s[r]->c[k], s[r]->tail))
+				s[r]->wrap = 0;
 		if (cols < vt->cols && (s[r]->c[cols - 1].attr & ATTR_WIDE))
 			s[r]->c[cols - 1] = b;
 	}
@@ -739,8 +785,8 @@ struct reflow {
 	bool nomem;
 };
 
-/* Old row g, the history's first, as it is kept: its cells, how many, the
- * wrap that holds and the row's tail. */
+/* Old row g, the history's first, as it is kept: its cells, how many, its
+ * wrap and its tail. */
 static const struct cell *old_cells(const struct vt *vt, int g, int *len, int *wrap,
 				    uint32_t *tail)
 {
@@ -758,7 +804,6 @@ static const struct cell *old_cells(const struct vt *vt, int g, int *len, int *w
 		*wrap = r->wrap;
 		*tail = r->tail;
 	}
-	*wrap = wrap_holds(l, *len, *wrap, *tail);
 	return l;
 }
 
@@ -773,8 +818,8 @@ static uint32_t line_tail(const struct vt *vt, int g)
 }
 
 /* Old row g: its cells, in *n how many of them are text, and in *more whether
- * the line goes on in the next row. A row goes on where a selection would
- * join it to the next (vt_abs_wraps), and the last one never.
+ * the line goes on in the next row: where the row says so (row.wrap), and
+ * the last one never.
  *
  * The blanks at the end of a line that its tail says are there anyway are no
  * text: those of the erase, in its colour and not written (row.tail). They
@@ -784,7 +829,7 @@ static uint32_t line_tail(const struct vt *vt, int g)
  * of an erase in another colour, or of one that ended before the last
  * column, are text wherever another width puts them. With the default for a
  * tail, blanks that were written go as well if nothing shows of them
- * (text_len()). The first keep cells are text whatever they hold: the blanks
+ * (content_len()). The first keep cells are text whatever they hold: the blanks
  * between a prompt and the cursor behind them, without which the cursor had
  * no place to be, and those before a cursor in a row that holds nothing:
  * clamped into a narrower row, it was not back in its column in a wider one. */
@@ -798,12 +843,7 @@ static const struct cell *old_row(const struct vt *vt, int g, int keep, int *n, 
 		*n = wrap;
 		return l;
 	}
-	if (tail == COL_DEFAULT_BG)
-		len = text_len(l, len, 0);
-	else
-		while (len > 0 && is_tail_blank(l[len - 1], tail))
-			len--;
-	*n = MAX(len, keep);
+	*n = MAX(content_len(l, len, tail), keep);
 	return l;
 }
 
@@ -1210,9 +1250,12 @@ static bool put(struct vt *vt, uint32_t cp)
 		 * where that is blank: no text, so a copy, a URL and a reflow pass
 		 * over it. With anything else there the cell is the line's. */
 		struct row *l = vt->line[c->y];
-		int n = c->wrapnext ? 0 : wrap_holds(l->c, vt->cols, vt->cols - 1, l->tail);
-		l->wrap = n ? n : vt->cols;
+		bool gap = !c->wrapnext && is_end_blank(l->c[vt->cols - 1], l->tail);
+		l->wrap = gap ? vt->cols - 1 : vt->cols;
 		touch(l, l->wrap);
+		/* the cells before a join are content, blanks too: a row that
+		 * had none has some now (J9) */
+		row_changed(vt, c->y);
 		c->x = 0;
 		index_down(vt);
 	} else if (c->x + w > vt->cols) {
@@ -1236,6 +1279,7 @@ static bool put(struct vt *vt, uint32_t cp)
 		l[c->x + 1].attr = base | ATTR_WDUMMY;
 	}
 	wrote(row, c->x, c->x + w);
+	row_changed(vt, c->y);
 	mark_row(vt, c->y);
 	vt->lastcp = orig;
 	advance(vt, c->x + w, wrap);
@@ -1270,6 +1314,8 @@ static void rep_row(struct vt *vt, uint32_t cp, int w, int n)
 			fix_wide(vt, l, x, x + k * w - 1); /* as put_ascii */
 		for (int i = 0; i < k * w; i++)
 			l->c[x + i] = cell[i % w == 0 ? 0 : 1];
+		/* no row_changed(): put() was in this row, one cell before; what
+		 * a run can end, it has ended */
 		wrote(l, x, x + k * w);
 		n -= k;
 		advance(vt, c->x + k * w, vt->mode & MODE_AUTOWRAP);
@@ -1695,6 +1741,7 @@ static void csi_dispatch(struct vt *vt, uint32_t f)
 		n = MIN(n, vt->cols - c->x);
 		shift_right(vt, l, c->x, n);
 		fill_row(l, c->x, c->x + n, blank(vt), vt->cols);
+		row_changed(vt, c->y);
 		mark_row(vt, c->y);
 		c->wrapnext = false;
 		break;
@@ -1773,6 +1820,7 @@ static void csi_dispatch(struct vt *vt, uint32_t f)
 			l->wrap = 0;
 		memmove(&l->c[c->x], &l->c[c->x + n], (size_t)(vt->cols - c->x - n) * sizeof *l->c);
 		fill_row(l, vt->cols - n, vt->cols, blank(vt), vt->cols);
+		row_changed(vt, c->y);
 		mark_row(vt, c->y);
 		c->wrapnext = false;
 		break;
@@ -2167,6 +2215,7 @@ static size_t put_ascii(struct vt *vt, const unsigned char *s, size_t n)
 		}
 	}
 	wrote(row, x0, x1 + 1);
+	row_changed(vt, c->y);
 	mark_row(vt, c->y);
 	vt->lastcp = s[k - 1];
 	advance(vt, x1 + 1, vt->mode & MODE_AUTOWRAP);

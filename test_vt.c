@@ -452,6 +452,7 @@ static const char *const fuzz_frags[] = {
 	"\033[?6n", "\033[5n", "\033[>c", "\033[>q", "\033[4$p", "\033]2;ab\033\\",
 	"\033[1;31m", "\033[38;2;1;2;3m", "\033[38:2::1:2:3m", "\033[38;5m", "\033[38;2m",
 	"\033[0m", "\033[7m", "\033[2 q", "\033]0;x\a", "\033]2;\xff\a",
+	"\033[41m", "\033[44m", "\033[49m", "\033[48;5;9m",
 	"\xc3", "\xe2\x82", "\xf0\x9f\x98", "\xff", "\xc0\x80", "\xed\xa0\x80", "\xf4\x90\x80\x80",
 	"\xc3\xa4", "\xe2\x82\xac", "\xcc\x80", "\xe2\x80\x8d",
 	/* wide characters often enough for every operation to meet one */
@@ -477,6 +478,16 @@ static size_t fuzz_gen(char *o, size_t cap)
 	return n;
 }
 
+/* What is none of a row's content at its end (REFLOW.md 3.1): a blank of its
+ * tail, not written; with the default for a tail any blank nothing shows of,
+ * until D1 is decided. */
+static bool end_blank(struct cell c, uint32_t tail)
+{
+	if (tail == COL_DEFAULT_BG)
+		return c.cp == ' ' && c.bg == COL_DEFAULT_BG && !(c.attr & ~ATTR_TEXT);
+	return c.cp == ' ' && c.fg == COL_DEFAULT_FG && c.bg == tail && !c.attr;
+}
+
 /* NULL when all is well, otherwise what is not */
 static const char *fuzz_broken_grid(struct row **s, int cols, int rows)
 {
@@ -494,6 +505,9 @@ static const char *fuzz_broken_grid(struct row **s, int cols, int rows)
 			if (!(a & ATTR_TEXT) && (s[r]->c[x].cp != ' ' || s[r]->c[x].fg != COL_DEFAULT_FG || a))
 				return "a cell that was not written and is no blank";
 		}
+		for (int x = s[r]->wrap; s[r]->wrap && x < cols; x++)
+			if (!end_blank(s[r]->c[x], s[r]->tail))
+				return "a cell behind a row's wrap that is not of its tail (I2)";
 	}
 	return NULL;
 }
@@ -513,6 +527,10 @@ static const char *fuzz_broken(const struct vt *vt)
 		int slot = (int)((vt->hist_head - ((int64_t)vt->scrolled - i) + vt->hist_cap) % vt->hist_cap);
 		if (vt->hist_tail[slot] != COL_DEFAULT_BG && n != vt->cols)
 			return "a history line with a tail in a colour that is not full";
+		const struct cell *l = vt_abs_line(vt, i, &n);
+		for (int x = vt_abs_wraps(vt, i); vt_abs_wraps(vt, i) && x < n; x++)
+			if (!end_blank(l[x], vt->hist_tail[slot]))
+				return "a cell behind a history line's wrap that is not of its tail (I2)";
 	}
 	const char *why = fuzz_broken_grid(vt->pri, vt->cols, vt->rows);
 	return why ? why : fuzz_broken_grid(vt->alt, vt->cols, vt->rows);
@@ -2007,10 +2025,10 @@ static void test_reflow(void)
 	vt_free(vt);
 
 	/* the cell a wide glyph did not fit in, written since: text, and the line
-	 * ends in its row, the glyph a line of its own */
+	 * ends in its row, the glyph a line of its own (REFLOW.md J3b) */
 	vt = mk(10, 4, 10);
 	w(vt, "abcdefghi\xe6\xbc\xa2\033[1;10HZ");
-	CHECK(vt->pri[0]->wrap == 9 && vt_abs_wraps(vt, 0) == 0);
+	CHECK(vt->pri[0]->wrap == 0 && vt_abs_wraps(vt, 0) == 0);
 	CHECK(vt_resize(vt, 20, 4));
 	CHECK_STR(row(vt, 0), "abcdefghiZ");
 	CHECK_STR(row(vt, 1), "\xe6\xbc\xa2");
@@ -3232,8 +3250,9 @@ static void test_wrap_row(void)
 
 	/* A wider window on the alternate screen, which is not laid out anew: the
 	 * line still ends after 10 cells, 12 with two put in before them; blanks
-	 * put in after them change nothing, text there ends it, and a window
-	 * narrower than the line cuts it */
+	 * put in after them change nothing, text there ends it, for good (J3b:
+	 * erased again, the line does not go on again), and a window narrower
+	 * than the line cuts it */
 	vt = mk(10, 4, 0);
 	w(vt, "\033[?47habcdefghijKLM");
 	CHECK(vt_resize(vt, 20, 4) && vt_abs_wraps(vt, 0) == 10);
@@ -3253,7 +3272,11 @@ static void test_wrap_row(void)
 	w(vt, "\033[1;15H\033[4hX\033[4l");
 	CHECK(vt_abs_wraps(vt, 0) == 0);
 	w(vt, "\033[1;15H\033[X");
-	CHECK(vt_abs_wraps(vt, 0) == 12);
+	CHECK(vt_abs_wraps(vt, 0) == 0);
+	w(vt, "\033[2J\033[H");
+	vt_resize(vt, 10, 4);
+	w(vt, "abcdefghijKLM");
+	CHECK(vt_resize(vt, 20, 4) && vt_abs_wraps(vt, 0) == 10);
 	w(vt, "\033[1;3H\033[19@");
 	CHECK(vt_abs_wraps(vt, 0) == 0);
 	w(vt, "\033[2J\033[H0123456789abcdefghijK\033[1;1H\033[@");
@@ -3262,14 +3285,15 @@ static void test_wrap_row(void)
 	vt_free(vt);
 
 	/* the first cell after the wrap is not the line's: written, the line ends
-	 * in its row, and erased again it goes on as before */
+	 * in its row. The wrap is gone from the row then, not held back where
+	 * it is read: the cell erased again does not bring it back. */
 	vt = mk(10, 4, 0);
 	w(vt, "\033[?47habcdefghijKLM");
-	CHECK(vt_resize(vt, 20, 4));
+	CHECK(vt_resize(vt, 20, 4) && vt->alt[0]->wrap == 10);
 	w(vt, "\033[1;11HZ");
-	CHECK(vt->alt[0]->wrap == 10 && vt_abs_wraps(vt, 0) == 0);
+	CHECK(vt->alt[0]->wrap == 0 && vt_abs_wraps(vt, 0) == 0);
 	w(vt, "\033[1;11H\033[X");
-	CHECK(vt_abs_wraps(vt, 0) == 10);
+	CHECK(vt->alt[0]->wrap == 0 && vt_abs_wraps(vt, 0) == 0);
 	vt_free(vt);
 
 	/* a row has one wrap: wrapped, made wider and wrapped again at the new
@@ -3302,6 +3326,286 @@ static void test_wrap_row(void)
 	CHECK(vt_abs_wraps(vt, 0) == 0);
 	vt_free(vt);
 }
+
+/* I3 and I8 on the main screen (REFLOW.md): the last row does not go on, and
+ * a join short of the last column is one the layout would make, into a row
+ * without content or, one cell short, into one that begins with a wide
+ * glyph; from the history's newest line into the first row too. NULL when
+ * that holds. Not for streams that move rows (IL, DL, SU, SD, RI, a scroll
+ * region): J5 is the next step. */
+static const char *joins_broken(const struct vt *vt)
+{
+	if (vt->pri[vt->rows - 1]->wrap)
+		return "the last row of the screen goes on (I3)";
+	for (int y = 0; y < vt->rows; y++) {
+		const struct row *l = vt->pri[y];
+		int join = y ? vt->pri[y - 1]->wrap : vt->hist_count ?
+			vt->hist_wrap[(vt->hist_head - 1 + vt->hist_cap) % vt->hist_cap] : 0;
+		if (!join || join == vt->cols)
+			continue;
+		int n = l->used;
+		while (n > 0 && end_blank(l->c[n - 1], l->tail))
+			n--;
+		if (!l->wrap && !n)
+			continue;
+		if (join == vt->cols - 1 && (l->c[0].attr & ATTR_WIDE))
+			continue;
+		return "a join the layout would not make at this width (I8)";
+	}
+	return NULL;
+}
+
+/* The joins are kept right where a row changes, and nothing is checked where
+ * one is read (REFLOW.md J3b, J9, I2, I8, X1; G5, G13 and G14 before). The
+ * checks read the row's own wrap for that: vt_abs_wraps() gave these answers
+ * before, by looking at the cells. */
+static void test_joins(void)
+{
+	struct vt *vt;
+
+	/* J3b. A line that ends empty has a join short of its row after a wider
+	 * window (L3), and cells behind it. What comes there in another colour
+	 * than the row's tail, or is written and shows, is content: the line
+	 * ends in its row. Blanks of the tail are what was there. An erase or a
+	 * shift whose blanks reach the last column sets the tail (E1), and the
+	 * join holds if all behind it is of that then. */
+	static const struct { const char *seq; int wraps; } gap[] = {
+		{ "", 10 },
+		{ "\033[1;13H\033[2X", 10 },             /* ECH, default */
+		{ "\033[1;13H\033[41m\033[2X", 0 },      /* ECH, red */
+		{ "\033[1;13H\033[2@", 10 },             /* ICH */
+		{ "\033[1;13H\033[41m\033[2@", 0 },
+		{ "\033[1;11H\033[41m\033[10@", 10 },    /* ICH over all of it: the tail is red */
+		{ "\033[1;12H\033[41m\033[9@", 0 },      /* but for one cell */
+		{ "\033[1;13H\033[P", 10 },              /* DCH */
+		{ "\033[1;13H\033[41m\033[P", 0 },       /* a red tail, the rest is not */
+		{ "\033[1;11H\033[41m\033[10P", 10 },
+		{ "\033[1;13Hx", 0 },                    /* print */
+		{ "\033[1;13H ", 10 },                   /* a blank nothing shows of (D1) */
+		{ "\033[1;13H\033[41m ", 0 },
+		{ "\033[1;13H\033[9b", 10 },             /* REP has nothing to repeat here */
+		{ "\033[1;13Hx\033[1;13H\033[X", 0 },    /* erased again, the join is not back */
+		{ "\033[1;15H\033[K", 0 },              /* J3c: erased to its end, the row ends its line */
+		{ "\033[1;15H\033[6X", 0 },
+		{ "\033[1;15H\033[5X", 10 },            /* not short of it */
+		{ "\033[1;15H\033[J", 0 },
+	};
+	for (size_t i = 0; i < sizeof gap / sizeof *gap; i++) {
+		vt = mk(10, 3, 10);
+		w(vt, "abcdefghijk\r\033[K");
+		bool ok = vt_resize(vt, 20, 3) && vt->pri[0]->wrap == 10 && !vt->pri[1]->used;
+		w(vt, gap[i].seq);
+		checks++;
+		if (!ok || vt->pri[0]->wrap != gap[i].wraps || vt_abs_wraps(vt, 0) != gap[i].wraps) {
+			failures++;
+			fprintf(stderr, "%s:%d: FAIL: gap case %zu: wrap %d, expected %d\n", __FILE__,
+				__LINE__, i, vt->pri[0]->wrap, gap[i].wraps);
+		}
+		vt_free(vt);
+	}
+	/* REP that writes behind the join */
+	vt = mk(10, 3, 10);
+	w(vt, "abcdefghijk\r\033[K");
+	CHECK(vt_resize(vt, 20, 3));
+	w(vt, "\033[1;12Hx\033[3b");
+	CHECK(vt->pri[0]->wrap == 0);
+	vt_free(vt);
+
+	/* J9. A join short of the last column is the layout's for what the next
+	 * row was. The row a wide glyph went to: written further right it still
+	 * begins with the glyph, and with another wide one over it; with a
+	 * letter there it is a row of its own (G14). */
+	vt = mk(10, 4, 10);
+	w(vt, "aaaaaaaaa\xe6\xbc\xa2");
+	CHECK(vt->pri[0]->wrap == 9);
+	w(vt, "\033[2;5Hx");
+	CHECK(vt->pri[0]->wrap == 9);
+	w(vt, "\033[2;1H\xe5\xad\x97");
+	CHECK(vt->pri[0]->wrap == 9);
+	w(vt, "\033[2;1Hx");
+	CHECK(vt->pri[0]->wrap == 0 && vt_abs_wraps(vt, 0) == 0);
+	vt_free(vt);
+	/* erased, that row has no content and the line ends empty (J6); what is
+	 * written there then is the row's first content, a wide glyph at its
+	 * start as the layout has it, anything else not */
+	static const struct { const char *seq; int wraps; } first[] = {
+		{ "", 9 },
+		{ "\033[2;1H\xe5\xad\x97", 9 },
+		{ "\033[2;5Hx", 0 },
+		{ "\033[2;2H\xe5\xad\x97", 0 },
+		{ "\033[2;3H\033[2X", 9 },               /* blanks of the tail are none */
+		{ "\033[2;3H\033[41m\033[2X", 0 },       /* an erase in a colour is */
+		{ "\033[2;1H\033[41m\033[K", 9 },        /* all of the row: its tail */
+		{ "\033[2;3H\033[41m\033[K", 0 },        /* the default blanks before it are content */
+		{ "\033[2;3H\033[41m\033[@", 0 },
+		{ "\033[2;3H\033[41m\033[P", 0 },        /* a red tail behind default blanks */
+		{ "\033[2;1H ", 9 },                     /* nothing shows of it (D1) */
+		{ "\033[2;1H\033[4hx\033[4l", 0 },
+		{ "\033[2;3H\033[9b", 9 },
+		{ "\033[2;2Hx\033[2;1H\033[2K", 0 },     /* erased again, the join is not back */
+	};
+	for (size_t i = 0; i < sizeof first / sizeof *first; i++) {
+		vt = mk(10, 4, 10);
+		w(vt, "aaaaaaaaa\xe6\xbc\xa2\033[2K");
+		bool ok = vt->pri[0]->wrap == 9;
+		w(vt, first[i].seq);
+		checks++;
+		if (!ok || vt->pri[0]->wrap != first[i].wraps) {
+			failures++;
+			fprintf(stderr, "%s:%d: FAIL: first content, case %zu: wrap %d, expected %d\n",
+				__FILE__, __LINE__, i, vt->pri[0]->wrap, first[i].wraps);
+		}
+		vt_free(vt);
+	}
+	/* A wrap gives a row content as well: the cells before a join are the
+	 * line's, blanks too. A wide glyph that does not fit at the end of the
+	 * empty row leaves it with nine of them, and it begins with a blank. */
+	vt = mk(10, 4, 10);
+	w(vt, "aaaaaaaaa\xe6\xbc\xa2\033[2K");
+	CHECK(vt->pri[0]->wrap == 9 && vt->pri[1]->wrap == 0);
+	w(vt, "\033[2;10H\xe5\xad\x97");
+	CHECK(vt->pri[1]->wrap == 9 && vt->pri[2]->c[0].cp == 0x5b57);
+	CHECK(vt->pri[0]->wrap == 0);
+	vt_free(vt);
+	/* a join after the last column stays, whatever is written: a full row
+	 * goes on into the row a line editor erased and wrote again (J6) */
+	vt = mk(10, 4, 10);
+	w(vt, "abcdefghijk\r\033[Kxyz");
+	CHECK(vt->pri[0]->wrap == 10);
+	vt_free(vt);
+	/* the row a resize left empty behind a short join (L3), written into */
+	vt = mk(10, 3, 10);
+	w(vt, "abcdefghijk\r\033[K");
+	CHECK(vt_resize(vt, 20, 3) && vt->pri[0]->wrap == 10 && vt->c.y == 1);
+	w(vt, "xyz");
+	CHECK(vt->pri[0]->wrap == 0);
+	CHECK(vt_resize(vt, 10, 3));
+	CHECK_STR(row(vt, 0), "abcdefghij");
+	CHECK_STR(row(vt, 1), "xyz");
+	CHECK(vt->pri[0]->wrap == 0);
+	vt_free(vt);
+	/* so from the history's newest line into the first row of the screen */
+	vt = mk(10, 2, 5);
+	w(vt, "abcdefghijk\r\033[K");
+	CHECK(vt_resize(vt, 20, 1) && vt->hist_count == 1 && vt_abs_wraps(vt, vt_abs_first(vt)) == 10);
+	w(vt, "xyz");
+	CHECK(vt_abs_wraps(vt, vt_abs_first(vt)) == 0);
+	w(vt, "\r\n");
+	CHECK(vt_resize(vt, 10, 3));
+	CHECK_STR(row(vt, 0), "abcdefghij");
+	CHECK_STR(row(vt, 1), "xyz");
+	CHECK(vt->pri[0]->wrap == 0);
+	vt_free(vt);
+	/* where the join there is after the last column, it stays */
+	vt = mk(10, 2, 5);
+	w(vt, "abcdefghijk");
+	CHECK(vt_resize(vt, 10, 1) && vt_abs_wraps(vt, vt_abs_first(vt)) == 10);
+	w(vt, "\r\033[Kxyz");
+	CHECK(vt_abs_wraps(vt, vt_abs_first(vt)) == 10);
+	vt_free(vt);
+	/* the first row of the alternate screen is not the history's next */
+	vt = mk(10, 2, 5);
+	w(vt, "abcdefghijk\r\033[K");
+	CHECK(vt_resize(vt, 20, 1));
+	w(vt, "\033[?47hxyz");
+	CHECK(vt_abs_wraps(vt, vt_abs_first(vt)) == 10);
+	w(vt, "\033[?47l");
+	CHECK(vt_abs_wraps(vt, vt_abs_first(vt)) == 10);
+	vt_free(vt);
+
+	/* X1. I8 and J9 are not for the alternate screen: its rows keep their
+	 * joins whatever the next begins with. */
+	vt = mk(10, 4, 0);
+	w(vt, "\033[?47haaaaaaaaa\xe6\xbc\xa2\033[2;1Hx");
+	CHECK(vt->alt[0]->wrap == 9);
+	vt_free(vt);
+	/* A wider window pads its rows with default blanks, an erase of the new
+	 * cells: the tail is the default then, and a join holds with nothing
+	 * but that behind it. */
+	vt = mk(10, 4, 0);
+	w(vt, "\033[?47haaaaaaaaa\xe6\xbc\xa2");
+	CHECK(vt_resize(vt, 20, 4) && vt->alt[0]->wrap == 9);
+	vt_free(vt);
+	vt = mk(10, 4, 0);
+	w(vt, "\033[?47h\033[41m\033[K\033[maaaaaaaaa\xe6\xbc\xa2");
+	CHECK(vt->alt[0]->wrap == 9 && vt->alt[0]->tail == 1);
+	CHECK(vt_resize(vt, 20, 4));
+	CHECK(vt->alt[0]->wrap == 0 && vt->alt[0]->tail == COL_DEFAULT_BG);
+	vt_free(vt);
+
+	/* I2, I3 and I8 after every piece of output and every resize, for
+	 * streams of text, wide glyphs, colours, erases, shifts, cursor
+	 * addresses, both screens and a reset: all but what moves rows. */
+	static const char *const frags[] = {
+		"\r", "\n", "\r\n", "\b", "abc", " ", "x", "xxxxxxxxxxxxxxxxxxxx", "  ",
+		"\xe6\xbc\xa2", "\xe6\xbc\xa2\xe5\xad\x97", "\xf0\x9f\x99\x82", "\xe6\xbc\xa2",
+		"\033[K", "\033[1K", "\033[2K", "\033[J", "\033[1J", "\033[2J", "\033[3J",
+		"\033[H", "\033[2;3H", "\033[1;2H", "\033[2;1H", "\033[3;1H", "\033[3G", "\033[40G",
+		"\033[99999C", "\033[D", "\033[C", "\033[A", "\033[B", "\033[G",
+		"\033[P", "\033[@", "\033[X", "\033[2P", "\033[2@", "\033[2X", "\033[99P", "\033[99@",
+		"\033[99X", "\033[9b", "\033[4h", "\033[4l", "\033[?7l", "\033[?7h",
+		"\033[41m", "\033[44m", "\033[49m", "\033[0m", "\033[7m",
+		"\033[?1049h", "\033[?1049l", "\033[?47h", "\033[?47l",
+		"\0337", "\0338", "\033D", "\033E", "\033c",
+	};
+	long short_joins = 0, glyph_joins = 0, cleared = 0;
+	for (long round = 0; round < 4000 && !failures; round++) {
+		fuzz_state = (unsigned long long)(round + 1) * 0x9E3779B97F4A7C15ULL + 1;
+		for (int i = 0; i < 5; i++)
+			fuzz_rand();
+		int cols = 2 + (int)(fuzz_rand() % 24), rows = 1 + (int)(fuzz_rand() % 7);
+		vt = mk(cols, rows, (int)(fuzz_rand() % 12));
+		const char *why = NULL;
+		for (int op = 0; op < 60 && !why; op++) {
+			int before = 0, after = 0;
+			for (int y = 0; y + 1 < vt->rows; y++)
+				before += vt->pri[y]->wrap && vt->pri[y]->wrap < vt->cols;
+			if (fuzz_rand() % 6 == 0) {
+				cols = 1 + (int)(fuzz_rand() % 30);
+				rows = 1 + (int)(fuzz_rand() % 8);
+				if (getenv("VT_TEST_ROUND") && atol(getenv("VT_TEST_ROUND")) == round)
+					fprintf(stderr, "r %d %d\n", cols, rows);
+				if (!vt_resize(vt, cols, rows))
+					why = "out of memory";
+			} else {
+				for (int k = 1 + (int)(fuzz_rand() % 5); k > 0; k--) {
+					const char *f = frags[fuzz_rand() % (sizeof frags / sizeof *frags)];
+					if (getenv("VT_TEST_ROUND") && atol(getenv("VT_TEST_ROUND")) == round) {
+						fprintf(stderr, "w ");
+						for (const char *q = f; *q; q++)
+							fprintf(stderr, "%02x", (unsigned char)*q);
+						fprintf(stderr, "\n");
+					}
+					w(vt, f);
+				}
+				for (int y = 0; y + 1 < vt->rows; y++)
+					after += vt->pri[y]->wrap && vt->pri[y]->wrap < vt->cols;
+				cleared += after < before;
+			}
+			for (int y = 0; y + 1 < vt->rows; y++) {
+				int j = vt->pri[y]->wrap;
+				short_joins += j && j < vt->cols - 1;
+				glyph_joins += j && j == vt->cols - 1;
+			}
+			if (!why)
+				why = fuzz_broken(vt);
+			if (!why)
+				why = joins_broken(vt);
+		}
+		checks++;
+		if (why) {
+			failures++;
+			fprintf(stderr, "%s:%d: FAIL: joins, round %ld: %s\n", __FILE__, __LINE__, round, why);
+		}
+		vt_free(vt);
+	}
+	/* and the streams had what the rules are about */
+	CHECK(short_joins > 1000 && glyph_joins > 1000 && cleared > 500);
+	if (getenv("VT_TEST_STATS"))
+		fprintf(stderr, "joins: %ld short, %ld before a glyph, %ld times fewer\n", short_joins,
+			glyph_joins, cleared);
+}
+
 
 /* A resize in the alternate screen keeps each screen's cursor line, and the
  * primary's lines above go to the history; a view scrolled back comes down. */
@@ -3591,6 +3895,7 @@ int main(void)
 	test_index_and_charsets();
 	test_wrap_flag_esc();
 	test_wrap_row();
+	test_joins();
 	test_resize_alt_and_view();
 	test_sgr_details();
 	test_cnl_cpl_1048_decom();

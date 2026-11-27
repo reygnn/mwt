@@ -44,9 +44,12 @@ struct row {
 	int used;
 	/* The line goes on in the next row after this many cells; 0 when it ends
 	 * in this one. vt.cols when autowrap set it, one fewer where a wide glyph
-	 * did not fit in the last cell, which is not the line's then. Fewer on
-	 * the alternate screen once the window grew wider: that one is not laid
-	 * out anew, the line still ends where it did. */
+	 * did not fit in the last cell, which is not the line's then. Fewer
+	 * where a resize left a line that ends in an empty row, and on the
+	 * alternate screen once the window grew wider: that one is not laid out
+	 * anew, the line still ends where it did. The cells behind it are blanks
+	 * of the row's tail, always: whatever puts anything else there ends the
+	 * line in this row (REFLOW.md I2, J3b). */
 	int wrap;
 	/* The background the row's end was last erased in (REFLOW.md S3, E1): by
 	 * EL or ED, by ECH, ICH or DCH where their blanks take in the last column,
@@ -173,9 +176,8 @@ const struct cell *vt_view_line(const struct vt *vt, int r, int *len);
 const struct cell *vt_abs_line(const struct vt *vt, int64_t abs, int *len);
 int64_t vt_abs_first(const struct vt *vt); /* oldest abs line in history */
 /* Whether line abs goes on in the next: the cells it has before its wrap
- * (row.wrap), or 0. Only default blanks may follow them: the cell a wide glyph
- * did not fit in, or on the alternate screen what a wider window added; with
- * anything else there the line ends in its row. */
+ * (row.wrap), or 0. That is what the row says, kept right as it changes;
+ * nothing is looked at here. */
 int vt_abs_wraps(const struct vt *vt, int64_t abs);
 /* What the end of line abs was erased in (row.tail), in the history as on the
  * screen; COL_DEFAULT_BG for no such line. */

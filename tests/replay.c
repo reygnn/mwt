@@ -82,6 +82,15 @@ static void fail(const char *how, const char *what, size_t off)
 		cur_file, cur_cols, cur_rows, how, what, off);
 }
 
+/* What is none of a row's content at its end (REFLOW.md 3.1): a blank of its
+ * tail, not written; with the default for a tail any blank nothing shows of. */
+static bool end_blank(struct cell c, uint32_t tail)
+{
+	if (tail == COL_DEFAULT_BG)
+		return c.cp == ' ' && c.bg == COL_DEFAULT_BG && !(c.attr & ~ATTR_TEXT);
+	return c.cp == ' ' && c.fg == COL_DEFAULT_FG && c.bg == tail && !c.attr;
+}
+
 /* first problem in the grid, or NULL */
 static const char *grid_problem(const struct vt *vt)
 {
@@ -98,6 +107,9 @@ static const char *grid_problem(const struct vt *vt)
 			return "history line wraps past its end";
 		if (vt->hist_tail[slot] != COL_DEFAULT_BG && vt->hist_len[slot] != vt->cols)
 			return "history line with a tail in a colour is not full";
+		for (int x = vt->hist_wrap[slot]; vt->hist_wrap[slot] && x < vt->hist_len[slot]; x++)
+			if (!end_blank(vt->hist[slot][x], vt->hist_tail[slot]))
+				return "cell behind a history line's wrap is not of its tail";
 	}
 	struct row **screens[2] = { vt->pri, vt->alt };
 	for (int s = 0; s < 2; s++)
@@ -110,6 +122,10 @@ static const char *grid_problem(const struct vt *vt)
 				return "row wraps past what was written";
 			if (screens[s][r]->tail != COL_DEFAULT_BG && used != vt->cols)
 				return "row with a tail in a colour is not full";
+			/* nothing is checked where a wrap is read (REFLOW.md I2) */
+			for (int x = wrap; wrap && x < vt->cols; x++)
+				if (!end_blank(l[x], screens[s][r]->tail))
+					return "cell behind a row's wrap is not of its tail";
 			for (int x = used; x < vt->cols; x++)
 				if (l[x].cp != ' ' || l[x].fg != COL_DEFAULT_FG ||
 				    l[x].bg != COL_DEFAULT_BG || l[x].attr)
