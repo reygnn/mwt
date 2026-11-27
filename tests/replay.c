@@ -96,6 +96,9 @@ static const char *grid_problem(const struct vt *vt)
 		int slot = (vt->hist_head - 1 - i + vt->hist_cap) % vt->hist_cap;
 		if (vt->hist_wrap[slot] < 0 || vt->hist_wrap[slot] > vt->hist_len[slot])
 			return "history line wraps past its end";
+		if (vt->hist_fill[slot] != COL_DEFAULT_BG &&
+		    (vt->hist_len[slot] != vt->cols || vt->hist_wrap[slot]))
+			return "history line with a fill is not full, or goes on";
 	}
 	struct row **screens[2] = { vt->pri, vt->alt };
 	for (int s = 0; s < 2; s++)
@@ -106,6 +109,8 @@ static const char *grid_problem(const struct vt *vt)
 				return "row written past its end";
 			if (wrap < 0 || wrap > used)
 				return "row wraps past what was written";
+			if (screens[s][r]->fill != COL_DEFAULT_BG && (used != vt->cols || wrap))
+				return "row with a fill is not full, or goes on";
 			for (int x = used; x < vt->cols; x++)
 				if (l[x].cp != ' ' || l[x].fg != COL_DEFAULT_FG ||
 				    l[x].bg != COL_DEFAULT_BG || l[x].attr)
@@ -121,6 +126,9 @@ static const char *grid_problem(const struct vt *vt)
 					return "cell is both halves";
 				if (l[x].cp >= 0x80 && l[x].cp < 0xa0)
 					return "C1 control stored as text";
+				if (!(l[x].attr & ATTR_TEXT) &&
+				    (l[x].cp != ' ' || l[x].fg != COL_DEFAULT_FG || l[x].attr))
+					return "cell that was not written is no blank";
 			}
 		}
 	return NULL;
@@ -137,10 +145,10 @@ static bool same_cells(const struct cell *a, const struct cell *b, int n)
 	return true;
 }
 
-/* a row's cells and where its line goes on */
+/* a row's cells, where its line goes on and what was erased behind it */
 static bool same_row(const struct row *a, const struct row *b, int cols)
 {
-	return a->wrap == b->wrap && same_cells(a->c, b->c, cols);
+	return a->wrap == b->wrap && a->fill == b->fill && same_cells(a->c, b->c, cols);
 }
 
 static bool same_cursor(const struct vt_cursor *a, const struct vt_cursor *b)
@@ -199,11 +207,13 @@ static uint64_t fnv(uint64_t h, const void *p, size_t n)
 }
 
 /* A line's wrap goes into the hash as the sums have it, from when it was a bit
- * of the last cell before it: 1 << 10 of that cell's attributes. */
+ * of the last cell before it: 1 << 10 of that cell's attributes. Not ATTR_TEXT,
+ * which the sums predate: what was written shows in the other three. */
 static uint64_t fnv_cells(uint64_t h, const struct cell *c, int n, int wrap)
 {
 	for (int i = 0; i < n; i++) {
-		uint32_t v[4] = { c[i].cp, c[i].fg, c[i].bg, c[i].attr | (i + 1 == wrap) << 10 };
+		uint32_t v[4] = { c[i].cp, c[i].fg, c[i].bg,
+				  (c[i].attr & ~ATTR_TEXT) | (i + 1 == wrap) << 10 };
 		h = fnv(h, v, sizeof v);
 	}
 	return h;
@@ -215,8 +225,8 @@ static uint64_t fnv_cursor(uint64_t h, const struct vt_cursor *c)
 	return fnv_cells(fnv(h, v, sizeof v), &c->tmpl, 1, 0);
 }
 
-/* what difference() compares, and the replies and bells; not pri_y, which the
- * sums predate and only a resize reads */
+/* what difference() compares, and the replies and bells; not pri_y nor a row's
+ * fill, which the sums predate and only a resize reads or sets */
 static uint64_t state_hash(const struct vt *vt, const struct run *run)
 {
 	uint64_t h = 0xcbf29ce484222325u;

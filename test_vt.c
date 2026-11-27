@@ -327,7 +327,7 @@ static void test_sgr(void)
 	CHECK(l[2].fg == (COL_RGB | 0x040506));
 	CHECK(l[3].bg == 100 && l[3].fg == COL_DEFAULT_FG);
 	CHECK(l[4].fg == 200 && !(l[4].attr & (ATTR_BOLD | ATTR_UNDERLINE)));
-	CHECK(l[5].fg == COL_DEFAULT_FG && l[5].bg == COL_DEFAULT_BG && !l[5].attr);
+	CHECK(l[5].fg == COL_DEFAULT_FG && l[5].bg == COL_DEFAULT_BG && l[5].attr == ATTR_TEXT);
 	CHECK((l[6].attr & ATTR_ITALIC) && l[6].fg == COL_DEFAULT_FG);
 	CHECK(l[7].fg == 12 && l[7].bg == 11);
 	/* background color erase */
@@ -483,12 +483,16 @@ static const char *fuzz_broken_grid(struct row **s, int cols, int rows)
 	for (int r = 0; r < rows; r++) {
 		if (s[r]->wrap < 0 || s[r]->wrap > s[r]->used || s[r]->used > cols)
 			return "a row's wrap or its count of written cells out of range";
+		if (s[r]->fill != COL_DEFAULT_BG && (s[r]->used != cols || s[r]->wrap))
+			return "a row with a fill that is not full, or goes on";
 		for (int x = 0; x < cols; x++) {
 			unsigned a = s[r]->c[x].attr;
 			if ((a & ATTR_WIDE) && (x + 1 >= cols || !(s[r]->c[x + 1].attr & ATTR_WDUMMY)))
 				return "left half of a wide character without its right half";
 			if ((a & ATTR_WDUMMY) && (x == 0 || !(s[r]->c[x - 1].attr & ATTR_WIDE)))
 				return "right half of a wide character without its left half";
+			if (!(a & ATTR_TEXT) && (s[r]->c[x].cp != ' ' || s[r]->c[x].fg != COL_DEFAULT_FG || a))
+				return "a cell that was not written and is no blank";
 		}
 	}
 	return NULL;
@@ -506,6 +510,9 @@ static const char *fuzz_broken(const struct vt *vt)
 		vt_abs_line(vt, i, &n);
 		if (n > vt->cols)
 			return "a history line longer than the screen is wide";
+		int slot = (int)((vt->hist_head - ((int64_t)vt->scrolled - i) + vt->hist_cap) % vt->hist_cap);
+		if (vt->hist_fill[slot] != COL_DEFAULT_BG && (n != vt->cols || vt->hist_wrap[slot]))
+			return "a history line with a fill that is not full, or goes on";
 	}
 	const char *why = fuzz_broken_grid(vt->pri, vt->cols, vt->rows);
 	return why ? why : fuzz_broken_grid(vt->alt, vt->cols, vt->rows);
@@ -520,10 +527,10 @@ static bool fuzz_cells(const struct cell *a, const struct cell *b, int n)
 	return true;
 }
 
-/* a row's cells and where its line goes on */
+/* a row's cells, where its line goes on and what was erased behind it */
 static bool fuzz_rows(const struct row *a, const struct row *b, int cols)
 {
-	return a->wrap == b->wrap && fuzz_cells(a->c, b->c, cols);
+	return a->wrap == b->wrap && a->fill == b->fill && fuzz_cells(a->c, b->c, cols);
 }
 
 static bool fuzz_cursor(const struct vt_cursor *a, const struct vt_cursor *b)
@@ -1193,7 +1200,7 @@ static void test_unsupported_vt100(void)
 	CHECK(vt->cols == 10 && vt->mode == mode && vt->c.x == 8);
 	/* blink is no attribute: the cell is as one written without it */
 	w(vt, "\r\n\033[5;6mB\033[25m\033[m");
-	CHECK(vt->pri[1]->c[0].cp == 'B' && vt->pri[1]->c[0].attr == 0);
+	CHECK(vt->pri[1]->c[0].cp == 'B' && vt->pri[1]->c[0].attr == ATTR_TEXT);
 	/* DECREQTPARM, LEDs, ENQ, DECID: no answer, nothing written */
 	replybuf[0] = 0;
 	w(vt, "\033[x\033[1x\033[1;2q\005\033ZC");
@@ -1463,14 +1470,17 @@ static void test_resize_back(void)
 }
 
 /* The text of the history and the main screen, line by line as a selection
- * would join the rows, with each cell's colours and attributes: what a reflow
- * must leave as it was. Blank lines at the end do not count. */
+ * would join the rows, with each cell's colours and attributes, and behind each
+ * line the colour its end was erased in: what a reflow must leave as it was.
+ * Blank lines at the end do not count. */
 static size_t reflow_text(const struct vt *vt, uint32_t *out, size_t cap)
 {
 	size_t n = 0, text = 0;
+	bool any = false;
 	for (int64_t a = vt_abs_first(vt); a < (int64_t)vt->scrolled + vt->rows; a++) {
 		int len, wraps = vt_abs_wraps(vt, a);
 		const struct cell *l = vt_abs_line(vt, a, &len);
+		uint32_t fill;
 		if (a >= (int64_t)vt->scrolled) {
 			/* the main screen's rows, also behind the alternate screen,
 			 * by the rule of vt_abs_wraps */
@@ -1478,38 +1488,68 @@ static size_t reflow_text(const struct vt *vt, uint32_t *out, size_t cap)
 			l = r->c;
 			len = vt->cols;
 			wraps = r->wrap;
+			fill = r->fill;
 			for (int k = wraps; wraps && k < len; k++)
 				if ((l[k].cp != ' ' && l[k].cp != 0) || l[k].bg != COL_DEFAULT_BG ||
-				    l[k].attr)
+				    (l[k].attr & ~ATTR_TEXT))
 					wraps = 0;
+		} else {
+			int back = (int)((int64_t)vt->scrolled - 1 - a);
+			fill = vt->hist_fill[(vt->hist_head - 1 - back + vt->hist_cap) % vt->hist_cap];
 		}
-		/* blanks at the end are no text: default ones, or those a row was
-		 * erased with up to the last column, which are put there again */
-		struct cell f = { 0 };
-		if (!wraps && len == vt->cols)
-			f = l[len - 1];
-		if (wraps)
+		/* blanks at the end are no text: those nothing shows of, or those a
+		 * row was erased with up to the last column, which are put there
+		 * again; with none of these left in a full row, the row has the
+		 * colour */
+		if (wraps) {
 			len = wraps;
-		else if (f.cp == ' ' && (f.bg != COL_DEFAULT_BG || f.attr))
-			while (len > 0 && l[len - 1].cp == ' ' && l[len - 1].fg == f.fg &&
-			       l[len - 1].bg == f.bg && l[len - 1].attr == f.attr)
+			fill = COL_DEFAULT_BG;
+		} else if (fill != COL_DEFAULT_BG) {
+			;
+		} else if (len == vt->cols && !(l[len - 1].attr & ATTR_TEXT) &&
+			   l[len - 1].bg != COL_DEFAULT_BG) {
+			fill = l[len - 1].bg;
+			while (len > 0 && !(l[len - 1].attr & ATTR_TEXT) && l[len - 1].bg == fill)
 				len--;
-		else
+		} else {
 			while (len > 0 && l[len - 1].cp == ' ' && l[len - 1].bg == COL_DEFAULT_BG &&
-			       !l[len - 1].attr)
+			       !(l[len - 1].attr & ~ATTR_TEXT))
 				len--;
-		for (int x = 0; x < len && n + 4 < cap; x++) {
+		}
+		for (int x = 0; x < len && n + 6 < cap; x++) {
 			if (l[x].attr & ATTR_WDUMMY)
 				continue;
 			out[n++] = l[x].cp;
 			out[n++] = l[x].bg;
-			out[n++] = l[x].attr;
-			text = n;
+			out[n++] = l[x].attr & ~ATTR_TEXT; /* a reflow sets it on what is text */
+			any = true;
 		}
-		if (!wraps && n < cap)
+		if (!wraps && n + 2 < cap) {
 			out[n++] = '\n';
+			out[n++] = fill;
+			if (any)
+				text = n;
+			any = false;
+		}
 	}
 	return text;
+}
+
+/* Rows and cells as a reflow leaves them: all that shows, where the line goes on
+ * and what was erased behind it. An erased blank it laid out as text has
+ * ATTR_TEXT since; what was written had it before. */
+static bool reflow_cells(const struct cell *a, const struct cell *b, int n)
+{
+	for (int x = 0; x < n; x++)
+		if (a[x].cp != b[x].cp || a[x].fg != b[x].fg || a[x].bg != b[x].bg ||
+		    (a[x].attr | ATTR_TEXT) != (b[x].attr | ATTR_TEXT))
+			return false;
+	return true;
+}
+
+static bool reflow_rows(const struct row *a, const struct row *b, int cols)
+{
+	return a->wrap == b->wrap && a->fill == b->fill && reflow_cells(a->c, b->c, cols);
 }
 
 /* A line of random text for the reflow tests, ended by CR LF: letters, blanks
@@ -1777,8 +1817,9 @@ static void test_reflow(void)
 
 	/* Narrower or wider and back leaves a full screen and its history as they
 	 * were, cell for cell, against a second terminal that was never resized.
-	 * With rows erased in a colour, all but those blanks: where the text filled
-	 * a row of the other width to its end, there was no cell to keep one in. */
+	 * With rows erased in a colour as well: where the text filled a row of the
+	 * other width to its end, the row kept the colour. What is text and what
+	 * was erased behind it is the same too (reflow_text). */
 	enum { TEXT_MAX = 1 << 16 };
 	static uint32_t ta[TEXT_MAX], tb[TEXT_MAX];
 	fuzz_state = 0x243f6a8885a308d3ULL;
@@ -1801,23 +1842,22 @@ static void test_reflow(void)
 			bad += a->c.x != b->c.x || a->c.y != b->c.y || a->hist_count != b->hist_count ||
 			       a->scrolled != b->scrolled || na != nb || memcmp(ta, tb, na * sizeof *ta);
 			for (int r = 0; r < rows; r++) {
-				bool same = fuzz_rows(a->pri[r], b->pri[r], cols);
-				bad += bg ? a->pri[r]->wrap != b->pri[r]->wrap : !same;
-				filled += bg && same && a->pri[r]->c[cols - 1].bg != COL_DEFAULT_BG;
+				bad += !reflow_rows(a->pri[r], b->pri[r], cols);
+				filled += !(a->pri[r]->c[cols - 1].attr & ATTR_TEXT) &&
+					  a->pri[r]->c[cols - 1].bg != COL_DEFAULT_BG;
 			}
 			for (int64_t i = vt_abs_first(a); i < (int64_t)a->scrolled; i++) {
 				int la, lb;
 				const struct cell *ca = vt_abs_line(a, i, &la), *cb = vt_abs_line(b, i, &lb);
-				bool same = ca && cb && la == lb && fuzz_cells(ca, cb, la);
-				bad += bg ? vt_abs_wraps(a, i) != vt_abs_wraps(b, i) :
-					    !same || vt_abs_wraps(a, i) != vt_abs_wraps(b, i);
+				bad += !ca || !cb || la != lb || !reflow_cells(ca, cb, la) ||
+				       vt_abs_wraps(a, i) != vt_abs_wraps(b, i);
 			}
 		}
 		vt_free(a);
 		vt_free(b);
 	}
 	CHECK(bad == 0);
-	CHECK(filled > 100); /* and most of those blanks are back */
+	CHECK(filled > 100); /* and rows were erased in a colour up to their end */
 
 	/* Through any run of sizes the text stays what it was: every cell, its
 	 * colours and where its line ends, with the cursor behind it all, on the
@@ -1846,6 +1886,38 @@ static void test_reflow(void)
 		vt_free(b);
 	}
 	CHECK(bad == 0);
+
+	/* A row has what was erased behind it only while it is full and ends its
+	 * line, whatever is written after the reflow that left it: random streams
+	 * between random sizes, over rows erased in a colour. */
+	int fills = 0, kept = 0;
+	bad = 0;
+	for (int round = 0; round < 1000; round++) {
+		struct vt *v = mk(2 + (int)(fuzz_rand() % 20), 1 + (int)(fuzz_rand() % 6), 30);
+		for (int step = 0; step < 6; step++) {
+			for (int i = (int)(fuzz_rand() % (unsigned)(2 * v->rows)); i > 0; i--) {
+				char s[REFLOW_LINE];
+				reflow_line(s, v->cols, true);
+				w(v, s);
+			}
+			w(v, "\033[m");
+			/* narrow often: a line's text fills its last row more easily */
+			bad += !vt_resize(v, 1 + (int)(fuzz_rand() % (step % 2 ? 24 : 8)),
+					  1 + (int)(fuzz_rand() % 8)) || fuzz_broken(v);
+			int had = 0;
+			for (int r = 0; r < v->rows; r++)
+				had += v->pri[r]->fill != COL_DEFAULT_BG;
+			fills += had;
+			char buf[160];
+			vt_write(v, buf, fuzz_gen(buf, sizeof buf));
+			bad += fuzz_broken(v) != NULL;
+			for (int r = 0; had && r < v->rows; r++)
+				kept += v->pri[r]->fill != COL_DEFAULT_BG;
+		}
+		vt_free(v);
+	}
+	CHECK(bad == 0);
+	CHECK(fills > 200 && kept > 50); /* and rows had one, also after the stream */
 
 	/* blanks written at the end of a line are no text: narrower, they take no
 	 * rows of their own */
@@ -2026,14 +2098,245 @@ static void test_reflow_ends(void)
 	CHECK(l && len == 10 && l[7].cp == 'h' && l[8].cp == ' ' && l[8].bg == 1 && l[9].bg == 1);
 	vt_free(vt);
 	/* Where the text fills a row of the new width to its end, there is no
-	 * cell to keep such a blank in: they are gone then, also wider again. */
+	 * cell to keep such a blank in: the row has the colour then (row.fill), and
+	 * they are back in a wider window. */
 	vt = mk(10, 3, 10);
 	w(vt, "\033[41mabcdef\033[K\033[m\r\nx");
+	CHECK(vt->pri[0]->fill == COL_DEFAULT_BG);
 	CHECK(vt_resize(vt, 6, 3));
 	CHECK_STR(row(vt, 0), "abcdef");
 	CHECK_STR(row(vt, 1), "x");
+	CHECK(vt->pri[0]->fill == 1 && vt->pri[0]->used == 6 && vt->pri[1]->fill == COL_DEFAULT_BG);
 	CHECK(vt_resize(vt, 10, 3));
-	CHECK(vt->pri[0]->c[5].bg == 1 && vt->pri[0]->c[6].bg == COL_DEFAULT_BG);
+	CHECK(vt->pri[0]->c[5].bg == 1 && vt->pri[0]->c[6].bg == 1 && vt->pri[0]->c[9].bg == 1);
+	CHECK(vt->pri[0]->c[6].cp == ' ' && !vt->pri[0]->c[6].attr && vt->pri[0]->fill == COL_DEFAULT_BG);
+	CHECK(vt->pri[1]->c[1].bg == COL_DEFAULT_BG);
+	vt_free(vt);
+	/* through more widths that the text fills, on the last row of its line;
+	 * into the history with it and back, by another height and another width */
+	vt = mk(10, 3, 10);
+	w(vt, "\033[41mabcdef\033[K\033[m\r\nx");
+	CHECK(vt_resize(vt, 6, 3) && vt_resize(vt, 3, 3));
+	CHECK(vt->pri[0]->wrap == 3 && vt->pri[0]->fill == COL_DEFAULT_BG && vt->pri[1]->fill == 1);
+	CHECK(vt_resize(vt, 2, 3));
+	CHECK(vt->hist_count == 1 && vt->pri[1]->fill == 1 && vt->pri[1]->wrap == 0);
+	CHECK(vt_resize(vt, 2, 1));
+	CHECK(vt->hist_count == 3);
+	l = vt_abs_line(vt, vt_abs_first(vt) + 2, &len);
+	CHECK(l && len == 2 && l[1].cp == 'f' && vt_abs_wraps(vt, vt_abs_first(vt) + 2) == 0);
+	CHECK(vt_resize(vt, 2, 4));
+	CHECK(vt->hist_count == 0 && vt->pri[2]->fill == 1 && vt->pri[1]->fill == COL_DEFAULT_BG);
+	CHECK(vt_resize(vt, 2, 1) && vt_resize(vt, 4, 1));
+	CHECK(vt->hist_count == 2);
+	l = vt_abs_line(vt, vt_abs_first(vt) + 1, &len);
+	CHECK(l && len == 4 && l[1].cp == 'f' && l[2].cp == ' ' && l[2].bg == 1 && l[3].bg == 1);
+	CHECK(vt_resize(vt, 10, 3));
+	CHECK_STR(row(vt, 0), "abcdef");
+	CHECK(vt->pri[0]->c[6].bg == 1 && vt->pri[0]->c[9].bg == 1 && vt->pri[0]->used == 10);
+	vt_free(vt);
+	/* The blanks between the text and what was erased behind them are text
+	 * then, in the history too, which keeps no other blanks at a line's end. */
+	vt = mk(10, 2, 10);
+	w(vt, "ab\033[1;6H\033[41m\033[K\033[m\r\nx");
+	CHECK(vt_resize(vt, 5, 2));
+	CHECK(vt->pri[0]->fill == 1 && vt->pri[0]->used == 5);
+	w(vt, "\r\ny");
+	l = vt_abs_line(vt, vt_abs_first(vt), &len);
+	CHECK(vt->hist_count == 1 && l && len == 5);
+	CHECK(vt_resize(vt, 10, 2));
+	l = vt_abs_line(vt, vt_abs_first(vt), &len);
+	CHECK(l && len == 10 && l[2].bg == COL_DEFAULT_BG && l[4].bg == COL_DEFAULT_BG &&
+	      l[5].bg == 1 && l[9].bg == 1);
+	vt_free(vt);
+	/* The colour is what was right of the row's end: gone once the last cell
+	 * is written, as in a terminal this wide, and not with another one. */
+	vt = mk(10, 3, 10);
+	w(vt, "\033[41mabcdef\033[K\033[m\r\nx");
+	CHECK(vt_resize(vt, 6, 3));
+	w(vt, "\033[1;1HA\033[1;5HE");
+	CHECK(vt->pri[0]->fill == 1);
+	w(vt, "F");
+	CHECK(vt->pri[0]->fill == COL_DEFAULT_BG);
+	CHECK(vt_resize(vt, 10, 3));
+	CHECK_STR(row(vt, 0), "AbcdEF");
+	CHECK(vt->pri[0]->c[6].bg == COL_DEFAULT_BG && vt->pri[0]->used == 6);
+	vt_free(vt);
+	/* erased, the last cell is what the erase left: nothing, or another colour */
+	vt = mk(10, 3, 10);
+	w(vt, "\033[41mabcdef\033[K\033[m\r\nx");
+	CHECK(vt_resize(vt, 6, 3));
+	w(vt, "\033[1;6H\033[K");
+	CHECK(vt->pri[0]->fill == COL_DEFAULT_BG && vt->pri[0]->used == 5);
+	CHECK(vt_resize(vt, 10, 3));
+	CHECK_STR(row(vt, 0), "abcde");
+	CHECK(vt->pri[0]->c[5].bg == COL_DEFAULT_BG && vt->pri[0]->used == 5);
+	vt_free(vt);
+	vt = mk(10, 3, 10);
+	w(vt, "\033[41mabcdef\033[K\033[m\r\nx");
+	CHECK(vt_resize(vt, 6, 3));
+	w(vt, "\033[1;6H\033[44m\033[X\033[m");
+	CHECK(vt->pri[0]->fill == COL_DEFAULT_BG);
+	CHECK(vt_resize(vt, 10, 3));
+	CHECK(vt->pri[0]->c[4].bg == 1 && vt->pri[0]->c[5].bg == 4 && vt->pri[0]->c[9].bg == 4);
+	vt_free(vt);
+	/* cells put in or taken out move the last one: ICH, insert mode, DCH */
+	static const char *const moved[] = { "\033[1;2H\033[@", "\033[1;2H\033[4hX\033[4l", "\033[1;2H\033[P" };
+	for (int i = 0; i < 3; i++) {
+		vt = mk(10, 3, 10);
+		w(vt, "\033[41mabcdef\033[K\033[m\r\nx");
+		CHECK(vt_resize(vt, 6, 3));
+		CHECK(vt->pri[0]->fill == 1);
+		w(vt, moved[i]);
+		CHECK(vt->pri[0]->fill == COL_DEFAULT_BG);
+		CHECK(vt_resize(vt, 10, 3));
+		CHECK(vt->pri[0]->c[9].bg == COL_DEFAULT_BG && vt->pri[1]->c[0].cp == 'x');
+		vt_free(vt);
+	}
+	/* and a line that goes on does not end in the row: the cursor waited
+	 * behind the text that fills it, and the next character wraps */
+	vt = mk(10, 3, 10);
+	w(vt, "\033[41mabcdef\033[K\033[m\033[1;7H");
+	CHECK(vt_resize(vt, 6, 3));
+	CHECK(vt->pri[0]->fill == 1 && vt->c.x == 5 && vt->c.wrapnext);
+	w(vt, "g");
+	CHECK(vt->pri[0]->wrap == 6 && vt->pri[0]->fill == COL_DEFAULT_BG);
+	CHECK(vt_resize(vt, 10, 3));
+	CHECK_STR(row(vt, 0), "abcdefg");
+	CHECK(vt->pri[0]->c[7].bg == COL_DEFAULT_BG);
+	vt_free(vt);
+	/* so with a wide glyph that leaves the last cell out of the line */
+	vt = mk(10, 3, 10);
+	w(vt, "\033[41mab\033[m   \033[41m\033[K\033[m\033[1;6H");
+	CHECK(vt_resize(vt, 5, 3));
+	CHECK(vt->pri[0]->fill == 1 && vt->c.x == 4 && vt->c.wrapnext);
+	w(vt, "\033[1;5H\xe6\xbc\xa2");
+	CHECK(vt->pri[0]->wrap == 4 && vt->pri[0]->fill == COL_DEFAULT_BG);
+	vt_free(vt);
+	/* a window of the same width keeps it, one of another height as well; the
+	 * alternate screen, which is not laid out anew, has none */
+	vt = mk(10, 3, 10);
+	w(vt, "\033[41mabcdef\033[K\033[m\r\nx");
+	CHECK(vt_resize(vt, 6, 3) && vt_resize(vt, 6, 5));
+	CHECK(vt->pri[0]->fill == 1);
+	w(vt, "\033[?1049h");
+	CHECK(vt_resize(vt, 6, 2) && vt_resize(vt, 10, 2));
+	CHECK(vt->alt[0]->fill == COL_DEFAULT_BG && vt->alt[1]->fill == COL_DEFAULT_BG);
+	w(vt, "\033[?1049l");
+	CHECK(vt->pri[0]->c[5].cp == 'f' && vt->pri[0]->c[6].bg == 1 && vt->pri[0]->c[9].bg == 1);
+	vt_free(vt);
+
+	/* Blanks written in a background colour are text, those of an erase are
+	 * not (ATTR_TEXT): a bar of written blanks takes the rows its width needs,
+	 * up to the last column too, and is as wide as it was in a wider window. */
+	vt = mk(10, 4, 10);
+	w(vt, "\033[44m          \033[m\r\nX");
+	CHECK(vt->pri[0]->used == 10 && (vt->pri[0]->c[9].attr & ATTR_TEXT));
+	CHECK(vt_resize(vt, 5, 4));
+	CHECK(vt->pri[0]->wrap == 5 && vt->pri[1]->used == 5 && vt->pri[1]->c[4].bg == 4);
+	CHECK(vt->pri[1]->fill == COL_DEFAULT_BG);
+	CHECK_STR(row(vt, 2), "X");
+	CHECK(vt_resize(vt, 12, 4));
+	CHECK(vt->pri[0]->c[9].bg == 4 && vt->pri[0]->c[10].bg == COL_DEFAULT_BG && vt->pri[0]->used == 10);
+	CHECK_STR(row(vt, 1), "X");
+	vt_free(vt);
+	/* the row erased in the colour is one row, and reaches the new last column */
+	vt = mk(10, 4, 10);
+	w(vt, "\033[44m\033[K\033[m\r\nX");
+	CHECK(vt->pri[0]->used == 10 && !vt->pri[0]->c[9].attr);
+	CHECK(vt_resize(vt, 5, 4));
+	CHECK(vt->pri[0]->wrap == 0 && vt->pri[0]->c[4].bg == 4);
+	CHECK_STR(row(vt, 1), "X");
+	CHECK(vt_resize(vt, 12, 4));
+	CHECK(vt->pri[0]->c[11].bg == 4);
+	vt_free(vt);
+	/* written ones before the erased: text, and what follows them is put
+	 * behind them again; erased ones before written ones are in the line */
+	vt = mk(10, 4, 10);
+	w(vt, "\033[44mab  \033[K\033[m\r\nX");
+	CHECK(vt_resize(vt, 4, 4));
+	CHECK(vt->pri[0]->used == 4 && vt->pri[0]->wrap == 0 && vt->pri[0]->fill == 4);
+	CHECK_STR(row(vt, 1), "X");
+	CHECK(vt_resize(vt, 3, 4));
+	CHECK(vt->pri[0]->wrap == 3 && vt->pri[1]->used == 3 && vt->pri[1]->c[0].attr == ATTR_TEXT &&
+	      !vt->pri[1]->c[1].attr && vt->pri[1]->c[2].bg == 4);
+	vt_free(vt);
+	vt = mk(10, 4, 10);
+	w(vt, "\033[44m\033[K\033[1;9H  \033[m\r\nX");
+	CHECK(vt_resize(vt, 5, 4));
+	CHECK(vt->pri[0]->wrap == 5 && vt->pri[1]->used == 5 && vt->pri[1]->wrap == 0);
+	CHECK(vt->pri[1]->c[2].bg == 4 && vt->pri[1]->c[3].attr == ATTR_TEXT);
+	CHECK_STR(row(vt, 2), "X");
+	vt_free(vt);
+	/* Blanks of an erase that ends before the last column are text, and stay
+	 * so where another width puts them in a last column: laid out as text,
+	 * they are marked as what was written is. Not marked, they passed for what
+	 * the row's end was erased in, and reached the last column of any width
+	 * after. */
+	vt = mk(10, 4, 10);
+	w(vt, "\033[44mabcd\033[4X\033[m\r\nX");
+	CHECK(!vt->pri[0]->c[4].attr && vt->pri[0]->c[7].bg == 4 && vt->pri[0]->used == 8);
+	CHECK(vt_resize(vt, 4, 4));
+	CHECK(vt->pri[0]->wrap == 4 && vt->pri[1]->used == 4 && vt->pri[1]->wrap == 0);
+	CHECK(vt->pri[1]->c[0].attr == ATTR_TEXT && vt->pri[1]->c[3].attr == ATTR_TEXT && vt->pri[1]->c[3].bg == 4);
+	CHECK_STR(row(vt, 2), "X");
+	CHECK(vt_resize(vt, 10, 4));
+	CHECK(vt->pri[0]->used == 8 && vt->pri[0]->c[7].bg == 4 && vt->pri[0]->c[8].bg == COL_DEFAULT_BG);
+	CHECK(vt_resize(vt, 3, 4));
+	CHECK(vt->pri[0]->wrap == 3 && vt->pri[1]->wrap == 3 && vt->pri[2]->used == 2 && vt->pri[2]->c[1].bg == 4);
+	CHECK_STR(row(vt, 3), "X");
+	vt_free(vt);
+	/* Not those that are text only for the cursor behind them: with the
+	 * cursor gone they are what the row was erased in again, and take no rows. */
+	vt = mk(10, 3, 10);
+	w(vt, "ab\033[44m\033[K\033[m\033[1;7H");
+	CHECK(vt_resize(vt, 8, 3));
+	CHECK(vt->c.x == 6 && vt->pri[0]->used == 8 && !vt->pri[0]->c[3].attr && vt->pri[0]->c[7].bg == 4);
+	w(vt, "\033[2;1H");
+	CHECK(vt_resize(vt, 4, 3));
+	CHECK(vt->pri[0]->used == 4 && vt->pri[0]->wrap == 0 && vt->pri[0]->c[3].bg == 4 && !vt->pri[0]->c[3].attr);
+	CHECK(vt->pri[1]->used == 0 && vt->c.y == 1);
+	vt_free(vt);
+	/* A row with such a colour is not empty, as it was not with the cells that
+	 * held it: the text ends there, and the screen shows it rather than the
+	 * rows above the cursor's. */
+	vt = mk(6, 3, 10);
+	w(vt, "abcd\033[2;4H\033[44m\033[K\033[m\033[1;5H");
+	CHECK(vt_resize(vt, 3, 3));
+	CHECK(vt->hist_count == 0 && vt->c.x == 1 && vt->c.y == 1);
+	CHECK(vt->pri[2]->fill == 4 && vt->pri[2]->used == 3 && vt->pri[2]->c[2].bg == COL_DEFAULT_BG);
+	CHECK(vt_resize(vt, 2, 3));
+	CHECK(vt->hist_count == 1 && vt->c.x == 1 && vt->c.y == 0 && vt->c.wrapnext);
+	CHECK_STR(row(vt, 0), "cd");
+	CHECK(vt->pri[1]->wrap == 2 && vt->pri[2]->used == 2 && vt->pri[2]->c[1].bg == 4);
+	vt_free(vt);
+	/* nor where they fill the row to its end: they are of what the row was
+	 * erased in themselves, and the row needs no colour of its own */
+	vt = mk(10, 3, 10);
+	w(vt, "ab\033[44m\033[K\033[m\033[1;7H");
+	CHECK(vt_resize(vt, 6, 3));
+	CHECK(vt->c.x == 5 && vt->c.wrapnext && vt->pri[0]->used == 6);
+	CHECK(vt->pri[0]->fill == COL_DEFAULT_BG && !vt->pri[0]->c[5].attr && vt->pri[0]->c[5].bg == 4);
+	w(vt, "\033[2;1H");
+	CHECK(vt_resize(vt, 3, 3));
+	CHECK(vt->pri[0]->used == 3 && vt->pri[0]->wrap == 0 && vt->pri[0]->c[2].bg == 4 && vt->pri[1]->used == 0);
+	vt_free(vt);
+	/* What a program writes is text by every way: a run of ASCII, one
+	 * character, DEC graphics, a wide glyph and its other half, REP. */
+	vt = mk(12, 2, 0);
+	w(vt, "ab\xc3\xa4\033(0q\033(B\xe6\xbc\xa2 \033[3b");
+	for (int x = 0; x < 10; x++)
+		CHECK(vt->pri[0]->c[x].attr & ATTR_TEXT);
+	CHECK(!vt->pri[0]->c[10].attr && vt->pri[0]->used == 10);
+	/* not what an erase leaves, nor half a wide glyph mended */
+	w(vt, "\033[1;1H\033[2X\033[1;6H\033[X");
+	CHECK(!vt->pri[0]->c[0].attr && !vt->pri[0]->c[1].attr && (vt->pri[0]->c[2].attr & ATTR_TEXT));
+	CHECK(vt->pri[0]->c[4].cp == ' ' && !vt->pri[0]->c[4].attr && !vt->pri[0]->c[5].attr);
+	vt_free(vt);
+	/* A blank that was written and shows nothing is as one that was not: the
+	 * cell a wide glyph did not fit in is still left out of the line. */
+	vt = mk(5, 3, 10);
+	w(vt, "abcd \033[1;5H\xe6\xbc\xa2");
+	CHECK(vt->pri[0]->c[4].attr == ATTR_TEXT && vt->pri[0]->wrap == 4 && vt_abs_wraps(vt, 0) == 4);
 	vt_free(vt);
 	/* Blanks with a colour or an attribute that do not reach the last column
 	 * are text, a default blank after them or not. */
@@ -2794,7 +3097,7 @@ static void test_sgr_details(void)
 	CHECK((l[0].attr & ATTR_DIM) && !(l[1].attr & (ATTR_BOLD | ATTR_DIM)));
 	CHECK((l[2].attr & ATTR_UNDERLINE) && !(l[3].attr & ATTR_UNDERLINE));
 	CHECK(l[4].attr & ATTR_UNDERLINE);
-	CHECK(l[5].cp == 'f' && !l[5].attr && l[6].cp == 'g' && !l[6].attr);
+	CHECK(l[5].cp == 'f' && l[5].attr == ATTR_TEXT && l[6].cp == 'g' && l[6].attr == ATTR_TEXT);
 	CHECK((l[7].attr & ATTR_BOLD) && !(l[7].attr & (ATTR_DIM | ATTR_ITALIC)) && l[7].fg == 1);
 	CHECK(!(l[8].attr & (ATTR_DIM | ATTR_ITALIC)));
 	vt_free(vt);

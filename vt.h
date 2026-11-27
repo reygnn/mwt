@@ -27,6 +27,9 @@ enum {
 	ATTR_WDUMMY    = 1 << 9,  /* right half, cp is 0 */
 	/* 1 << 10 free: that a line goes on in the next row is the row's, row.wrap */
 	ATTR_DECGFX    = 1 << 11, /* cp came from DEC special graphics, for DECRQCRA */
+	ATTR_TEXT      = 1 << 12, /* written, not left by an erase: of two blanks
+	                           * in a background color, the one that is text.
+	                           * Also what another width laid out as text. */
 };
 
 struct cell {
@@ -46,6 +49,12 @@ struct row {
 	 * the alternate screen once the window grew wider: that one is not laid
 	 * out anew, the line still ends where it did. */
 	int wrap;
+	/* The background the row's end was erased in, of which no cell is left:
+	 * another width laid the line out so that its text fills the row. A wider
+	 * one puts it behind the text again. COL_DEFAULT_BG for none, and with
+	 * any other the row is full (used is vt.cols) and ends its line; gone
+	 * once the last cell is written or erased, as in a terminal this wide. */
+	uint32_t fill;
 	struct cell c[];
 };
 
@@ -115,6 +124,7 @@ struct vt {
 	int *hist_len;             /* never above cols: laid out anew with the screen */
 	int *hist_room;            /* cells each slot holds; it only grows */
 	int *hist_wrap;            /* as row.wrap, never above hist_len */
+	uint32_t *hist_fill;       /* as row.fill, hist_len is cols with one */
 	int hist_cap, hist_count, hist_head; /* head: index of next slot */
 	int view;                 /* lines scrolled back, 0 = live */
 	uint64_t scrolled;        /* What the lines are counted from: abs = row +

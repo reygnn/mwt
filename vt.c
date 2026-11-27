@@ -91,12 +91,19 @@ static bool is_default_blank(struct cell c)
 	return c.cp == ' ' && c.fg == COL_DEFAULT_FG && c.bg == COL_DEFAULT_BG && !c.attr;
 }
 
-/* The cells of a row that are text: without the blanks at its end, of which
- * only the background would show, but none of the first min. */
+/* Whether nothing of the cell shows: a blank in the default background and
+ * with no attribute, erased or written (ATTR_TEXT), in any foreground. */
+static bool shows_nothing(struct cell c)
+{
+	return c.cp == ' ' && c.bg == COL_DEFAULT_BG && !(c.attr & ~ATTR_TEXT);
+}
+
+/* The cells of a row that are text: without the blanks at its end of which
+ * nothing shows, but none of the first min. Those a program wrote go too: a
+ * row padded with blanks is no line that long. */
 static int text_len(const struct cell *l, int len, int min)
 {
-	while (len > min && l[len - 1].cp == ' ' && l[len - 1].bg == COL_DEFAULT_BG &&
-	       !l[len - 1].attr)
+	while (len > min && shows_nothing(l[len - 1]))
 		len--;
 	return len;
 }
@@ -107,7 +114,8 @@ static int text_len(const struct cell *l, int len, int min)
 static int wrap_holds(const struct cell *l, int n, int wrap)
 {
 	for (int k = wrap; wrap && k < n; k++)
-		if ((l[k].cp != ' ' && l[k].cp != 0) || l[k].bg != COL_DEFAULT_BG || l[k].attr)
+		if ((l[k].cp != ' ' && l[k].cp != 0) || l[k].bg != COL_DEFAULT_BG ||
+		    (l[k].attr & ~ATTR_TEXT))
 			return 0;
 	return wrap;
 }
@@ -122,11 +130,15 @@ static void touch(struct row *l, int end)
 /* Cells [from, to) of the row are written or erased. With the last one before
  * the wrap among them the line ends in this row, as for a program that fills the
  * last column and then moves the cursor: only put() running into the end of the
- * row makes a line go on, and shift_right() keeps one that did. */
+ * row makes a line go on, and shift_right() keeps one that did. With the row's
+ * last cell among them, what was erased behind it is forgotten (row.fill): a
+ * row with a fill is full, so that cell ends at used. */
 static void unwrap(struct row *l, int from, int to)
 {
 	if (from < l->wrap && l->wrap <= to)
 		l->wrap = 0;
+	if (to >= l->used)
+		l->fill = COL_DEFAULT_BG;
 }
 
 /* cells [from, to) of the row have been written */
@@ -183,6 +195,7 @@ static struct row **alloc_screen(int cols, int rows)
 			return NULL;
 		}
 		s[r]->used = s[r]->wrap = 0; /* nothing written, and it ends here */
+		s[r]->fill = COL_DEFAULT_BG;
 		fill(s[r]->c, 0, cols, b);
 	}
 	return s;
@@ -245,6 +258,7 @@ static void shift_right(struct vt *vt, struct row *l, int x, int n)
 	if (l->c[vt->cols - 1].attr & ATTR_WIDE)
 		set_cell(l, vt->cols - 1, blank(vt));
 	l->wrap = x < wrap ? MIN(wrap + n, vt->cols) : wrap;
+	l->fill = COL_DEFAULT_BG; /* the last cell is another one */
 }
 
 static void clear_line(struct vt *vt, int y, int x0, int x1)
@@ -280,10 +294,11 @@ static void push_hist(struct vt *vt, const struct row *row)
 {
 	if (vt->hist_cap <= 0)
 		return;
-	/* trim trailing default blanks, but none of the cells before a wrap; a
-	 * screen row is blank from row.used on, so the search starts there */
+	/* trim trailing default blanks, but none of the cells before a wrap, nor
+	 * those before a fill, which are between the text and it; a screen row is
+	 * blank from row.used on, so the search starts there */
 	const struct cell *l = row->c;
-	int len = text_len(l, row->used, row->wrap);
+	int len = text_len(l, row->used, row->fill != COL_DEFAULT_BG ? row->used : row->wrap);
 	int slot = vt->hist_head;
 	struct cell *dst = vt->hist[slot];
 	/* a slot keeps its cells: once the history is full, a line that fits
@@ -301,6 +316,7 @@ static void push_hist(struct vt *vt, const struct row *row)
 		memcpy(dst, l, len * sizeof *dst);
 	vt->hist_len[slot] = dst ? len : 0;
 	vt->hist_wrap[slot] = dst ? row->wrap : 0;
+	vt->hist_fill[slot] = dst ? row->fill : COL_DEFAULT_BG;
 	vt->hist_head = (slot + 1) % vt->hist_cap;
 	if (vt->hist_count < vt->hist_cap)
 		vt->hist_count++;
@@ -595,9 +611,11 @@ struct vt *vt_new(int cols, int rows, int histsize, const struct vt_callbacks *c
 		vt->hist_len = calloc(vt->hist_cap, sizeof *vt->hist_len);
 		vt->hist_room = calloc(vt->hist_cap, sizeof *vt->hist_room);
 		vt->hist_wrap = calloc(vt->hist_cap, sizeof *vt->hist_wrap);
+		vt->hist_fill = calloc(vt->hist_cap, sizeof *vt->hist_fill);
 	}
 	if (!vt->pri || !vt->alt || !vt->dirty || !vt->tabs ||
-	    (vt->hist_cap && (!vt->hist || !vt->hist_len || !vt->hist_room || !vt->hist_wrap))) {
+	    (vt->hist_cap && (!vt->hist || !vt->hist_len || !vt->hist_room || !vt->hist_wrap ||
+			      !vt->hist_fill))) {
 		vt_free(vt);
 		return NULL;
 	}
@@ -619,6 +637,7 @@ void vt_free(struct vt *vt)
 	free(vt->hist_len);
 	free(vt->hist_room);
 	free(vt->hist_wrap);
+	free(vt->hist_fill);
 	free(vt->dirty);
 	free(vt->tabs);
 	free(vt);
@@ -641,6 +660,8 @@ static struct row **copy_screen(const struct vt *vt, struct row **old, int shift
 		memcpy(s[r]->c, o->c, s[r]->used * sizeof *o->c);
 		/* a line cut before its wrap ends there */
 		s[r]->wrap = o->wrap <= cols ? o->wrap : 0;
+		/* only the main screen has one, and that with its width kept */
+		s[r]->fill = o->fill;
 		if (cols < vt->cols && (s[r]->c[cols - 1].attr & ATTR_WIDE))
 			s[r]->c[cols - 1] = b;
 	}
@@ -679,12 +700,13 @@ struct reflow {
 	int nm;
 	int64_t row;        /* the row being filled */
 	int x;              /* cells in it */
-	bool fill;          /* the second walk */
+	bool out;           /* the second walk */
 	int64_t top;
 	struct cell *buf;   /* the row being filled, cols cells */
 	struct row **scr;
 	struct cell **hist;
 	int *hist_len, *hist_room, *hist_wrap;
+	uint32_t *hist_fill;
 	int hist_n;
 	bool nomem;
 };
@@ -693,20 +715,21 @@ struct reflow {
  * and in *more whether the line goes on in the next row. A row goes on where a
  * selection would join it to the next (vt_abs_wraps), and the last one never.
  *
- * Blanks at the end of a line are no text: default ones are nothing, and of
- * those an erase in a background colour leaves (blank()), where they reach the
- * last column, *fill is one. They are not laid out but put behind the line's
- * text again, up to the new last column: counted as text, a row erased in a
- * colour took two rows one column narrower. Blanks with an attribute or a
- * foreground were written and are text; so are those of an erase that end
- * before the last column. Written ones of a background alone that happen to
- * end in the last column cannot be told from an erase, and count as one. The
- * first keep cells are text whatever they hold: the blanks between a prompt
- * and the cursor behind them, without which the cursor had no place to be, and
- * those before a cursor in a row that holds nothing: clamped into a narrower
- * row, it was not back in its column in a wider one. */
-static const struct cell *old_row(const struct vt *vt, int g, int keep, int *n, bool *more,
-				  const struct cell **fill)
+ * Blanks at the end of a line are no text: those nothing shows of are nothing,
+ * and of those an erase in a background colour left (blank(), no ATTR_TEXT),
+ * where they reach the last column, *fill is the colour, COL_DEFAULT_BG with
+ * none. They are not laid out but put behind the line's text again, up to the
+ * new last column: counted as text, a row erased in a colour took two rows one
+ * column narrower. Where an earlier width left no cell for them, the row has
+ * the colour (row.fill), and its cells are text up to the last. Blanks that were
+ * written are text if anything shows of them, and so are those of an erase that
+ * end before the last column. The first keep cells are text whatever they
+ * hold: the blanks between a prompt and the cursor behind them, without which
+ * the cursor had no place to be, and those before a cursor in a row that holds
+ * nothing: clamped into a narrower row, it was not back in its column in a
+ * wider one. In *own, how many cells are text without that. */
+static const struct cell *old_row(const struct vt *vt, int g, int keep, int *n, int *own,
+				  bool *more, uint32_t *fill)
 {
 	const struct cell *l;
 	int len, wrap;
@@ -715,38 +738,44 @@ static const struct cell *old_row(const struct vt *vt, int g, int keep, int *n, 
 		l = vt->hist[slot];
 		len = vt->hist_len[slot];
 		wrap = vt->hist_wrap[slot];
+		*fill = vt->hist_fill[slot];
 	} else {
 		const struct row *r = vt->pri[g - vt->hist_count];
 		l = r->c;
 		len = r->used;
 		wrap = r->wrap;
+		*fill = r->fill;
 	}
-	*fill = NULL;
 	wrap = wrap_holds(l, len, wrap);
 	*more = wrap && g + 1 < vt->hist_count + vt->rows;
-	if (wrap) {
-		*n = wrap;
+	if (wrap) { /* and no fill: the line does not end here */
+		*n = *own = wrap;
+		return l;
+	}
+	if (*fill != COL_DEFAULT_BG) {
+		*n = *own = len;
 		return l;
 	}
 	const struct cell *f = len == vt->cols ? &l[len - 1] : NULL;
-	if (f && f->cp == ' ' && f->fg == COL_DEFAULT_FG && f->bg != COL_DEFAULT_BG && !f->attr) {
-		while (len > 0 && l[len - 1].cp == ' ' && l[len - 1].fg == COL_DEFAULT_FG &&
-		       l[len - 1].bg == f->bg && !l[len - 1].attr)
+	if (f && !(f->attr & ATTR_TEXT) && f->bg != COL_DEFAULT_BG) {
+		*fill = f->bg;
+		while (len > 0 && !(l[len - 1].attr & ATTR_TEXT) && l[len - 1].bg == *fill)
 			len--;
-		*fill = f;
 	} else {
 		len = text_len(l, len, 0);
 	}
+	*own = len;
 	*n = MAX(len, keep);
 	return l;
 }
 
 /* The row being filled is done: the line goes on after wrap cells, or ends
- * with 0. Out of memory the walk goes on, for nothing. */
-static void reflow_row_done(struct reflow *rf, int wrap)
+ * with 0, and then fill is what was erased behind it and found no cell. Out
+ * of memory the walk goes on, for nothing. */
+static void reflow_row_done(struct reflow *rf, int wrap, uint32_t fill)
 {
 	int64_t r = rf->row - rf->top;
-	if (rf->fill && r >= -rf->hist_n && r < rf->rows && !rf->nomem) {
+	if (rf->out && r >= -rf->hist_n && r < rf->rows && !rf->nomem) {
 		size_t size = (size_t)rf->x * sizeof *rf->buf;
 		if (r < 0) {
 			int k = (int)(r + rf->hist_n);
@@ -756,6 +785,7 @@ static void reflow_row_done(struct reflow *rf, int wrap)
 				rf->hist_len[k] = rf->x;
 				rf->hist_room[k] = MAX(rf->x, 1);
 				rf->hist_wrap[k] = wrap;
+				rf->hist_fill[k] = fill;
 			} else {
 				rf->nomem = true;
 			}
@@ -764,6 +794,7 @@ static void reflow_row_done(struct reflow *rf, int wrap)
 			memcpy(l->c, rf->buf, size);
 			l->used = rf->x;
 			l->wrap = wrap;
+			l->fill = fill;
 		}
 	}
 	rf->row++;
@@ -797,14 +828,14 @@ static void reflow_walk(struct reflow *rf)
 	rf->x = 0;
 	for (int g = 0; g < total && !rf->nomem; g++) {
 		/* the screen is full: what follows fell off its end */
-		if (rf->fill && rf->row >= rf->top + rf->rows)
+		if (rf->out && rf->row >= rf->top + rf->rows)
 			break;
-		int n;
+		int n, own;
 		bool more, marked = false;
-		const struct cell *fill;
+		uint32_t fill;
 		/* m[0] is the cursor: the cells before it are text */
 		const struct cell *l = old_row(vt, g, rf->m[0].g == g ? MIN(rf->m[0].x, vt->cols) : 0,
-					       &n, &more, &fill);
+					       &n, &own, &more, &fill);
 		for (int k = 0; k < rf->nm; k++) {
 			struct mark *m = &rf->m[k];
 			/* In a row that goes on, a wrap pending behind its last column
@@ -826,7 +857,7 @@ static void reflow_walk(struct reflow *rf)
 		 * the alternate screen after a wider window. Left out, all below it
 		 * moved up a row with every other width. */
 		if (joined && !more && !n && rf->x)
-			reflow_row_done(rf, rf->x);
+			reflow_row_done(rf, rf->x, COL_DEFAULT_BG);
 		joined = more;
 		for (int i = 0; i < n; i++) {
 			struct cell c = l[i];
@@ -843,10 +874,15 @@ static void reflow_walk(struct reflow *rf)
 				continue;
 			}
 			if (rf->x + w > cols)
-				reflow_row_done(rf, rf->x);
+				reflow_row_done(rf, rf->x, COL_DEFAULT_BG);
 			if (marked)
 				reflow_mark(rf, g, i, i + w, rf->x, 1);
-			if (rf->fill) {
+			if (rf->out) {
+				/* A blank of an erase that is text here is so from now
+				 * on: in the last column of another width it would
+				 * pass for what the row's end was erased in. */
+				if (i < own)
+					c.attr |= ATTR_TEXT;
 				rf->buf[rf->x] = c;
 				if (w == 2)
 					rf->buf[rf->x + 1] = l[i + 1];
@@ -858,9 +894,12 @@ static void reflow_walk(struct reflow *rf)
 			continue;
 		if (marked)
 			reflow_mark(rf, g, n, INT_MAX, rf->x, 1);
-		for (; fill && rf->fill && rf->x < cols; rf->x++)
-			rf->buf[rf->x] = *fill;
-		reflow_row_done(rf, 0);
+		/* the fill in the cells the text leaves, or the row's with none left;
+		 * cells kept for the cursor are of the fill themselves */
+		bool full = rf->x == cols && n == own;
+		for (; fill != COL_DEFAULT_BG && rf->out && rf->x < cols; rf->x++)
+			rf->buf[rf->x] = (struct cell){ ' ', COL_DEFAULT_FG, fill, 0 };
+		reflow_row_done(rf, 0, full ? fill : COL_DEFAULT_BG);
 	}
 }
 
@@ -873,10 +912,12 @@ static void reflow_free(const struct vt *vt, struct reflow *rf)
 	free(rf->hist_len);
 	free(rf->hist_room);
 	free(rf->hist_wrap);
+	free(rf->hist_fill);
 	free(rf->buf);
 	rf->scr = NULL;
 	rf->hist = NULL;
 	rf->hist_len = rf->hist_room = rf->hist_wrap = NULL;
+	rf->hist_fill = NULL;
 	rf->buf = NULL;
 }
 
@@ -884,7 +925,8 @@ static void reflow_free(const struct vt *vt, struct reflow *rf)
  * is; false when out of memory, and then nothing is allocated. m[0] is the
  * cursor, or the place it left behind for the alternate screen, m[1] the saved
  * cursor; m[2] is set to the first row of the screen, m[3] to the end of its
- * text: the last row with any, the cursor's if none comes after it.
+ * text: the last row with any or with a colour it was erased in, the cursor's
+ * if none comes after it.
  *
  * Which rows the screen shows: those it showed, from its first row on. Text
  * that reached the last row still does, as lines come back from the history
@@ -897,7 +939,8 @@ static void reflow_free(const struct vt *vt, struct reflow *rf)
 static bool reflow(const struct vt *vt, int cols, int rows, struct reflow *rf, struct mark *m)
 {
 	int cy = m[0].g - vt->hist_count, e = vt->rows - 1;
-	while (e > cy && !vt->pri[e]->wrap && !text_len(vt->pri[e]->c, vt->pri[e]->used, 0))
+	while (e > cy && !vt->pri[e]->wrap && vt->pri[e]->fill == COL_DEFAULT_BG &&
+	       !text_len(vt->pri[e]->c, vt->pri[e]->used, 0))
 		e--;
 	*rf = (struct reflow){ .vt = vt, .cols = cols, .rows = rows, .m = m, .nm = 4 };
 	m[2] = (struct mark){ .g = vt->hist_count };
@@ -919,11 +962,13 @@ static bool reflow(const struct vt *vt, int cols, int rows, struct reflow *rf, s
 		rf->hist_len = calloc(vt->hist_cap, sizeof *rf->hist_len);
 		rf->hist_room = calloc(vt->hist_cap, sizeof *rf->hist_room);
 		rf->hist_wrap = calloc(vt->hist_cap, sizeof *rf->hist_wrap);
+		rf->hist_fill = calloc(vt->hist_cap, sizeof *rf->hist_fill);
 	}
-	rf->nomem = !rf->scr || !rf->buf || (vt->hist_cap && (!rf->hist || !rf->hist_len ||
-							       !rf->hist_room || !rf->hist_wrap));
+	rf->nomem = !rf->scr || !rf->buf ||
+		    (vt->hist_cap && (!rf->hist || !rf->hist_len || !rf->hist_room ||
+				      !rf->hist_wrap || !rf->hist_fill));
 	if (!rf->nomem) {
-		rf->fill = true;
+		rf->out = true;
 		reflow_walk(rf);
 		/* the row the last one went on into fell off the screen's end: the
 		 * line ends there, as in copy_screen() */
@@ -1006,10 +1051,12 @@ bool vt_resize(struct vt *vt, int cols, int rows)
 		free(vt->hist_len);
 		free(vt->hist_room);
 		free(vt->hist_wrap);
+		free(vt->hist_fill);
 		vt->hist = rf.hist;
 		vt->hist_len = rf.hist_len;
 		vt->hist_room = rf.hist_room;
 		vt->hist_wrap = rf.hist_wrap;
+		vt->hist_fill = rf.hist_fill;
 		vt->hist_count = rf.hist_n;
 		if (vt->hist_cap) {
 			vt->hist_head = rf.hist_n % vt->hist_cap;
@@ -1040,6 +1087,7 @@ bool vt_resize(struct vt *vt, int cols, int rows)
 			if (l->used)
 				memcpy(l->c, vt->hist[slot], l->used * sizeof *l->c);
 			l->wrap = vt->hist_wrap[slot];
+			l->fill = vt->hist_fill[slot];
 		}
 		if (pull) {
 			vt->hist_head = hist_slot(vt, pull - 1);
@@ -1130,6 +1178,7 @@ static bool put(struct vt *vt, uint32_t cp)
 		struct row *l = vt->line[c->y];
 		int n = c->wrapnext ? 0 : wrap_holds(l->c, vt->cols, vt->cols - 1);
 		l->wrap = n ? n : vt->cols;
+		l->fill = COL_DEFAULT_BG; /* the line no longer ends here */
 		touch(l, l->wrap);
 		c->x = 0;
 		index_down(vt);
@@ -1144,7 +1193,7 @@ static bool put(struct vt *vt, uint32_t cp)
 	else
 		fix_wide(vt, row, c->x, c->x + w - 1);
 	struct cell *l = row->c;
-	uint16_t base = (c->tmpl.attr & ~(ATTR_WIDE | ATTR_WDUMMY)) | gfx;
+	uint16_t base = (c->tmpl.attr & ~(ATTR_WIDE | ATTR_WDUMMY)) | gfx | ATTR_TEXT;
 	l[c->x] = c->tmpl;
 	l[c->x].cp = cp;
 	l[c->x].attr = base | (w == 2 ? ATTR_WIDE : 0);
@@ -2069,7 +2118,7 @@ static size_t put_ascii(struct vt *vt, const unsigned char *s, size_t n)
 	fix_wide(vt, row, x0, x1);
 	struct cell *l = row->c;
 	struct cell tm = c->tmpl;
-	tm.attr &= ~(ATTR_WIDE | ATTR_WDUMMY);
+	tm.attr = (tm.attr & ~(ATTR_WIDE | ATTR_WDUMMY)) | ATTR_TEXT;
 	if (gfx) {
 		uint16_t attr = tm.attr;
 		for (size_t i = 0; i < k; i++) {
