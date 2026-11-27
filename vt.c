@@ -287,6 +287,18 @@ static void hist_unwrap(struct vt *vt)
 	vt->hist_wrap[slot] = 0;
 }
 
+/* The join that leads into row y of the main screen: the one of the row
+ * before it, or of the newest line of the history. NULL for the first row
+ * there is. */
+static int *join_into(struct vt *vt, int y)
+{
+	if (y > 0)
+		return &vt->pri[y - 1]->wrap;
+	if (vt->hist_count)
+		return &vt->hist_wrap[(vt->hist_head - 1 + vt->hist_cap) % vt->hist_cap];
+	return NULL;
+}
+
 /* Cells of row y of the screen shown have changed, or its tail has. Two joins
  * are kept right here, so that nothing has to be checked where one is read.
  *
@@ -308,19 +320,24 @@ static void row_changed(struct vt *vt, int y)
 			l->wrap = 0;
 	if (vt->mode & MODE_ALTSCREEN)
 		return;
-	int *join;
-	if (y > 0)
-		join = &vt->pri[y - 1]->wrap;
-	else if (vt->hist_count)
-		join = &vt->hist_wrap[(vt->hist_head - 1 + vt->hist_cap) % vt->hist_cap];
-	else
-		return;
-	if (!*join || *join == vt->cols)
+	int *join = join_into(vt, y);
+	if (!join || !*join || *join == vt->cols)
 		return;
 	if (*join == vt->cols - 1 && (l->c[0].attr & ATTR_WIDE))
 		return;
 	if (l->wrap || content_len(l->c, l->used, l->tail))
 		*join = 0;
+}
+
+/* What put() asks before it calls row_changed() for a character. With no
+ * join in the row and none short of the last column leading into it there
+ * is nothing to do, and that is every character of a line of text: the call
+ * for each made text that is not ASCII a tenth slower. Which screen is shown
+ * is not asked here; row_changed() knows. */
+static inline bool joins_settled(struct vt *vt, const struct row *l, int y)
+{
+	const int *join = join_into(vt, y);
+	return !l->wrap && (!join || !*join || *join == vt->cols);
 }
 
 static void push_hist(struct vt *vt, const struct row *row)
@@ -1403,7 +1420,8 @@ static bool put(struct vt *vt, uint32_t cp)
 		l[c->x + 1].attr = base | ATTR_WDUMMY;
 	}
 	wrote(row, c->x, c->x + w);
-	row_changed(vt, c->y);
+	if (!joins_settled(vt, row, c->y))
+		row_changed(vt, c->y);
 	mark_row(vt, c->y);
 	vt->lastcp = orig;
 	advance(vt, c->x + w, wrap);
