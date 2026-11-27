@@ -1803,12 +1803,24 @@ static void test_reflow(void)
 	CHECK(vt_resize(vt, 10, 2));
 	CHECK(vt->c.x == 2 && vt->c.y == 0);
 	vt_free(vt);
+	/* No row is laid out for it (REFLOW.md C3, C4; G4 before): further
+	 * behind the text than the row goes, it is in the last column of the
+	 * row its line ends in. Its column is not back in a wider window: that
+	 * takes the origin (O1). */
 	vt = mk(20, 2, 10);
 	w(vt, "ab\033[1;18H");
 	CHECK(vt_resize(vt, 12, 2));
-	CHECK(vt->c.x == 5 && vt->c.y == 1 && !vt->c.wrapnext && vt->pri[0]->wrap == 12);
+	CHECK(vt->c.x == 11 && vt->c.y == 0 && !vt->c.wrapnext && vt->pri[0]->wrap == 0);
+	CHECK(vt->pri[0]->used == 2 && vt->pri[1]->used == 0);
 	CHECK(vt_resize(vt, 30, 2));
-	CHECK(vt->c.x == 17 && vt->c.y == 0 && vt->pri[0]->wrap == 0);
+	CHECK(vt->c.x == 11 && vt->c.y == 0 && vt->pri[0]->wrap == 0);
+	vt_free(vt);
+	vt = mk(20, 2, 10);
+	w(vt, "ab\033[1;8H");
+	CHECK(vt_resize(vt, 12, 2));
+	CHECK(vt->c.x == 7 && vt->c.y == 0);
+	CHECK(vt_resize(vt, 30, 2));
+	CHECK(vt->c.x == 7 && vt->c.y == 0);
 	vt_free(vt);
 	/* on a cell of the text, it stays on that cell */
 	vt = mk(10, 4, 10);
@@ -1820,15 +1832,68 @@ static void test_reflow(void)
 	CHECK(vt->c.y == 0 && vt->c.x == 12 && vt->pri[0]->c[12].cp == 'c');
 	vt_free(vt);
 
-	/* on the cell a wide glyph did not fit in, which is no text and gone in
-	 * another width, it is on the last cell before it */
+	/* on the cell a wide glyph did not fit in, which is none of the line's
+	 * and gone in another width, it is on the glyph: the first cell of the
+	 * next row, where the next character goes (C1; G11 before) */
 	vt = mk(10, 3, 10);
 	w(vt, "abcdefghi\xe6\xbc\xa2X\033[1;10H");
 	CHECK(vt->c.x == 9 && vt->c.y == 0 && vt->pri[0]->wrap == 9);
 	CHECK(vt_resize(vt, 20, 3));
-	CHECK(vt->c.x == 8 && vt->c.y == 0 && vt->pri[0]->c[8].cp == 'i');
+	CHECK(vt->c.x == 9 && vt->c.y == 0 && vt->pri[0]->c[9].cp == 0x6f22 && !vt->c.wrapnext);
 	CHECK(vt_resize(vt, 6, 3));
-	CHECK(vt->c.x == 2 && vt->c.y == 1 && vt->pri[1]->c[2].cp == 'i');
+	CHECK(vt->c.x == 3 && vt->c.y == 1 && vt->pri[1]->c[3].cp == 0x6f22);
+	vt_free(vt);
+	/* On a wide glyph that one column has no room for, it is on the next
+	 * cell that is laid out (C2; before, it waited to wrap in the row
+	 * before): in the same row, in the next where the row goes on, and
+	 * behind the line's end where nothing follows. */
+	vt = mk(10, 6, 10);
+	w(vt, "ab\xe6\xbc\xa2" "cd\033[1;3H");
+	CHECK(vt_resize(vt, 1, 6));
+	CHECK(vt->c.x == 0 && vt->c.y == 2 && !vt->c.wrapnext && vt->pri[2]->c[0].cp == 'c');
+	vt_free(vt);
+	vt = mk(10, 12, 10);
+	w(vt, "abcdefgh\xe6\xbc\xa2XY\033[1;9H");
+	CHECK(vt->pri[0]->wrap == 10 && vt->pri[0]->c[8].cp == 0x6f22);
+	CHECK(vt_resize(vt, 1, 12));
+	CHECK(vt->c.x == 0 && vt->c.y == 8 && !vt->c.wrapnext && vt->pri[8]->c[0].cp == 'X');
+	vt_free(vt);
+	vt = mk(10, 6, 10);
+	w(vt, "ab\xe6\xbc\xa2\033[1;3H");
+	CHECK(vt_resize(vt, 1, 6));
+	CHECK(vt->c.x == 0 && vt->c.y == 1 && vt->c.wrapnext && vt->pri[1]->c[0].cp == 'b');
+	vt_free(vt);
+	/* the row it is in then is the one the screen keeps (V5), in a window
+	 * too short for the line */
+	vt = mk(10, 3, 10);
+	w(vt, "abcdefgh\xe6\xbc\xa2XY\033[1;9H");
+	CHECK(vt_resize(vt, 1, 3));
+	CHECK(vt->hist_count == 7 && vt->c.x == 0 && vt->c.y == 1 && vt->pri[1]->c[0].cp == 'X');
+	vt_free(vt);
+	/* A wrap pending is the place behind the row, wherever the cursor is
+	 * (C1): DECSTR leaves one in the home position, and DECRC brings it
+	 * there. The next character goes behind the line, and so does the
+	 * cursor in another width; a cursor saved there as well. */
+	vt = mk(10, 3, 10);
+	w(vt, "abcdefghij\033[!p\0338");
+	CHECK(vt->c.x == 0 && vt->c.y == 0 && vt->c.wrapnext);
+	CHECK(vt_resize(vt, 20, 3));
+	CHECK(vt->c.x == 10 && vt->c.y == 0 && !vt->c.wrapnext);
+	vt_free(vt);
+	vt = mk(10, 3, 10);
+	w(vt, "abcdefghij\033[!p\0338\0337\033[2;1H");
+	CHECK(vt->pri_saved && vt->saved_pri.x == 0 && vt->saved_pri.wrapnext);
+	CHECK(vt_resize(vt, 20, 3));
+	CHECK(vt->saved_pri.x == 10 && vt->saved_pri.y == 0 && !vt->saved_pri.wrapnext);
+	vt_free(vt);
+	/* so behind the short join of a line that ends empty: the first cell
+	 * of the empty row */
+	vt = mk(10, 3, 10);
+	w(vt, "abcdefghijk\r\033[K");
+	CHECK(vt_resize(vt, 20, 3) && vt->pri[0]->wrap == 10);
+	w(vt, "\033[1;15H");
+	CHECK(vt_resize(vt, 12, 3));
+	CHECK(vt->c.x == 0 && vt->c.y == 1 && vt->pri[0]->wrap == 10);
 	vt_free(vt);
 
 	/* Wide glyphs stay whole: one that does not fit goes to the next row, and
@@ -2081,19 +2146,24 @@ static void test_reflow(void)
 	CHECK_STR(row(vt, 1), "\xe6\xbc\xa2");
 	vt_free(vt);
 
-	/* The blanks between the text and the cursor behind them are text, as if
-	 * written: where they fill the row, the cursor waits behind them to wrap.
-	 * Not those before the saved cursor, which may be anywhere: further behind
-	 * the text than the new width goes it is in the last column, with no wrap
-	 * pending. */
+	/* The cells between the text and a cursor behind it are none of the
+	 * line's (C4): further behind the text than the new width goes, the
+	 * cursor is in the last column, with no wrap pending, as the saved
+	 * cursor is. A terminal of that width has it there for the same bytes. */
 	vt = mk(10, 3, 10);
 	w(vt, "abc\033[2C");
 	CHECK(vt_resize(vt, 5, 3));
-	CHECK(vt->c.x == 4 && vt->c.y == 0 && vt->c.wrapnext);
+	CHECK(vt->c.x == 4 && vt->c.y == 0 && !vt->c.wrapnext);
 	w(vt, "X");
-	CHECK_STR(row(vt, 0), "abc");
-	CHECK_STR(row(vt, 1), "X");
-	CHECK(vt_abs_wraps(vt, 0) == 5);
+	CHECK_STR(row(vt, 0), "abc X");
+	CHECK(vt_abs_wraps(vt, 0) == 0);
+	{
+		struct vt *b = mk(5, 3, 10);
+		w(b, "abc\033[2CX");
+		const char *why = same_state(vt, b, 0);
+		CHECK(!why);
+		vt_free(b);
+	}
 	vt_free(vt);
 	vt = mk(10, 3, 10);
 	w(vt, "abc\033[2C\0337\r\nxy");
@@ -2225,15 +2295,24 @@ static void test_reflow_ends(void)
 	CHECK_STR(row(vt, 0), "user@host:~$ ls");
 	CHECK(vt->c.x == 15 && vt->c.y == 0);
 	vt_free(vt);
-	/* a cursor moved one behind the text: the next character does not land
-	 * on the last one */
+	/* a cursor moved one behind the text, which fills the row now: it
+	 * waits there to wrap, and the next character does not land on the last
+	 * one (C3) */
 	vt = mk(20, 4, 10);
 	w(vt, "abcdefghij\033[C");
 	CHECK(vt_resize(vt, 10, 4));
-	CHECK(vt->c.x == 1 && vt->c.y == 1 && vt->pri[0]->wrap == 10);
+	CHECK(vt->c.x == 9 && vt->c.y == 0 && vt->c.wrapnext && vt->pri[0]->wrap == 0);
 	w(vt, "X");
 	CHECK_STR(row(vt, 0), "abcdefghij");
-	CHECK_STR(row(vt, 1), " X");
+	CHECK_STR(row(vt, 1), "X");
+	CHECK(vt->pri[0]->wrap == 10);
+	vt_free(vt);
+	/* not without autowrap: on the last character, as the same bytes leave
+	 * it at that width */
+	vt = mk(20, 4, 10);
+	w(vt, "\033[?7labcdefghij\033[C");
+	CHECK(vt_resize(vt, 10, 4));
+	CHECK(vt->c.x == 9 && vt->c.y == 0 && !vt->c.wrapnext);
 	vt_free(vt);
 	/* a blank written into the last column, a wrap pending behind it: the
 	 * blank is text too, and in a narrower row the cursor waits behind it */
@@ -2607,7 +2686,7 @@ static void test_reflow_ends(void)
 	vt = mk(10, 3, 10);
 	w(vt, "ab\033[44m\033[K\033[m\033[1;7H");
 	CHECK(vt_resize(vt, 6, 3));
-	CHECK(vt->c.x == 5 && vt->c.wrapnext && vt->pri[0]->used == 6);
+	CHECK(vt->c.x == 5 && !vt->c.wrapnext && vt->pri[0]->used == 6);
 	CHECK(vt->pri[0]->tail == 4 && !vt->pri[0]->c[5].attr && vt->pri[0]->c[5].bg == 4);
 	w(vt, "\033[2;1H");
 	CHECK(vt_resize(vt, 3, 3));
@@ -2727,17 +2806,19 @@ static void test_reflow_ends(void)
 	CHECK_STR(row(vt, 0), "abc");
 	vt_free(vt);
 
-	/* The cells before the cursor are text in a row that holds nothing as
-	 * well: clamped into a narrower row, the cursor was not back in its column
-	 * in a wider one, and by way of a narrow window it ended elsewhere than
-	 * without. */
+	/* In a row that holds nothing, the cursor is in its column or the last:
+	 * no cells are laid out for it, and the row stays one row (C4). Clamped
+	 * into a narrower row it is not back in its column in a wider one, and
+	 * by way of a narrow window it ends elsewhere than without: the origin
+	 * is for that (O1, A1). */
 	vt = mk(20, 3, 10);
 	w(vt, "\033[1;18H");
 	CHECK(vt_resize(vt, 12, 3));
-	CHECK(vt->c.x == 5 && vt->c.y == 1 && vt->pri[0]->wrap == 12);
+	CHECK(vt->c.x == 11 && vt->c.y == 0 && vt->pri[0]->wrap == 0 && vt->pri[0]->used == 0);
 	CHECK(vt_resize(vt, 3, 3));
+	CHECK(vt->c.x == 2 && vt->c.y == 0 && vt->hist_count == 0);
 	CHECK(vt_resize(vt, 30, 3));
-	CHECK(vt->c.x == 17 && vt->c.y == 0 && vt->hist_count == 0);
+	CHECK(vt->c.x == 2 && vt->c.y == 0 && vt->hist_count == 0);
 	vt_free(vt);
 
 	/* A wrap pending on a row that goes on, where the cursor came back to

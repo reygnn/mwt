@@ -53,11 +53,11 @@ Blanks a program wrote at the end of a line are text like any character, also wh
 nothing shows of them: a line padded with blanks takes the rows its length needs in a
 narrower window, as it does in a terminal of that width given the same output. `top` and
 `ps` write lines of 79 characters and a blank, which are two rows at 79 columns. Blanks
-an erase left are no text and are not laid out, but for those before the cursor: the
-cells before it are text whatever they hold, and a cursor moved far behind its text
-takes rows of blanks with it in a narrower window. A row that holds nothing but what an
-erase left stays an empty row. A copy leaves the blanks at the end of a line out,
-written or not.
+an erase left are no text and are not laid out, before the cursor either: a cursor
+behind the end of its line is as far behind it in another width as the row has room for,
+and in the last column where it has none. Narrower and wider again, it is not back in
+its column. A row that holds nothing but what an erase left stays an empty row. A copy
+leaves the blanks at the end of a line out, written or not.
 
 Blanks a row was erased with in a background color, up to its last column (`CSI K`
 after `CSI 44 m`), are no text either: they are put behind the line's text again, up to
