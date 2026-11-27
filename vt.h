@@ -28,8 +28,7 @@ enum {
 	/* 1 << 10 free: that a line goes on in the next row is the row's, row.wrap */
 	ATTR_DECGFX    = 1 << 11, /* cp came from DEC special graphics, for DECRQCRA */
 	ATTR_TEXT      = 1 << 12, /* written, not left by an erase: of two blanks
-	                           * in a background color, the one that is text.
-	                           * Also what another width laid out as text. */
+	                           * in a background color, the one that is text */
 };
 
 struct cell {
@@ -49,12 +48,12 @@ struct row {
 	 * the alternate screen once the window grew wider: that one is not laid
 	 * out anew, the line still ends where it did. */
 	int wrap;
-	/* The background the row's end was erased in, of which no cell is left:
-	 * another width laid the line out so that its text fills the row. A wider
-	 * one puts it behind the text again. COL_DEFAULT_BG for none, and with
-	 * any other the row is full (used is vt.cols) and ends its line; gone
-	 * once the last cell is written or erased, as in a terminal this wide. */
-	uint32_t fill;
+	/* The background the row's end was last erased in (REFLOW.md S3, E1): by
+	 * EL or ED, by ECH, ICH or DCH where their blanks take in the last column,
+	 * or as the row was made. It stands for the cells right of the row's
+	 * content at any width; writing leaves it alone, also in the last column.
+	 * With another than COL_DEFAULT_BG the row is full: used is vt.cols. */
+	uint32_t tail;
 	struct cell c[];
 };
 
@@ -124,7 +123,7 @@ struct vt {
 	int *hist_len;             /* never above cols: laid out anew with the screen */
 	int *hist_room;            /* cells each slot holds; it only grows */
 	int *hist_wrap;            /* as row.wrap, never above hist_len */
-	uint32_t *hist_fill;       /* as row.fill, hist_len is cols with one */
+	uint32_t *hist_tail;       /* as row.tail, hist_len is cols with a color */
 	int hist_cap, hist_count, hist_head; /* head: index of next slot */
 	int view;                 /* lines scrolled back, 0 = live */
 	uint64_t scrolled;        /* What the lines are counted from: abs = row +
@@ -178,9 +177,9 @@ int64_t vt_abs_first(const struct vt *vt); /* oldest abs line in history */
  * did not fit in, or on the alternate screen what a wider window added; with
  * anything else there the line ends in its row. */
 int vt_abs_wraps(const struct vt *vt, int64_t abs);
-/* What was erased behind line abs and has no cell there (row.fill), in the
- * history as on the screen; COL_DEFAULT_BG for none, and for no such line. */
-uint32_t vt_abs_fill(const struct vt *vt, int64_t abs);
+/* What the end of line abs was erased in (row.tail), in the history as on the
+ * screen; COL_DEFAULT_BG for no such line. */
+uint32_t vt_abs_tail(const struct vt *vt, int64_t abs);
 void vt_scroll_view(struct vt *vt, int delta); /* +up into history */
 void vt_mark_all(struct vt *vt);
 

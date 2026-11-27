@@ -55,12 +55,14 @@ empty row.
 
 Blanks a row was erased with in a background color, up to its last column (`CSI K`
 after `CSI 44 m`), are no text either: they are put behind the line's text again, up to
-the new last column. Where the text fills a row of the new width to its end, the row
-keeps the color, and they are back in a wider window; not once a program has written or
-erased that row's last cell, as in a terminal that wide. Blanks a program wrote are text
-where anything shows of them, in a background color or with an attribute: a bar of them
-takes the rows its width needs, as a status line in reverse does. So are those of an
-erase that end before the last column.
+the new last column. The row keeps that color until its end is erased again. A wider
+window shows it right of the text again, also where the text filled the row in between
+or a program wrote over the blanks later, into the last column too: a terminal that
+wide would show it there. A line of several rows has the color of its last row, in the
+cell a wide character left over as well. Blanks a program wrote are text where anything
+shows of them, in a background color or with an attribute: a bar of them takes the rows
+its width needs, as a status line in reverse does. So are those of an erase that end
+before the last column.
 
 Without autowrap (`CSI ? 7 l`) there is no place behind a full row: a cursor behind
 text that fills a row of the new width is on its last character, and stays on it in a
@@ -123,9 +125,9 @@ drawing or one of ``<>"`{}|\^``, without punctuation at its end or a closing bra
 did not open. Lines that wrap are joined, lines a program broke itself (vim, a table)
 are not, nor the screen with the history once it was cleared. A wide character that did
 not fit at the end of a line goes on with the URL, unless the cell left over is
-anything but a default blank: one with a colored background or an attribute, or a
-character written there earlier. That cell is text then, also in a copy and in another
-width. A URL is looked for at most 4096 cells either way.
+anything but a blank of what the row's end was erased in: one in another background or
+with an attribute, or a character written there earlier. That cell is text then, also
+in a copy and in another width. A URL is looked for at most 4096 cells either way.
 
 Ctrl+click opens the URL in the text at the click, which output may have changed since
 the underline was drawn. While a program has the mouse, Ctrl+click is the program's;
