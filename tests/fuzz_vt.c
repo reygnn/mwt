@@ -93,7 +93,7 @@ static void die(const char *what, const struct vt *vt)
 	abort();
 }
 
-/* What is none of a row's content at its end (REFLOW.md 3.1): a blank of its
+/* What is none of a row's content at its end (RESIZE.md 1.1): a blank of its
  * tail, not written. */
 static bool end_blank(struct cell c, uint32_t tail)
 {
@@ -141,7 +141,7 @@ static void check(const struct vt *vt)
 				die("row wraps past what was written", vt);
 			if (screens[s][r]->tail != COL_DEFAULT_BG && used != vt->cols)
 				die("row with a tail in a colour is not full", vt);
-			/* nothing is checked where a wrap is read (REFLOW.md I2) */
+			/* nothing is checked where a wrap is read (RESIZE.md I2) */
 			for (int x = wrap; wrap && x < vt->cols; x++)
 				if (!end_blank(l[x], screens[s][r]->tail))
 					die("cell behind a row's wrap is not of its tail", vt);
@@ -252,7 +252,7 @@ int LLVMFuzzerInitialize(int *argc, char ***argv)
 }
 
 /* After output: no place a resize kept for the cursor outlives output to the
- * main screen (REFLOW.md K3) */
+ * main screen (RESIZE.md K3) */
 static void wrote(const struct vt *vt)
 {
 	if (vt->keep_cur && !(vt->mode & MODE_ALTSCREEN))

@@ -94,7 +94,7 @@ static bool is_default_blank(struct cell c)
 /* A blank as the erase that set a row's tail left it: in that colour, and
  * not written. It is none of a row's content where it ends the row. A blank
  * a program wrote is, in the default colours too, where nothing shows of it:
- * a terminal of another width shows it given the same bytes (REFLOW.md 3.1,
+ * a terminal of another width shows it given the same bytes (RESIZE.md 1.1,
  * D1). */
 static bool is_tail_blank(struct cell c, uint32_t tail)
 {
@@ -135,7 +135,7 @@ static void wrote(struct row *l, int from, int to)
 }
 
 /* One cell, for wide-glyph repairs and the like. Not an erase to the row's
- * end, in the last column either: the tail stays (REFLOW.md E5). A character
+ * end, in the last column either: the tail stays (RESIZE.md E5). A character
  * printed over half a glyph at the row's end set it otherwise, against W2,
  * and REP another than the characters it stands for. */
 static void set_cell(struct row *l, int x, struct cell c)
@@ -148,7 +148,7 @@ static void set_cell(struct row *l, int x, struct cell c)
 
 /* fill() for a screen row of cols: a default blank is only written where the
  * row was written, the rest is blank already. An erase that takes in the last
- * column says what the row's end is erased in (row.tail, REFLOW.md E1): EL and
+ * column says what the row's end is erased in (row.tail, RESIZE.md E1): EL and
  * ED, ECH and the blanks of ICH that reach it, those DCH brings in, a new row. */
 static void fill_row(struct row *l, int from, int to, struct cell b, int cols)
 {
@@ -304,7 +304,7 @@ static int *join_into(struct vt *vt, int y)
  *
  * The row's own: the cells behind it are no content, the one a wide glyph did
  * not fit in or what a resize left of a row whose line ends empty. With
- * anything else there the line ends in this row (REFLOW.md I2, J3b).
+ * anything else there the line ends in this row (RESIZE.md I2, J3b).
  *
  * That of the row before, on the main screen, which for the first row is the
  * history's newest: a join short of the last column is one the layout made
@@ -458,7 +458,7 @@ void vt_scroll_view(struct vt *vt, int delta)
 /* Rows orig to vt.bot move up by n; the first n go, into the history from
  * the top of the main screen, and n new ones come in below.
  *
- * A row goes on only in the row that followed it before (REFLOW.md J5). The
+ * A row goes on only in the row that followed it before (RESIZE.md J5). The
  * last that moves is followed by a new row: its line ends there, unless
  * put() has just wrapped it and writes on in that row (goes_on). The row
  * above those that move is followed by another than before; not the
@@ -496,7 +496,7 @@ static void scroll_up(struct vt *vt, int orig, int n, bool goes_on)
 /* Rows orig to vt.bot move down by n; the last n go, and n new ones come in
  * above. The row above them is followed by a new one then, and so is the
  * history's newest above the first row; the last that stays by what is
- * below the region, or by nothing: their lines end (REFLOW.md J5). */
+ * below the region, or by nothing: their lines end (RESIZE.md J5). */
 static void scroll_down(struct vt *vt, int orig, int n)
 {
 	if (orig < vt->top || orig > vt->bot)
@@ -846,7 +846,7 @@ static const struct cell *old_cells(const struct vt *vt, int g, int *len, int *w
 	return l;
 }
 
-/* The tail of the line old row g is in: its last row's (REFLOW.md D8). */
+/* The tail of the line old row g is in: its last row's (RESIZE.md D8). */
 static uint32_t line_tail(const struct vt *vt, int g)
 {
 	int len, wrap;
@@ -869,7 +869,7 @@ static uint32_t line_tail(const struct vt *vt, int g)
  * column, are content wherever another width puts them. So are blanks a
  * program wrote, in the default colours too (content_len()).
  *
- * Nothing is laid out for a cursor behind its line's content (REFLOW.md C4):
+ * Nothing is laid out for a cursor behind its line's content (RESIZE.md C4):
  * it is as far behind the end as it was where the row has room, and in the
  * last column where it has not. The blank a prompt ends in is content, and
  * needs no rule. */
@@ -884,7 +884,7 @@ static const struct cell *old_row(const struct vt *vt, int g, int *n, bool *more
 }
 
 /* The row being filled is done: the line goes on after wrap cells, or ends
- * with 0. tail is the line's, and every row of it has it (REFLOW.md L5): in
+ * with 0. tail is the line's, and every row of it has it (RESIZE.md L5): in
  * the cells its text leaves, the one a wide glyph did not fit in too (L2),
  * and as the row's in any case, for the text may leave none. Out of memory
  * the walk goes on, for nothing. */
@@ -920,7 +920,7 @@ static void reflow_row_done(struct reflow *rf, int wrap, uint32_t tail)
 }
 
 /* The marks of row g in its cells from lo up to hi are in the row being filled:
- * at col and counted on from there. Behind the end of a line (REFLOW.md C3)
+ * at col and counted on from there. Behind the end of a line (RESIZE.md C3)
  * they are as far behind it as they were, in the last column at most; behind
  * a row its content fills, col its width, they wait in the last column for
  * the wrap, as after the character that filled it. */
@@ -939,7 +939,7 @@ static void reflow_mark(struct reflow *rf, int g, int lo, int hi, int col)
 
 /* The marks of row g at lo or behind it are at x of row to: the place of the
  * next cell, where the one they were on is none of the line's or is not laid
- * out (REFLOW.md C1, C2). */
+ * out (RESIZE.md C1, C2). */
 static void reflow_mark_on(struct reflow *rf, int g, int lo, int hi, int to, int x)
 {
 	for (int k = 0; k < rf->nm; k++) {
@@ -1054,7 +1054,7 @@ struct view {
 };
 
 /* The last row of the main screen that has content, or a tail in a colour;
- * the cursor's row cy if none comes after it (REFLOW.md 4.6, e0) */
+ * the cursor's row cy if none comes after it (RESIZE.md 2.6, e0) */
 static int screen_end(const struct vt *vt, int cy)
 {
 	int e = vt->rows - 1;
@@ -1198,7 +1198,7 @@ bool vt_resize(struct vt *vt, int cols, int rows)
 	} else {
 		/* Another height alone: the rows stay as they are, and which of
 		 * them the screen shows is decided as with another width
-		 * (REFLOW.md 4.6, V1 to V5), in rows from its first now. In a
+		 * (RESIZE.md 2.6, V1 to V5), in rows from its first now. In a
 		 * shorter window the end of the text stays on the screen and rows
 		 * go into the history from the top, as far as the cursor's row
 		 * stays too; what is below the screen then is lost. A taller one

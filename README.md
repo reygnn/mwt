@@ -127,6 +127,8 @@ them with `mwt -a indigo3`.
   there shows a toast
 
 COMPAT.md goes through the VT100's sequences, and those after it, one by one.
+docs/RESIZE.md has the rules a change of the window's size follows, and what was
+measured.
 
 
 ## Deliberately left out

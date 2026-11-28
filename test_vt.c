@@ -478,7 +478,7 @@ static size_t fuzz_gen(char *o, size_t cap)
 	return n;
 }
 
-/* What is none of a row's content at its end (REFLOW.md 3.1): a blank of its
+/* What is none of a row's content at its end (RESIZE.md 1.1): a blank of its
  * tail, not written. */
 static bool end_blank(struct cell c, uint32_t tail)
 {
@@ -509,7 +509,7 @@ static const char *fuzz_broken_grid(struct row **s, int cols, int rows)
 	return NULL;
 }
 
-/* I3 and I8 (REFLOW.md): the last row of a screen does not go on, and on the
+/* I3 and I8 (RESIZE.md): the last row of a screen does not go on, and on the
  * main screen a join short of the last column is one the layout would make,
  * into a row without content or, one cell short, into one that begins with
  * a wide glyph; from the history's newest line into the first row too. NULL
@@ -610,7 +610,7 @@ static bool fuzz_same(const struct vt *a, const struct vt *b,
 	       sa->titles == sb->titles && !strcmp(sa->title, sb->title);
 }
 
-/* What "the same state" compares after a resize (REFLOW.md, section 5): every
+/* What "the same state" compares after a resize (RESIZE.md, section 3): every
  * row of the main screen with its cells, where its line goes on and what was
  * erased behind it; every row of the history as the row interface gives it;
  * the cursor, the saved cursor and the place behind the alternate screen; the
@@ -618,13 +618,12 @@ static bool fuzz_same(const struct vt *a, const struct vt *b,
  * screen and its cursors, the tab stops, the scroll region and the view,
  * which a resize resets, nor what is to be redrawn. NULL, or what differs.
  *
- * What it can leave out, each until the step of REFLOW.md 8.4 that makes it
- * hold:
+ * What it can leave out:
  *   SAME_BUT_INNER  the tail of a row that goes on, and with it the cell a
  *                   wide glyph did not fit in. Another width lays the line
  *                   out anew and has only the line's tail, its last row's
- *                   (L2, L5, D8); a round trip has the others back with the
- *                   origin (O3, step 9). */
+ *                   (L2, L5, D8); no round trip brings the others back, as
+ *                   no content is kept (D19). */
 enum { SAME_BUT_INNER = 2 };
 
 static const char *same_cells(const struct cell *a, const struct cell *b, int n)
@@ -1806,7 +1805,7 @@ static void test_reflow(void)
 	CHECK(vt_resize(vt, 10, 2));
 	CHECK(vt->c.x == 2 && vt->c.y == 0);
 	vt_free(vt);
-	/* No row is laid out for it (REFLOW.md C3, C4; G4 before): further
+	/* No row is laid out for it (RESIZE.md C3, C4): further
 	 * behind the text than the row goes, it is in the last column of the
 	 * row its line ends in. Its column is back in a wider window as long
 	 * as the program wrote nothing (K2, K3; test_places()). */
@@ -1838,7 +1837,7 @@ static void test_reflow(void)
 
 	/* on the cell a wide glyph did not fit in, which is none of the line's
 	 * and gone in another width, it is on the glyph: the first cell of the
-	 * next row, where the next character goes (C1; G11 before) */
+	 * next row, where the next character goes (C1) */
 	vt = mk(10, 3, 10);
 	w(vt, "abcdefghi\xe6\xbc\xa2X\033[1;10H");
 	CHECK(vt->c.x == 9 && vt->c.y == 0 && vt->pri[0]->wrap == 9);
@@ -2096,7 +2095,7 @@ static void test_reflow(void)
 	CHECK(fills > 200 && kept > 50); /* and rows had one, also after the stream */
 
 	/* Blanks written at the end of a line are content as any written cell
-	 * (REFLOW.md 3.1, D1; G1 before): narrower, they take the rows a terminal
+	 * (RESIZE.md 1.1, D1): narrower, they take the rows a terminal
 	 * of that width gives them for the same bytes. Erased ones take none. */
 	vt = mk(10, 4, 10);
 	w(vt, "ab        \r\ncd");
@@ -2141,7 +2140,7 @@ static void test_reflow(void)
 	vt_free(vt);
 
 	/* the cell a wide glyph did not fit in, written since: text, and the line
-	 * ends in its row, the glyph a line of its own (REFLOW.md J3b) */
+	 * ends in its row, the glyph a line of its own (RESIZE.md J3b) */
 	vt = mk(10, 4, 10);
 	w(vt, "abcdefghi\xe6\xbc\xa2\033[1;10HZ");
 	CHECK(vt->pri[0]->wrap == 0 && vt_abs_wraps(vt, 0) == 0);
@@ -2216,11 +2215,11 @@ static void test_reflow(void)
  * row was erased with, an empty row the line went on into, and a row whose next
  * fell off the screen. */
 /* Plain output, written at one size and resized to another, is what it is
- * written at the other size (REFLOW.md, A2): printable characters of one and
+ * written at the other size (RESIZE.md, A2): printable characters of one and
  * two cells, attributes and foreground colours, CR LF. Every row of the screen
  * and the history, where each goes on, the cursor and its pending wrap. Lines
  * end in blanks too: a written blank is content (D1). */
-/* Plain output (REFLOW.md A2): lines of letters, blanks, a wide glyph, SGR
+/* Plain output (RESIZE.md A2): lines of letters, blanks, a wide glyph, SGR
  * without a background, ended by CR LF; the last one maybe not. A round is its
  * number alone: one that fails can be run again. */
 static size_t plain_stream(char *s, int round)
@@ -2390,7 +2389,7 @@ static void test_reflow_ends(void)
 	l = vt_abs_line(vt, vt_abs_first(vt), &len);
 	CHECK(l && len == 10 && l[7].cp == 'h' && l[8].cp == ' ' && l[8].bg == 1 && l[9].bg == 1);
 	vt_free(vt);
-	/* What a row's end was erased in is the row's (row.tail, REFLOW.md S3),
+	/* What a row's end was erased in is the row's (row.tail, RESIZE.md S3),
 	 * from the erase on, not found when the window gets another width. Where
 	 * the text fills a row of the new width to its end and no cell is left for
 	 * the colour, the row still has it, and a wider window shows it again. */
@@ -3318,7 +3317,7 @@ static void test_wrap_row(void)
 	/* The cell a wide glyph did not fit in is not the line's, which goes on
 	 * after the nine before it, in the history too; put in before it, it moves
 	 * along as the wrap does. That is so for a cell that is no text: a blank of
-	 * what the row's end was erased in, in a colour too (REFLOW.md J2). With
+	 * what the row's end was erased in, in a colour too (RESIZE.md J2). With
 	 * text there, a blank that shows before that colour as well, the cell is
 	 * the line's as before. */
 	vt = mk(10, 2, 5);
@@ -3472,7 +3471,7 @@ static void test_wrap_row(void)
 }
 
 /* The joins are kept right where a row changes, and nothing is checked where
- * one is read (REFLOW.md J3b, J9, I2, I8, X1; G5, G13 and G14 before). The
+ * one is read (RESIZE.md J3b, J9, I2, I8, X1). The
  * checks read the row's own wrap for that: vt_abs_wraps() gave these answers
  * before, by looking at the cells. */
 static void test_joins(void)
@@ -3530,7 +3529,7 @@ static void test_joins(void)
 	/* J9. A join short of the last column is the layout's for what the next
 	 * row was. The row a wide glyph went to: written further right it still
 	 * begins with the glyph, and with another wide one over it; with a
-	 * letter there it is a row of its own (G14). */
+	 * letter there it is a row of its own. */
 	vt = mk(10, 4, 10);
 	w(vt, "aaaaaaaaa\xe6\xbc\xa2");
 	CHECK(vt->pri[0]->wrap == 9);
@@ -3726,7 +3725,7 @@ static void test_joins(void)
 }
 
 
-/* Rows that move (REFLOW.md J5, J1; G10 before): a row goes on only in the row
+/* Rows that move (RESIZE.md J5, J1): a row goes on only in the row
  * that followed it before. Each case is a line of two rows at ten columns,
  * "abcdefghij" and "KLM", some rows around it, and what moves them: whether
  * the first still goes on, and the row it is in then. */
@@ -3889,8 +3888,8 @@ static const char *pri_row(struct vt *vt, int r)
 	return s;
 }
 
-/* Another height alone shows the rows another width would (REFLOW.md 4.6,
- * D12; G8 before): the end of the text stays on the screen in a shorter
+/* Another height alone shows the rows another width would (RESIZE.md 2.6,
+ * D12): the end of the text stays on the screen in a shorter
  * window, rows go into the history from the top as far as the cursor's row
  * stays, and what is below the screen then is lost. Each case is rows "r1"
  * to "r5" of six, the cursor's row, the new height: the first row shown, how
@@ -3995,8 +3994,8 @@ static void test_height(void)
 	}
 }
 
-/* A saved cursor that was never set is none (REFLOW.md S6, C5, D20; G15
- * before): DECRC goes home at any size, and no resize carries the home
+/* A saved cursor that was never set is none (RESIZE.md S6, C5,
+ * D20): DECRC goes home at any size, and no resize carries the home
  * position along with the text as if a program had saved it there. */
 /* A screen after Ctrl-L: old rows in the history, the screen cleared, a
  * command, lines of output that take two rows each at half the width, and a
@@ -4017,7 +4016,7 @@ static struct vt *ctrl_l_screen(const char *prompt)
 	return vt;
 }
 
-/* The places a resize keeps for the next one (REFLOW.md 4.11, K1 to K6) */
+/* The places a resize keeps for the next one (RESIZE.md 2.9, K1 to K6) */
 static void test_places(void)
 {
 	struct vt *vt, *b;
@@ -4364,7 +4363,7 @@ static void test_places(void)
 	vt_free(vt);
 
 	/* A resize that runs out of memory keeps the places as they were, and
-	 * the next one starts from them (O6). */
+	 * the next one starts from them (A6). */
 	int fails = 0;
 	for (long n = 0;; n++) {
 		vt = mk(20, 3, 10);

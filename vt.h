@@ -49,9 +49,9 @@ struct row {
 	 * alternate screen once the window grew wider: that one is not laid out
 	 * anew, the line still ends where it did. The cells behind it are blanks
 	 * of the row's tail, always: whatever puts anything else there ends the
-	 * line in this row (REFLOW.md I2, J3b). */
+	 * line in this row (RESIZE.md I2, J3b). */
 	int wrap;
-	/* The background the row's end was last erased in (REFLOW.md S3, E1): by
+	/* The background the row's end was last erased in (RESIZE.md S3, E1): by
 	 * EL or ED, by ECH, ICH or DCH where their blanks take in the last column,
 	 * or as the row was made. It stands for the cells right of the row's
 	 * content at any width; writing leaves it alone, also in the last column.
@@ -116,14 +116,14 @@ struct vt {
 	bool pri_saved;           /* saved_pri is a place the program saved (DECSC,
 	                           * SCOSC, 1048, 1049) and goes with the text in
 	                           * a resize. Not since a reset: it is the home
-	                           * position then, at any size (REFLOW.md S6). */
+	                           * position then, at any size (RESIZE.md S6). */
 	int pri_x, pri_y;         /* behind the alternate screen: where the main
 	                           * screen's cursor was when that one took over,
 	                           * pri_x one further with a wrap pending */
 	/* Places a resize keeps for the next one, as it found them: what the
 	 * state shows of them a narrower or shorter window has clamped, and from
 	 * there they were not back in a wider one. No content is kept
-	 * (REFLOW.md 4.11). */
+	 * (RESIZE.md 2.9). */
 	bool keep_cur;            /* the two cursors': until a write to the main
 	                           * screen */
 	bool keep_view;           /* where the screen started: until its rows
