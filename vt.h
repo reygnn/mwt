@@ -117,6 +117,8 @@ struct vt {
 	 * display last drew, as a block: it moves their pixels and draws what dirty
 	 * says, in the rows as they are now. 0 with nothing to move. */
 	int shift_n, shift_top, shift_bot;
+	bool shift_hist;          /* each of its moves went into the history: the
+	                           * lines count on with the text (vt.scrolled) */
 	bool *tabs;
 
 	struct vt_cursor c, saved_pri, saved_alt;

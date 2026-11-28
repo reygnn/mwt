@@ -228,11 +228,12 @@ static void drop_shift(struct vt *vt)
 /* Rows top to bot moved up by n, as one block: the marks move with them and
  * only the n new rows at the bottom are drawn, the display moves the pixels of
  * the others (vt.shift_n). One block until the display draws; another region,
- * or as many rows as the region has, and the region is drawn anew. Only with
+ * or as many rows as the region has, and the region is drawn anew. hist: the
+ * rows went into the history, and vt.scrolled counted them. Only with
  * the view at the screen (scroll_up()): scrolled back, those rows do not move
  * where they are shown. Marking every row of the region for each line feed
  * made yes draw the whole screen for every frame. */
-static void shift_rows(struct vt *vt, int top, int bot, int n)
+static void shift_rows(struct vt *vt, int top, int bot, int n, bool hist)
 {
 	if (vt->shift_n && (vt->shift_top != top || vt->shift_bot != bot))
 		drop_shift(vt);
@@ -243,6 +244,7 @@ static void shift_rows(struct vt *vt, int top, int bot, int n)
 	}
 	memmove(vt->dirty + top, vt->dirty + top + n, (size_t)(bot - top + 1 - n));
 	memset(vt->dirty + bot - n + 1, true, (size_t)n);
+	vt->shift_hist = hist; /* the same for each move of one block: its rows, its screen */
 	vt->shift_top = top;
 	vt->shift_bot = bot;
 	vt->shift_n += n;
@@ -528,7 +530,7 @@ static void scroll_up(struct vt *vt, int orig, int n, bool goes_on)
 	if (vt->view > 0)
 		dirty_range(vt, orig, hist ? vt->rows - 1 : vt->bot);
 	else
-		shift_rows(vt, orig, vt->bot, n);
+		shift_rows(vt, orig, vt->bot, n, hist && vt->hist_cap > 0);
 }
 
 /* Rows orig to vt.bot move down by n; the last n go, and n new ones come in

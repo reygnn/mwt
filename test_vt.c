@@ -1075,7 +1075,7 @@ static void test_shift(void)
 	memset(vt->dirty, 0, 4);
 	vt->shift_n = 0;
 	w(vt, "\033[2;1Hx\033[4;1H\r\ne");
-	CHECK(vt->shift_n == 1 && vt->shift_top == 0 && vt->shift_bot == 3);
+	CHECK(vt->shift_n == 1 && vt->shift_top == 0 && vt->shift_bot == 3 && vt->shift_hist);
 	CHECK(vt->dirty[0] && !vt->dirty[1] && !vt->dirty[2] && vt->dirty[3]); /* x went up */
 	w(vt, "\r\nf");
 	CHECK(vt->shift_n == 2 && vt->dirty[2] && vt->dirty[3] && !vt->dirty[1]);
@@ -1085,7 +1085,7 @@ static void test_shift(void)
 	/* another region: the first drawn anew, the second moved */
 	memset(vt->dirty, 0, 4);
 	w(vt, "\r\n\033[2;3r\033[3;1H\r\n");
-	CHECK(vt->shift_n == 1 && vt->shift_top == 1 && vt->shift_bot == 2);
+	CHECK(vt->shift_n == 1 && vt->shift_top == 1 && vt->shift_bot == 2 && !vt->shift_hist);
 	CHECK(vt->dirty[0] && vt->dirty[3]);
 	/* the view scrolled back: nothing moves, what is shown of the history
 	 * stays where it is, and the rows of the screen below it are drawn anew */
@@ -1096,6 +1096,23 @@ static void test_shift(void)
 	memset(vt->dirty, 0, 4);
 	w(vt, "\033[4;1H\r\n");
 	CHECK(vt->shift_n == 0 && !vt->dirty[0] && vt->dirty[3]);
+	vt_free(vt);
+	/* Whether the rows went into the history, where the lines count on with
+	 * them (vt.scrolled): not without one, not from the alternate screen, not
+	 * by DL below the first row. A selection is by line. */
+	vt = mk(10, 4, 0);
+	w(vt, "a\r\nb\r\nc\r\nd");
+	vt_mark_all(vt);
+	w(vt, "\r\n");
+	CHECK(vt->shift_n == 1 && !vt->shift_hist && vt->scrolled == 0);
+	vt_free(vt);
+	vt = mk(10, 4, 10);
+	w(vt, "\033[?1049ha\r\nb\r\nc\r\nd\r\n");
+	CHECK(vt->shift_n == 1 && !vt->shift_hist);
+	w(vt, "\033[?1049l\033[4;1H\r\n\r\n");
+	CHECK(vt->shift_n == 2 && vt->shift_hist && vt->scrolled == 2);
+	w(vt, "\033[2;1H\033[M");
+	CHECK(vt->shift_n == 1 && vt->shift_top == 1 && !vt->shift_hist);
 	vt_free(vt);
 
 	static const char *const frags[] = {

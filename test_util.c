@@ -341,6 +341,18 @@ static void test_toast(void)
 	CHECK(!toast_place(0, 400, 300, 10, 20, 1, &b));
 }
 
+/* The pixel rows a scroll moves, and only where the grid lies in the buffer */
+static void test_shift_span(void)
+{
+	int y0, y1, px;
+	CHECK(shift_span(4, 20, 0, 23, 1, 488, &y0, &y1, &px) && y0 == 4 && y1 == 484 && px == 20);
+	CHECK(shift_span(4, 20, 5, 9, 3, 488, &y0, &y1, &px) && y0 == 104 && y1 == 204 && px == 60);
+	CHECK(shift_span(4, 20, 0, 23, 1, 484, &y0, &y1, &px));
+	/* the old grid of a window that shrank, the resize out of memory */
+	CHECK(!shift_span(4, 20, 0, 23, 1, 483, &y0, &y1, &px));
+	CHECK(!shift_span(4, 20, 0, 23, 1, 150, &y0, &y1, &px));
+}
+
 int main(void)
 {
 	test_geometry();
@@ -351,6 +363,7 @@ int main(void)
 	test_stdio();
 	test_token();
 	test_toast();
+	test_shift_span();
 	printf("test_util: %d/%d checks passed\n", checks - failures, checks);
 	return failures != 0;
 }

@@ -1243,15 +1243,19 @@ static void toast_show(const char *text)
 /* The rows the VT core moved up as a block since the last frame (vt.shift_n):
  * their pixels move, and only the rows it marked are drawn. In a buffer that has
  * just caught up, which no row differs from the other in: the other moves the
- * same rows when it catches up in turn (t.lag_px). The same buffer again, a
- * compositor that let go of it at once, draws the block anew instead. */
+ * same rows when it catches up in turn (t.lag_px). The block is drawn anew
+ * instead in the same buffer again, a compositor that let go of it at once; in a
+ * grid taller than the buffer; and with a selection or a link underlined where
+ * the rows did not go into the history: those are by line, and the lines kept
+ * their numbers while the text moved (vt.shift_hist). */
 static void draw_shift(struct buffer *b)
 {
 	struct vt *vt = t.vt;
-	int y0 = t.pad + vt->shift_top * t.ch, y1 = t.pad + (vt->shift_bot + 1) * t.ch;
-	int px = vt->shift_n * t.ch;
+	int y0, y1, px;
+	bool fits = shift_span(t.pad, t.ch, vt->shift_top, vt->shift_bot, vt->shift_n, b->h,
+			       &y0, &y1, &px);
 	vt->shift_n = 0;
-	if (b == t.last) {
+	if (b == t.last || !fits || ((t.sel.active || t.link_on) && !vt->shift_hist)) {
 		memset(vt->dirty + vt->shift_top, true, (size_t)(vt->shift_bot - vt->shift_top + 1));
 		return;
 	}

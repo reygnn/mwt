@@ -439,6 +439,43 @@ def test_partial_redraw():
         check(same, f"partial redraws, seed {seed}: the same as one full draw", detail)
 
 
+def test_selection_scrolls(mouse):
+    """A selection is by line: where rows move without going into the history (the
+    alternate screen, a region below the first row, DL), its lines keep their
+    numbers and the highlight stays on its row while the text moves. Moved with
+    the pixels, it went up with the text. Into the history it goes up with it."""
+    cases = (
+        (b"\033[?1049h", b"\033[24;1H\n", 0, "the alternate screen, a line feed at the bottom"),
+        (b"", b"\033[5;20r\033[20;1H\n", 0, "a region from row 5, a line feed at its bottom"),
+        (b"", b"\033[5;1H\033[M", 0, "DL in row 5"),
+        (b"", b"\033[24;1H\n", -1, "the screen into the history"),
+    )
+    for setup, scroll, moved, name in cases:
+        with Window() as win:
+            win.feed(b"\033c\033[?25l" + setup +
+                     b"".join(b"\033[%d;1Hzeile %d abcdefghijkl" % (r + 1, r) for r in range(24)))
+            g = Grid(settle(), 80, 24)
+            x, y, _, _ = rect()
+
+            def at(col, row):
+                x0, y0, x1, y1 = g.box(col, row)
+                mouse.send("move", x + (x0 + x1) // 2, y + (y0 + y1) // 2)
+                time.sleep(0.1)
+
+            at(2, 10)
+            mouse.send("down", "left")
+            at(12, 10)
+            mouse.send("up", "left")
+            before = [r for r in range(24) if Grid(settle(), 80, 24).corner(5, r) == SEL_BG]
+            win.feed(scroll)
+            after = [r for r in range(24) if Grid(settle(), 80, 24).corner(5, r) == SEL_BG]
+            check(before == [10] and after == [10 + moved],
+                  f"a selection while rows move, {name}", f"rows {before}, then {after}")
+            at(40, 20)
+            mouse.send("click", "left")
+            settle()
+
+
 def red_rows(img):
     """How many pixel rows the red first row of the test image has."""
     x = img.w // 2
@@ -817,6 +854,7 @@ def main():
         test_scrolled_back_footer(win, mouse)
     test_partial_redraw()
     test_damage(mouse)
+    test_selection_scrolls(mouse)
     test_zoom()
     test_zoom_tiled()
     test_hidpi()

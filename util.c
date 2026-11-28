@@ -180,3 +180,11 @@ void snap_size(int cols, int rows, int cw, int ch, int pad, int scale, int *w, i
 	*w = (int)(((long long)cols * cw + 2 * pad + scale - 1) / scale);
 	*h = (int)(((long long)rows * ch + 2 * pad + scale - 1) / scale);
 }
+
+bool shift_span(int pad, int ch, int top, int bot, int n, int h, int *y0, int *y1, int *px)
+{
+	*y0 = pad + top * ch;
+	*y1 = pad + (bot + 1) * ch;
+	*px = n * ch;
+	return *y1 <= h;
+}

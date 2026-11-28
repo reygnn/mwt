@@ -31,6 +31,12 @@ void snap_size(int cols, int rows, int cw, int ch, int pad, int scale, int *w, i
  * scale; one cell at least. KWin and mutter send bounds, sway does not. */
 void fit_bounds(int *cols, int *rows, int bw, int bh, int scale, int pad, int cw, int ch);
 
+/* The pixel rows of cell rows top to bot, below pad and ch high, in *y0 to *y1
+ * (not included), and in *px how far n of them move them: false where they do
+ * not all lie in a buffer h rows high. A grid that did not shrink with its
+ * window, vt_resize() out of memory, is taller than the buffer. */
+bool shift_span(int pad, int ch, int top, int bot, int n, int h, int *y0, int *y1, int *px);
+
 /* How much of s fits in max bytes without cutting a UTF-8 sequence: -T and -a
  * go out in one Wayland message, whose size field is 16 bits. */
 size_t utf8_clip(const char *s, size_t max);
