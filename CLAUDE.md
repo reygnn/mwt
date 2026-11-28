@@ -71,7 +71,10 @@ not drawn: the whole screen moves by starting the picture further on in its
 buffer's pool, in a wl_buffer at that offset, and is copied only at the pool's end
 (`buffer_scroll()`); a scroll region is moved by a memmove. With double buffering,
 rows that differ from the buffer shown last are copied first, after the same
-move; output follows frame callbacks. A build with
+move. A compositor that draws with GL lets go of a buffer at once and gets the
+same one again: it scrolls in place, and the other takes the whole picture
+should it be used. sway's pixman renderer, which the tests run under, holds the
+buffer shown, so no test reaches that. Output follows frame callbacks. A build with
 `-DMWT_CHECK_REDRAW` compares each frame with a full redraw; `make evil` runs `make
 pixel` with it.
 
