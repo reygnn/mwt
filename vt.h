@@ -57,7 +57,10 @@ struct row {
 	 * content at any width; writing leaves it alone, also in the last column.
 	 * With another than COL_DEFAULT_BG the row is full: used is vt.cols. */
 	uint32_t tail;
-	struct cell c[];
+	/* 16 bytes into the row, as malloc aligns it: 12 bytes in, every fourth
+	 * cell's 8-byte store went across a cache line, and text that scrolls
+	 * was 3 % slower */
+	_Alignas(16) struct cell c[];
 };
 
 enum {

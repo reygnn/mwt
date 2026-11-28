@@ -4016,6 +4016,22 @@ static struct vt *ctrl_l_screen(const char *prompt)
 	return vt;
 }
 
+/* A row's cells start on 16 bytes, in every row of both screens and after a
+ * resize: 12 bytes in, the 8-byte stores of fill_row() and put() went across
+ * a cache line for every fourth cell. */
+static void test_row_align(void)
+{
+	struct vt *vt = mk(7, 3, 10);
+	for (int pass = 0; pass < 2; pass++) {
+		for (int r = 0; r < vt->rows; r++) {
+			CHECK((uintptr_t)vt->pri[r]->c % 16 == 0);
+			CHECK((uintptr_t)vt->alt[r]->c % 16 == 0);
+		}
+		CHECK(vt_resize(vt, 11, 4));
+	}
+	vt_free(vt);
+}
+
 /* The places a resize keeps for the next one (RESIZE.md 2.9, K1 to K6) */
 static void test_places(void)
 {
@@ -4795,6 +4811,7 @@ int main(void)
 	test_rows_move();
 	test_height();
 	test_places();
+	test_row_align();
 	test_saved_none();
 	test_resize_alt_and_view();
 	test_sgr_details();

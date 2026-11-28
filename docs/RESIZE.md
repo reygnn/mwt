@@ -469,20 +469,26 @@ Measured on the VT core, without a pty, unless it says otherwise.
 - **M6. The build server** (i5-1135G7, gcc 16.2.1), with step 8: `make check`,
   `make terminfo`, `make replay`, `make evil`, `make fuzz` (600 s, about
   239000 runs), `make fonts` and `make oldwayland` pass.
-- **M7. Speed.** The VT core of every commit since `main` on 64 MB of text,
-  run in turn, the median of 5 to 15 runs. The machine's speed changes between
-  sessions by more than the differences; only numbers of one run compare.
-  - CJK text is 6 to 7 % slower than on `main` (160 MB/s for 170). Step 2
-    costs about 2 %, step 3 about 5 %, step 8 about 2.5 %, and asking first in
-    `put()` whether `row_changed()` has anything to do takes 3 % back.
-  - ASCII text is 2 to 3.3 % slower (259.5 MB/s for 268.3 with lines of 190
-    characters, 266.6 for 272.1 with lines of 78). Most of it comes with the
-    commit before step 1 that tells written cells from erased ones.
+- **M7. Speed.** The VT core on 64 MB of text, run in turn, the median of 5 to
+  15 runs. The machine's speed changes between sessions by more than the
+  differences; only numbers of one run compare. Where the code lies counts as
+  well: the same source with its code moved by 16 to 48 bytes is 1 to 2 %
+  faster or slower, CJK text on the branch up to 10 %. So each build is
+  measured at four such offsets and their mean compared.
+  - ASCII text was 3 to 4 % slower than on `main` since the commit before
+    step 1, which gave a row a third field before its cells. With 12 bytes
+    before them, every fourth cell's 8-byte store in `fill_row()` and `put()`
+    goes across a cache line; with 8, 16 or 20 none does, and with 28 it is
+    slow again. `put_ascii()` stores 4 bytes at most and lost nothing: ASCII
+    without line feeds is as fast as on `main`. The cells start 16 bytes in
+    since, and ASCII text is as fast as on `main`.
+  - CJK text is about 8 % slower than on `main`: 2 to 3 % of it the same
+    stores, 4 to 5 % `put()` asking `joins_settled()` after every character
+    and calling `row_changed()` where that says so (step 3). Without check
+    and call, which is no terminal, CJK is 2 % behind `main`. Not the work of
+    the check: asking once for a row wins 1 %, `row_changed()` out of line
+    and cold nothing; what costs is the call in `put()`, which grows from 238
+    to 293 instructions with it. The layout of `struct vt` and `ATTR_TEXT` in
+    the cells change nothing.
   - In instructions (cachegrind, 6 MB) the branch adds less than it loses in
     time: CJK 750.7 million for 726.0 on `main` (3.4 %), ASCII 0.5 and 1.4 %.
-    Aligning functions and loops to 64 bytes, and 16 bytes before a row's
-    cells, change nothing.
-  - Asking once for a row instead of for every character has 1 % more
-    instructions than `main` and won no time in two sessions of 15 runs
-    (0.4 % and -0.5 %). It is not in the tree. The cost is accepted;
-    nothing more is done to `put()` for speed.
