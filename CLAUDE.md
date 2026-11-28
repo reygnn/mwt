@@ -57,7 +57,7 @@ esctest is GPL. The containers have no network, so fetch on the host first with
 | `sel.c` | the selection over the VT core's lines: words, lines, clicks, drags, its text |
 | `link.c` | URLs in the VT core's lines, over lines that wrap; the opener's words |
 | `shell.c` | the shell on its pty: what waits to be written, its output read in turns, the paste dropped for a signal; spawn, reap, hang up; the opener of a link |
-| `util.c` | `-g`, the context menu's keys, the first size within the compositor's bounds, cutting `-T` and `-a`, the token mwt was started with, the toast's text and place |
+| `util.c` | `-g`, the context menu's keys, the first size within the compositor's bounds, cutting `-T` and `-a`, the token mwt was started with, the toast's text and place, the size of a buffer's pool and where a scroll starts the picture in it |
 | `rc.c` | the mwtrc, the minimum contrast, the cursor's color on a cell, the URL launcher; no Wayland |
 | `mwt.info` | terminfo; declares only what `vt.c` really does |
 | `config.h`, `version.h` | defaults; the version for `-v` and XTVERSION, with the commit from `build/gitversion.h` (the Makefile) |
@@ -67,9 +67,11 @@ esctest is GPL. The containers have no network, so fetch on the host first with
 | `tests/` | black-box and adversarial tests, from the mt project; `tests/lib.sh` for the shell ones (directory, sway, its config, the screen read back), `tests/mwtlib.py` for the Python ones, `tests/swaytree.py` for both |
 
 Only changed rows are drawn. Rows that only moved up as a block (`vt.shift_n`) are
-moved in the buffer, not drawn. With double buffering, rows that differ from the
-buffer shown last are copied first, after the same move; output follows frame
-callbacks. A build with
+not drawn: the whole screen moves by starting the picture further on in its
+buffer's pool, in a wl_buffer at that offset, and is copied only at the pool's end
+(`buffer_scroll()`); a scroll region is moved by a memmove. With double buffering,
+rows that differ from the buffer shown last are copied first, after the same
+move; output follows frame callbacks. A build with
 `-DMWT_CHECK_REDRAW` compares each frame with a full redraw; `make evil` runs `make
 pixel` with it.
 

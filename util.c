@@ -42,6 +42,22 @@ int menu_next(int hover, int n, int dir, unsigned enabled)
 	return hover;
 }
 
+int pool_rows(int w, int h, int pictures)
+{
+	if (w < 1 || h < 1)
+		return 0;
+	int64_t most = INT32_MAX / ((int64_t)w * 4);
+	if (most < h)
+		return 0;
+	return (int)(most < (int64_t)h * pictures ? most : (int64_t)h * pictures);
+}
+
+int scroll_start(int off, int px, int h, int pool_h, bool *copy)
+{
+	*copy = off + px > pool_h - h;
+	return *copy ? 0 : off + px;
+}
+
 bool stdio_fill(void)
 {
 	for (int fd = 0; fd < 3; fd++) {

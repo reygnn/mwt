@@ -18,10 +18,12 @@ TODO
 
 Performance, aus der Review vom 2026-11-17 (docs/history/Review-2026-11-17.md):
 
-* Scrollen verschiebt die Pixel jetzt mit memmove, in beiden Puffern: bei
-  200x55, 1080p und 60 Hz 1,76 ms CPU pro Bild statt 4,24, davon 86 % das
-  memmove. Ohne Kopie ginge es wie in foot: der Puffer in einem größeren
-  memfd, und ein wl_buffer mit verschobenem offset statt der Kopie.
+* Scrollt der ganze Schirm, beginnt das Bild in seinem Pool weiter hinten, in
+  einem wl_buffer mit Offset, statt kopiert zu werden; der Pool hält zwei
+  Bilder, also doppelt so viel Speicher, sobald ein Schirm durchgelaufen ist.
+  Ein Scrollbereich wird weiter mit memmove verschoben. Die Seiten hinter dem
+  Bild mit fallocate(PUNCH_HOLE) zurückzugeben hielt den Speicher beim
+  Alten, kostete aber die Hälfte mehr CPU pro Bild (Seitenfehler): gelassen.
 * blit ist 73 bis 76 % der Zeichenzeit, Pixel für Pixel gemischt. Ein Cache
   fertig gemischter Glyphen je Vorder- und Hintergrund, oder SIMD. Ohne
   Verzweigung war es 20 % langsamer.
@@ -47,7 +49,8 @@ Zu entscheiden, aus der dritten Review (docs/history/Review-2026-11-08.md):
   in sel.c (test_sel), Shell und pty in shell.c (test_shell, mit echten
   ptys, Pipes und Prozessen), die URLs in link.c (test_link),
   parse_geometry, menu_key und snap_size in util.c (test_util), mime_rank in
-  paste.c. Noch offen, wenn sie sich ändern: buffer_fits, cursor_size.
+  paste.c, buffer_fits als pool_rows in util.c. Noch offen, wenn sie sich
+  ändert: cursor_size.
   Die Wayland-Callbacks bleiben bei den Black-Box-Tests unter sway.
 
 Tests, die noch fehlen, als Kür:

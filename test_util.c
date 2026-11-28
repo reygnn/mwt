@@ -161,6 +161,69 @@ static void test_snap(void)
 	CHECK(w == (int)((4096LL * 100000 + 8 + 3) / 4));
 }
 
+static void test_pool(void)
+{
+	CHECK(pool_rows(1920, 1080, 1) == 1080);
+	CHECK(pool_rows(1920, 1080, 2) == 2160);
+	/* 2 GiB, a byte less: the last picture that fits, and no room beside it */
+	CHECK(pool_rows(1, INT32_MAX / 4, 1) == INT32_MAX / 4);
+	CHECK(pool_rows(1, INT32_MAX / 4, 2) == INT32_MAX / 4);
+	CHECK(pool_rows(INT32_MAX / 4, 1, 2) == 1);
+	CHECK(pool_rows(1, INT32_MAX / 4 + 1, 1) == 0);
+	CHECK(pool_rows(INT32_MAX / 4 + 1, 1, 1) == 0);
+	/* one picture of 1.3 GiB: the rows 2 GiB hold, not two of it */
+	CHECK(pool_rows(16384, 20000, 2) == 32767);
+	CHECK(pool_rows(16384, 20000, 1) == 20000);
+	CHECK(pool_rows(INT_MAX, INT_MAX, 2) == 0); /* no overflow on the way */
+	CHECK(pool_rows(0, 100, 2) == 0 && pool_rows(100, 0, 2) == 0);
+	CHECK(pool_rows(-1, 100, 2) == 0 && pool_rows(100, -1, 2) == 0);
+}
+
+/* A picture kept as mwt.c keeps it, in a pool whose rows each say which row of
+ * all that scrolled by they show: after any scrolls the picture lies in the
+ * pool and shows the last h, and nothing was copied while there was room. */
+static void test_scroll(void)
+{
+	bool copy;
+	CHECK(scroll_start(0, 19, 100, 200, &copy) == 19 && !copy);
+	CHECK(scroll_start(81, 19, 100, 200, &copy) == 100 && !copy); /* to the last row */
+	CHECK(scroll_start(82, 19, 100, 200, &copy) == 0 && copy);
+	CHECK(scroll_start(0, 1, 100, 100, &copy) == 0 && copy); /* no room: each time */
+
+	unsigned seed = 1;
+	int bad = 0, copies = 0;
+	for (int run = 0; run < 300; run++) {
+		seed = seed * 1103515245 + 12345;
+		int h = 2 + (int)(seed >> 16) % 40;
+		seed = seed * 1103515245 + 12345;
+		int pool_h = h + (int)(seed >> 16) % (3 * h), off = 0, top = 0;
+		int pool[4 * 42];
+		memset(pool, -1, sizeof pool);
+		for (int y = 0; y < h; y++)
+			pool[y] = y;
+		for (int i = 0; i < 100; i++) {
+			seed = seed * 1103515245 + 12345;
+			int px = 1 + (int)(seed >> 16) % (h - 1);
+			int to = scroll_start(off, px, h, pool_h, &copy);
+			if (to < 0 || to + h > pool_h || copy != (off + px + h > pool_h)) {
+				bad++;
+				break;
+			}
+			if (copy)
+				memmove(pool + to, pool + off + px, (size_t)(h - px) * sizeof *pool);
+			copies += copy;
+			off = to;
+			top += px;
+			for (int y = h - px; y < h; y++)
+				pool[off + y] = top + y;
+			for (int y = 0; y < h; y++)
+				bad += pool[off + y] != top + y;
+		}
+	}
+	CHECK(bad == 0);
+	CHECK(copies > 0);
+}
+
 static void test_bounds(void)
 {
 	int c = 400, r = 200;
@@ -360,6 +423,8 @@ int main(void)
 	test_clip();
 	test_bounds();
 	test_snap();
+	test_pool();
+	test_scroll();
 	test_stdio();
 	test_token();
 	test_toast();

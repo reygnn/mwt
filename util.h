@@ -37,6 +37,17 @@ void fit_bounds(int *cols, int *rows, int bw, int bh, int scale, int pad, int cw
  * window, vt_resize() out of memory, is taller than the buffer. */
 bool shift_span(int pad, int ch, int top, int bot, int n, int h, int *y0, int *y1, int *px);
 
+/* The pixel rows of the wl_shm pool for a picture of w x h: h for each of
+ * `pictures`, room to scroll in (scroll_start()), or as many as the 2 GiB of a
+ * pool hold. 0 where not one picture fits, or there is none. */
+int pool_rows(int w, int h, int pictures);
+
+/* Scrolling without a copy: a picture of h pixel rows at row off of a pool of
+ * pool_h moves up by px when it starts px rows further on. The row it starts at
+ * then: at the pool's end 0 again, where rows px to h of it are to be copied
+ * (*copy). */
+int scroll_start(int off, int px, int h, int pool_h, bool *copy);
+
 /* How much of s fits in max bytes without cutting a UTF-8 sequence: -T and -a
  * go out in one Wayland message, whose size field is 16 bits. */
 size_t utf8_clip(const char *s, size_t max);

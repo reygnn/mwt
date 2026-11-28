@@ -476,6 +476,83 @@ def test_selection_scrolls(mouse):
             settle()
 
 
+def pool_requests(path):
+    """From a WAYLAND_DEBUG log: the offset, width and height of each XRGB wl_buffer
+    made, how many of them are not destroyed, and how many of the pools they are
+    from. The cursor theme's pool has ARGB ones."""
+    with open(path, errors="replace") as f:
+        text = f.read()
+    made, pools, bufs = [], set(), set()
+    for m in re.finditer(r"wl_shm_pool[@#](\d+)\.create_buffer\(new id wl_buffer[@#](\d+), "
+                         r"(\d+), (\d+), (\d+), \d+, 1\)|(wl_\w+[@#]\d+)\.destroy\(\)", text):
+        if m.group(6):
+            pools.discard(m.group(6).replace("#", "@"))
+            bufs.discard(m.group(6).replace("#", "@"))
+        else:
+            pools.add("wl_shm_pool@" + m.group(1))
+            bufs.add("wl_buffer@" + m.group(2))
+            made.append(tuple(map(int, m.group(3, 4, 5))))
+    return made, len(bufs), len(pools)
+
+
+def test_scroll_pool():
+    """A line at the bottom moves the picture on in its pool, in a wl_buffer at an
+    offset, and copies nothing but at the pool's end, where it starts at 0 again.
+    The rows are colored to their edges: what was grid shows in the padding if
+    that is not filled. Then a new size: the old pools and their memory go. And
+    tiled, with a margin below the grid one pixel row short of a text row: the
+    row the copy at the pool's end moves last is the first of the margin."""
+    log = os.path.join(mwtlib.DIR, "pool.log")
+    head = RESET + b"\033[41m\033[2J\033[24;1H"
+    lines = [b"\033[4%dm\033[3%dmzeile %d\r\n" % (i % 7 + 1, i % 5, i) for i in range(60)]
+
+    def scrolled(win):
+        win.feed(head)
+        for line in lines:
+            win.feed(line)
+            time.sleep(0.03)
+        return settle()
+
+    def same(slow, fast, what):
+        check(slow == fast, what, "" if slow == fast else f"cells (row, column) {diff_cells(slow, fast)[:12]}")
+
+    with Window(env={"WAYLAND_DEBUG": "client"}, stderr=log) as win:
+        slow = scrolled(win)
+        made, bufs, _ = pool_requests(log)
+        offs = [o for o, w, h in made if (w, h) == (slow.w, slow.h)]
+        check(max(offs, default=0) > 0 and all(o % (slow.w * 4) == 0 for o in offs),
+              "a scroll starts the picture further on in its pool", f"offsets {offs[:8]}")
+        check(offs and 0 in offs[offs.index(max(offs)):],
+              "and at the pool's end at its start again", f"offsets {offs[-8:]}")
+        check(bufs == 2, "the wl_buffers it left are destroyed", f"{bufs} of {len(made)} live")
+        swaymsg('[app_id="mwt"]', "resize", "set", "600", "300")
+        settle()
+        win.feed(b"x")
+        settle()
+        pools = pool_requests(log)[2]
+        with open(f"/proc/{win.proc.pid}/maps") as f:
+            maps = f.read().count("memfd:mwt")
+        check(pools == 2 and maps == 2, "a new size leaves two pools, the old ones freed",
+              f"{pools} pools, {maps} mapped")
+    with Window() as win:
+        win.feed(head + b"".join(lines))
+        same(slow, settle(), "scrolled line by line: the same as all at once")
+    swaymsg("output", "HEADLESS-1", "resolution", f"1000x{2 * mwtlib.PAD + 25 * Grid(slow, 80, 24).ch - 1}")
+    try:
+        with Window() as win:
+            swaymsg('[app_id="mwt"]', "floating", "disable")
+            settle()
+            slow = scrolled(win)
+        with Window() as win:
+            swaymsg('[app_id="mwt"]', "floating", "disable")
+            settle()
+            win.feed(head + b"".join(lines))
+            same(slow, settle(), "and with a margin below the grid")
+    finally:
+        swaymsg("output", "HEADLESS-1", "resolution", "1000x700")
+        time.sleep(0.3)
+
+
 def red_rows(img):
     """How many pixel rows the red first row of the test image has."""
     x = img.w // 2
@@ -853,6 +930,7 @@ def main():
         test_scrolled_back_output(win, mouse)
         test_scrolled_back_footer(win, mouse)
     test_partial_redraw()
+    test_scroll_pool()
     test_damage(mouse)
     test_selection_scrolls(mouse)
     test_zoom()

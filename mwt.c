@@ -63,11 +63,18 @@ struct pcursor {
 
 struct buffer {
 	struct wl_buffer *wb;
-	uint32_t *data;
+	struct wl_shm_pool *pool; /* wb is from it, and the one after each scroll */
+	uint32_t *pool_data;
+	int pool_h;               /* pixel rows */
+	uint32_t *data;           /* the picture, w x h, in the pool */
 	int w, h;
 	size_t size;
 	bool busy;
 };
+/* The pictures the window's pool has room for, and its memory once a screen of
+ * text has scrolled by: a scroll moves the picture on in it and copies only at
+ * its end. With 2 that is one copy a screen; 3 to 8 measured the same. */
+#define POOL_PICTURES 2
 
 /* a clipboard transfer to one reader, fed from the event loop */
 struct xfer {
@@ -958,7 +965,16 @@ static const struct wl_buffer_listener buffer_listener = { buffer_release };
 /* wl_shm pool sizes are int32 */
 static bool buffer_fits(int w, int h)
 {
-	return (size_t)w * h * 4 <= INT32_MAX;
+	return pool_rows(w, h, 1) > 0;
+}
+
+static void buffer_free(struct buffer *b)
+{
+	if (!b->wb)
+		return;
+	wl_buffer_destroy(b->wb);
+	wl_shm_pool_destroy(b->pool);
+	munmap(b->pool_data, (size_t)b->pool_h * b->w * 4);
 }
 
 /* Once until a buffer is made again: a failing one fails each frame. */
@@ -970,9 +986,12 @@ static void buffer_failed(int w, int h, const char *what)
 	buffer_told = true;
 }
 
-static bool buffer_init(struct buffer *b, int w, int h)
+/* A pool of `pictures` times w x h, less where 2 GiB do not hold them, and b the
+ * first picture in it. */
+static bool buffer_init(struct buffer *b, int w, int h, int pictures)
 {
-	if (!buffer_fits(w, h)) {
+	int pool_h = pool_rows(w, h, pictures);
+	if (!pool_h) {
 		static bool told;
 		if (!told)
 			fprintf(stderr, "mwt: a %dx%d window needs a buffer over 2 GiB, not drawing\n", w, h);
@@ -982,13 +1001,14 @@ static bool buffer_init(struct buffer *b, int w, int h)
 	/* The new one whole first, and the old one goes only then: a failure leaves
 	 * b as it was. Freed early, it kept its old size over freed memory, and a
 	 * window back at that size drew into it. */
-	size_t size = (size_t)w * h * 4;
+	size_t size = (size_t)pool_h * w * 4;
 	int fd = memfd_create("mwt", MFD_CLOEXEC);
 	if (fd < 0) {
 		buffer_failed(w, h, "memfd_create");
 		return false;
 	}
 	void *data = MAP_FAILED;
+	struct wl_shm_pool *pool = NULL;
 	struct wl_buffer *wb = NULL;
 	const char *what = "ftruncate";
 	if (ftruncate(fd, (off_t)size) == 0) {
@@ -997,27 +1017,25 @@ static bool buffer_init(struct buffer *b, int w, int h)
 	}
 	if (data != MAP_FAILED) {
 		what = "wl_shm";
-		struct wl_shm_pool *pool = wl_shm_create_pool(t.shm, fd, (int32_t)size);
-		if (pool) {
+		pool = wl_shm_create_pool(t.shm, fd, (int32_t)size);
+		if (pool)
 			wb = wl_shm_pool_create_buffer(pool, 0, w, h, w * 4, WL_SHM_FORMAT_XRGB8888);
-			wl_shm_pool_destroy(pool);
-		}
 	}
 	if (!wb)
 		buffer_failed(w, h, what);
 	close(fd);
 	if (!wb) {
+		if (pool)
+			wl_shm_pool_destroy(pool);
 		if (data != MAP_FAILED)
 			munmap(data, size);
 		return false;
 	}
 	buffer_told = false;
-	if (b->wb) {
-		wl_buffer_destroy(b->wb);
-		munmap(b->data, b->size);
-	}
+	buffer_free(b);
 	wl_buffer_add_listener(wb, &buffer_listener, b);
-	*b = (struct buffer){ .wb = wb, .data = data, .w = w, .h = h, .size = size };
+	*b = (struct buffer){ .wb = wb, .pool = pool, .pool_data = data, .pool_h = pool_h,
+			      .data = data, .w = w, .h = h, .size = (size_t)w * h * 4 };
 	return true;
 }
 
@@ -1029,9 +1047,37 @@ static void frame_done(void *d, struct wl_callback *cb, uint32_t time)
 }
 static const struct wl_callback_listener frame_listener = { frame_done };
 
-/* Pixel rows y0 + px to y1 (not included) of the buffer move up to y0 */
+/* The picture moves up by px without a copy: it starts px rows further on in its
+ * pool, in a new wl_buffer. The old one was released, or b would not be drawn
+ * in. At the pool's end the rows that stay are copied to its start, once. What
+ * moved in at the bottom was no picture, and the padding at the top was grid:
+ * both filled. False without the memory for a wl_buffer, b as it was. */
+static bool buffer_scroll(struct buffer *b, int px)
+{
+	bool copy;
+	int off = scroll_start((int)((b->data - b->pool_data) / b->w), px, b->h, b->pool_h, &copy);
+	struct wl_buffer *wb = wl_shm_pool_create_buffer(b->pool, off * b->w * 4, b->w, b->h,
+							 b->w * 4, WL_SHM_FORMAT_XRGB8888);
+	if (!wb)
+		return false;
+	wl_buffer_destroy(b->wb);
+	wl_buffer_add_listener(wb, &buffer_listener, b);
+	b->wb = wb;
+	uint32_t *to = b->pool_data + (size_t)off * b->w;
+	if (copy)
+		memmove(to, b->data + (size_t)px * b->w, (size_t)(b->h - px) * b->w * sizeof *to);
+	b->data = to;
+	fill_rect(b, 0, 0, b->w, t.pad, t.col.bg);
+	fill_rect(b, 0, b->h - px, b->w, px, t.col.bg);
+	return true;
+}
+
+/* Pixel rows y0 + px to y1 (not included) of the picture move up to y0: the
+ * whole grid with the picture, the rows of a scroll region copied. */
 static void shift_pixels(struct buffer *b, int y0, int y1, int px)
 {
+	if (y0 == t.pad && y1 == t.pad + t.vt->rows * t.ch && buffer_scroll(b, px))
+		return;
 	memmove(b->data + (size_t)y0 * b->w, b->data + (size_t)(y0 + px) * b->w,
 		(size_t)(y1 - y0 - px) * b->w * sizeof *b->data);
 }
@@ -1183,7 +1229,7 @@ static void toast_draw(void)
 		return;
 	}
 	int W = box.w * t.scale, H = box.h * t.scale;
-	if ((b->w != W || b->h != H) && !buffer_init(b, W, H)) {
+	if ((b->w != W || b->h != H) && !buffer_init(b, W, H, 1)) {
 		toast_unmap();
 		return;
 	}
@@ -1310,7 +1356,7 @@ static void draw(void)
 
 	bool full = t.need_full;
 	if (b->w != W || b->h != H) {
-		if (!buffer_init(b, W, H)) {
+		if (!buffer_init(b, W, H, POOL_PICTURES)) {
 			/* nothing shown yet: the window would never appear, the
 			 * shell would run unseen */
 			if (!t.last)
@@ -1433,13 +1479,8 @@ static void menu_close(void)
 	xdg_popup_destroy(t.menu.popup);
 	xdg_surface_destroy(t.menu.xsurface);
 	wl_surface_destroy(t.menu.surface);
-	for (int i = 0; i < 2; i++) {
-		struct buffer *b = &t.menu.bufs[i];
-		if (b->wb) {
-			wl_buffer_destroy(b->wb);
-			munmap(b->data, b->size);
-		}
-	}
+	for (int i = 0; i < 2; i++)
+		buffer_free(&t.menu.bufs[i]);
 	memset(&t.menu, 0, sizeof t.menu);
 	link_hover();
 }
@@ -1466,7 +1507,7 @@ static void menu_draw(struct buffer *b)
 {
 	int W = t.menu.w * t.scale, H = t.menu.h * t.scale;
 	if (b->w != W || b->h != H) {
-		if (!buffer_init(b, W, H)) {
+		if (!buffer_init(b, W, H, 1)) {
 			menu_close();
 			return;
 		}
