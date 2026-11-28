@@ -976,6 +976,68 @@ static void test_fuzz(void)
 	}
 }
 
+/* Text that is not ASCII goes in runs (put_utf8()) where vt_write() has the
+ * whole sequence, and through put() byte by byte, which never has it: the two
+ * must end the same, for runs that meet the end of the row, wide glyphs they
+ * cut, a pending wrap, insert mode, characters of no width, sequences that are
+ * cut off or no character, C1 controls, REP and all of fuzz_frags. */
+static void test_utf8_runs(void)
+{
+	static const char *const frags[] = {
+		"\xe6\xbc\xa2", "\xe5\xad\x97\xe6\xbc\xa2\xe5\xad\x97", "\xf0\x9f\x99\x82", "\xc3\xa4",
+		"\xc3\xb6\xc3\xbc\xc3\x9f", "\xe2\x82\xac", "\xcc\x81", "\xe2\x80\x8d", "\xc2\xa0",
+		"\xc2\x85", "\xc2\x9b", "\xc2\x9f", "\xc0\x80", "\xe0\x80\xaf", "\xe0\x82\xa0",
+		"\xe0\x9f\xbf", "\xf0\x8f\xbf\xbf", "\xed\xa0\x80",
+		"\xf4\x90\x80\x80", "\xf5\x80", "\xe6\xbc", "\xe6\x41", "\xff", "\x80",
+		"\033[4h", "\033[4l", "\033[?7l", "\033[?7h", "\033[3b", "\r", "\n", "\b", "\033[2;3r",
+		"\033[H", "\033[3G", "\033[@", "\033[P", "\033[K", "\033(0", "\033(B", "\033[?1049h",
+		"\033[?1049l", "\033[44m", "\033[0m", "ab",
+	};
+	static char buf[3000];
+	long cut = 0;
+	for (long seed = 1; seed <= 600; seed++) {
+		fuzz_state = (unsigned long long)seed * 0x9E3779B97F4A7C15ULL + 7;
+		int cols = 1 + fuzz_rand() % 30, rows = 1 + fuzz_rand() % 6;
+		size_t n = 0;
+		while (n + 64 < sizeof buf) {
+			const char *f = fuzz_rand() % 4 ? frags[fuzz_rand() % (sizeof frags / sizeof *frags)]
+							: fuzz_frags[fuzz_rand() % (sizeof fuzz_frags / sizeof *fuzz_frags)];
+			memcpy(buf + n, f, strlen(f));
+			n += strlen(f);
+		}
+		static struct fuzz_said sw, sb;
+		sw = (struct fuzz_said){ .replies = 0xcbf29ce484222325ull };
+		sb = sw;
+		struct vt_callbacks cbw = { .write = fuzz_write, .title = fuzz_title, .ud = &sw };
+		struct vt_callbacks cbb = { .write = fuzz_write, .title = fuzz_title, .ud = &sb };
+		struct vt *whole = vt_new(cols, rows, 50, &cbw), *bytes = vt_new(cols, rows, 50, &cbb);
+		vt_write(whole, buf, n);
+		for (size_t i = 0; i < n; i++)
+			vt_write(bytes, buf + i, 1);
+		checks++;
+		if (!fuzz_same(whole, bytes, &sw, &sb))
+			fuzz_report(seed, "utf-8 runs", "a run ends otherwise than its characters one by one");
+		cut += whole->c.wrapnext;
+		vt_free(whole);
+		vt_free(bytes);
+	}
+	CHECK(cut > 20); /* runs did end at the end of the row */
+
+	/* a run is one cell or two a character, and stops at the row's end */
+	struct vt *vt = mk(5, 2, 0);
+	w(vt, "\xe6\xbc\xa2\xc3\xa4\xe5\xad\x97\xe6\xbc\xa2");
+	CHECK_STR(row(vt, 0), "\xe6\xbc\xa2\xc3\xa4\xe5\xad\x97");
+	CHECK_STR(row(vt, 1), "\xe6\xbc\xa2");
+	CHECK(vt->pri[0]->wrap == 5 && vt->c.x == 2 && vt->c.y == 1);
+	CHECK((vt->pri[0]->c[0].attr & ATTR_WIDE) && (vt->pri[0]->c[1].attr & ATTR_WDUMMY));
+	CHECK(vt->pri[0]->c[2].attr & ATTR_TEXT);
+	/* and the row is drawn again */
+	memset(vt->dirty, 0, 2);
+	w(vt, "\r\xc3\xb6\xc3\xb6");
+	CHECK(!vt->dirty[0] && vt->dirty[1]);
+	vt_free(vt);
+}
+
 static void test_altscreen(void)
 {
 	struct vt *vt = mk(10, 3, 10);
@@ -4822,6 +4884,7 @@ int main(void)
 	test_rep();
 	test_xterm_resets();
 	test_fuzz();
+	test_utf8_runs();
 	printf("%d/%d checks passed\n", checks - failures, checks);
 	return failures != 0;
 }

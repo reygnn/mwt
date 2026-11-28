@@ -482,13 +482,15 @@ Measured on the VT core, without a pty, unless it says otherwise.
     slow again. `put_ascii()` stores 4 bytes at most and lost nothing: ASCII
     without line feeds is as fast as on `main`. The cells start 16 bytes in
     since, and ASCII text is as fast as on `main`.
-  - CJK text is about 8 % slower than on `main`: 2 to 3 % of it the same
+  - CJK text was about 8 % slower than on `main`: 2 to 3 % of it the same
     stores, 4 to 5 % `put()` asking `joins_settled()` after every character
-    and calling `row_changed()` where that says so (step 3). Without check
-    and call, which is no terminal, CJK is 2 % behind `main`. Not the work of
-    the check: asking once for a row wins 1 %, `row_changed()` out of line
-    and cold nothing; what costs is the call in `put()`, which grows from 238
-    to 293 instructions with it. The layout of `struct vt` and `ATTR_TEXT` in
-    the cells change nothing.
-  - In instructions (cachegrind, 6 MB) the branch adds less than it loses in
-    time: CJK 750.7 million for 726.0 on `main` (3.4 %), ASCII 0.5 and 1.4 %.
+    and calling `row_changed()` where that says so (step 3). Not the work of
+    the check: asking once for a row won 1 %, and any code in that place,
+    the check without the call or a call that never happens, cost as much.
+    Characters that are not ASCII go in runs since (`put_utf8()`), as ASCII
+    does: decoded and written in one loop, `row_changed()` asked once for the
+    run. CJK text has 300 MB/s for 170 on `main`, German text with its
+    umlauts 226.4 for 226.7, ASCII as on `main`.
+  - Before the two, in instructions (cachegrind, 6 MB), the branch added less
+    than it lost in time: CJK 750.7 million for 726.0 on `main` (3.4 %),
+    ASCII 0.5 and 1.4 %.

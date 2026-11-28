@@ -329,11 +329,12 @@ static void row_changed(struct vt *vt, int y)
 		*join = 0;
 }
 
-/* What put() asks before it calls row_changed() for a character. With no
- * join in the row and none short of the last column leading into it there
- * is nothing to do, and that is every character of a line of text: the call
- * for each made text that is not ASCII a tenth slower. Which screen is shown
- * is not asked here; row_changed() knows. */
+/* What put() asks before it calls row_changed() for a character, and
+ * put_ascii() and put_utf8() for a run. With no join in the row and none short
+ * of the last column leading into it there is nothing to do, and that is
+ * every character of a line of text: the call for each made text that is not
+ * ASCII a tenth slower, and German text with its runs between the umlauts
+ * 1.5 %. Which screen is shown is not asked here; row_changed() knows. */
 static inline bool joins_settled(struct vt *vt, const struct row *l, int y)
 {
 	const int *join = join_into(vt, y);
@@ -2357,11 +2358,74 @@ static size_t put_ascii(struct vt *vt, const unsigned char *s, size_t n)
 		}
 	}
 	wrote(row, x0, x1 + 1);
-	row_changed(vt, c->y);
+	if (!joins_settled(vt, row, c->y))
+		row_changed(vt, c->y);
 	mark_row(vt, c->y);
 	vt->lastcp = s[k - 1];
 	advance(vt, x1 + 1, vt->mode & MODE_AUTOWRAP);
 	return k;
+}
+
+/* A run of characters that are not ASCII, as put_ascii() takes a run of ASCII:
+ * decoded here, written in one go, row_changed() asked once for the run. Each
+ * through feed() and put(), CJK text went at half the speed. It stops where
+ * put() has more to do (a wrap, insert mode, a character of no width), at the
+ * end of the row, and at bytes vt_write() decodes itself: a sequence that is
+ * cut off, overlong or no character, C1 controls. Returns the bytes taken. */
+static size_t put_utf8(struct vt *vt, const unsigned char *s, size_t n)
+{
+	static const uint32_t least[] = { 0, 0x80, 0x800, 0x10000 };
+	struct vt_cursor *c = &vt->c;
+	if (c->wrapnext || (vt->mode & MODE_INSERT))
+		return 0;
+	uint32_t cps[256];
+	unsigned char ws[256];
+	size_t i = 0;
+	int k = 0, x = c->x;
+	while (k < 256 && i < n && s[i] >= 0xc2 && s[i] <= 0xf4) {
+		int need = s[i] < 0xe0 ? 1 : s[i] < 0xf0 ? 2 : 3, j = 1;
+		if (i + need >= n)
+			break;
+		/* a sequence cut short is below its least value too */
+		uint32_t cp = s[i] & (0x3f >> need);
+		for (; j <= need && (s[i + j] & 0xc0) == 0x80; j++)
+			cp = cp << 6 | (s[i + j] & 0x3f);
+		if (cp < least[need] || cp < 0xa0 || cp > 0x10ffff || (cp >= 0xd800 && cp < 0xe000))
+			break;
+		int w = charwidth(cp);
+		if (w <= 0 || x + w > vt->cols)
+			break;
+		cps[k] = cp;
+		ws[k++] = (unsigned char)w;
+		x += w;
+		i += need + 1;
+	}
+	if (!k)
+		return 0;
+	struct row *row = vt->line[c->y];
+	int x0 = c->x, x1 = x - 1;
+	fix_wide(vt, row, x0, x1);
+	struct cell *l = row->c;
+	struct cell tm = c->tmpl;
+	uint16_t base = (tm.attr & ~(ATTR_WIDE | ATTR_WDUMMY)) | ATTR_TEXT;
+	x = x0;
+	for (int j = 0; j < k; j++) {
+		tm.cp = cps[j];
+		tm.attr = base | (ws[j] == 2 ? ATTR_WIDE : 0);
+		l[x++] = tm;
+		if (ws[j] == 2) {
+			tm.cp = 0;
+			tm.attr = base | ATTR_WDUMMY;
+			l[x++] = tm;
+		}
+	}
+	wrote(row, x0, x1 + 1);
+	if (!joins_settled(vt, row, c->y))
+		row_changed(vt, c->y);
+	mark_row(vt, c->y);
+	vt->lastcp = cps[k - 1];
+	advance(vt, x1 + 1, vt->mode & MODE_AUTOWRAP);
+	return i;
 }
 
 void vt_write(struct vt *vt, const char *buf, size_t len)
@@ -2378,6 +2442,13 @@ void vt_write(struct vt *vt, const char *buf, size_t len)
 		unsigned char b = s[i];
 		if (!vt->utf8_need && vt->state == ST_GROUND && b >= 0x20 && b < 0x7f) {
 			size_t k = put_ascii(vt, s + i, len - i);
+			if (k) {
+				i += k - 1;
+				continue;
+			}
+		}
+		if (!vt->utf8_need && vt->state == ST_GROUND && b >= 0xc2 && b <= 0xf4) {
+			size_t k = put_utf8(vt, s + i, len - i);
 			if (k) {
 				i += k - 1;
 				continue;
