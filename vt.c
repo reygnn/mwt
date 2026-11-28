@@ -285,6 +285,10 @@ static void hist_unwrap(struct vt *vt)
 		return;
 	int slot = (vt->hist_head - 1 + vt->hist_cap) % vt->hist_cap;
 	vt->hist_wrap[slot] = 0;
+	/* and it keeps what push_hist() keeps of a row that ends its line: the
+	 * cells before the join that were no content go */
+	if (vt->hist_tail[slot] == COL_DEFAULT_BG)
+		vt->hist_len[slot] = content_len(vt->hist[slot], vt->hist_len[slot], COL_DEFAULT_BG);
 }
 
 /* The join that leads into row y of the main screen: the one of the row
@@ -325,8 +329,12 @@ static void row_changed(struct vt *vt, int y)
 		return;
 	if (*join == vt->cols - 1 && (l->c[0].attr & ATTR_WIDE))
 		return;
-	if (l->wrap || content_len(l->c, l->used, l->tail))
-		*join = 0;
+	if (l->wrap || content_len(l->c, l->used, l->tail)) {
+		if (y)
+			*join = 0;
+		else
+			hist_unwrap(vt);
+	}
 }
 
 /* What put() asks before it calls row_changed() for a character, and
@@ -341,33 +349,42 @@ static inline bool joins_settled(struct vt *vt, const struct row *l, int y)
 	return !l->wrap && (!join || !*join || *join == vt->cols);
 }
 
+/* The cells a row keeps in the history: its content, the blanks a program
+ * wrote at its end with it (H1), and the cells before a wrap whatever they
+ * are. Not the blanks of an erase behind it: they are there again where the
+ * row is shown. Those of an erase in a colour are kept, to the last column. A
+ * screen row is blank from row.used on, so the search starts there. */
+static int hist_cells(const struct row *row)
+{
+	return row->tail != COL_DEFAULT_BG ? row->used :
+	       MAX(content_len(row->c, row->used, row->tail), row->wrap);
+}
+
+/* Slot slot of the history holds len cells; false out of memory, and then it
+ * is as it was. A slot keeps its cells: once the history is full, a line that
+ * fits where the one it replaces was needs no realloc. */
+static bool hist_room_for(struct vt *vt, int slot, int len)
+{
+	if (vt->hist[slot] && len <= vt->hist_room[slot])
+		return true;
+	struct cell *dst = realloc(vt->hist[slot], MAX(len, 1) * sizeof *dst);
+	if (!dst)
+		return false;
+	vt->hist[slot] = dst;
+	vt->hist_room[slot] = MAX(len, 1);
+	return true;
+}
+
 static void push_hist(struct vt *vt, const struct row *row)
 {
 	if (vt->hist_cap <= 0)
 		return;
-	/* The row's content is kept, the blanks a program wrote at its end with
-	 * it (H1), and the cells before a wrap whatever they are. Not the blanks
-	 * of an erase behind it: they are there again where the row is shown.
-	 * Those of an erase in a colour are kept, to the last column. A screen
-	 * row is blank from row.used on, so the search starts there. */
-	const struct cell *l = row->c;
-	int len = row->tail != COL_DEFAULT_BG ? row->used :
-		  MAX(content_len(l, row->used, row->tail), row->wrap);
-	int slot = vt->hist_head;
-	struct cell *dst = vt->hist[slot];
-	/* a slot keeps its cells: once the history is full, a line that fits
-	 * where the one it replaces was needs no realloc */
-	if (!dst || len > vt->hist_room[slot]) {
-		dst = realloc(dst, MAX(len, 1) * sizeof *dst);
-		if (dst) {
-			vt->hist[slot] = dst;
-			vt->hist_room[slot] = MAX(len, 1);
-		}
-	}
+	int len = hist_cells(row), slot = vt->hist_head;
+	struct cell *dst = hist_room_for(vt, slot, len) ? vt->hist[slot] : NULL;
 	/* out of memory the line goes in empty: it still scrolled off, and
 	 * skipping it would shift every line number a selection holds */
 	if (dst)
-		memcpy(dst, l, len * sizeof *dst);
+		memcpy(dst, row->c, len * sizeof *dst);
 	vt->hist_len[slot] = dst ? len : 0;
 	vt->hist_wrap[slot] = dst ? row->wrap : 0;
 	vt->hist_tail[slot] = dst ? row->tail : COL_DEFAULT_BG;
@@ -1179,6 +1196,7 @@ bool vt_resize(struct vt *vt, int cols, int rows)
 	/* everything new first, so a failure leaves the terminal as it was */
 	bool anew = cols != vt->cols;
 	int pshift = 0, pull = 0;
+	bool room = true;
 	int64_t t = 0;
 	struct reflow rf = { 0 };
 	struct mark m[4];
@@ -1206,19 +1224,30 @@ bool vt_resize(struct vt *vt, int cols, int rows)
 		 * takes the newest ones back above its text, as xterm does: what a
 		 * shorter window pushed off returns with the window. They fit: the
 		 * history is as wide as the screen. */
+		/* E of V4, the place behind the text: in the row its line goes
+		 * on into, which a row that ends it empty has none of (C1, L3), as
+		 * reflow() puts it */
+		int end = v.end + (v.end + 1 < vt->rows && vt->pri[v.end]->wrap);
 		t = v.full ? v.end - (rows - 1) : v.top - MAX(0, rows - v.rows);
 		t = MAX(t, -vt->hist_count);
-		if (v.end - t > rows - 1)
-			t = v.end - (rows - 1);
+		if (end - t > rows - 1)
+			t = end - (rows - 1);
 		t = MIN(t, *py);
 		pshift = (int)MAX(t, 0);
 		pull = (int)MAX(-t, 0);
 		npri = copy_screen(vt, vt->pri, pshift - pull, cols, rows);
+		/* the rows that go into the history get their cells now, before
+		 * anything is changed: push_hist() below has them and cannot fail
+		 * (A6). A slot taken twice, by a history shorter than the rows
+		 * that go, holds the larger. */
+		for (int i = 0; i < pshift && vt->hist_cap && room; i++)
+			room = hist_room_for(vt, (vt->hist_head + i) % vt->hist_cap,
+					     hist_cells(vt->pri[i]));
 	}
 	struct row **nalt = copy_screen(vt, vt->alt, ashift, cols, rows);
 	bool *ndirty = calloc(rows, sizeof *ndirty);
 	bool *ntabs = calloc(cols, sizeof *ntabs);
-	if (!npri || !nalt || !ndirty || !ntabs) {
+	if (!npri || !nalt || !ndirty || !ntabs || !room) {
 		if (anew)
 			reflow_free(vt, &rf);
 		else

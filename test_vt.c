@@ -1038,6 +1038,40 @@ static void test_utf8_runs(void)
 	vt_free(vt);
 }
 
+/* A row of the history whose join goes is stored as push_hist() stores a row
+ * that ends its line: the cells before the join that were none of its content
+ * go with it (H1). Kept, the row was longer than after any change of width and
+ * back, and nothing else differed. */
+static void test_hist_unjoined(void)
+{
+	/* by J7: ED 2 ends the history's newest line */
+	struct vt *vt = mk(6, 2, 10), *b = mk(6, 2, 10);
+	w(vt, "\033[6G\xe6\xbc\xa2\r\n");
+	int len;
+	vt_abs_line(vt, vt_abs_first(vt), &len);
+	CHECK(vt->hist_count == 1 && len == 5 && vt_abs_wraps(vt, vt_abs_first(vt)) == 5);
+	w(vt, "\033[2J");
+	vt_abs_line(vt, vt_abs_first(vt), &len);
+	CHECK(len == 0 && vt_abs_wraps(vt, vt_abs_first(vt)) == 0);
+	w(b, "\033[6G\xe6\xbc\xa2\r\n\033[2J");
+	CHECK(vt_resize(b, 7, 2) && vt_resize(b, 6, 2));
+	CHECK(!same_state(vt, b, 0));
+	vt_free(vt);
+	vt_free(b);
+	/* by J9: the first row of the screen begins with something else */
+	vt = mk(6, 2, 10);
+	w(vt, "ab\033[6G\xe6\xbc\xa2\r\n\033[1;1Hx");
+	vt_abs_line(vt, vt_abs_first(vt), &len);
+	CHECK(len == 2 && vt_abs_wraps(vt, vt_abs_first(vt)) == 0);
+	vt_free(vt);
+	/* a row erased in a colour keeps its cells to the last column */
+	vt = mk(6, 2, 10);
+	w(vt, "\033[41m\033[2K\033[m\033[6G\xe6\xbc\xa2\r\n\033[2J");
+	vt_abs_line(vt, vt_abs_first(vt), &len);
+	CHECK(len == 6 && vt_abs_tail(vt, vt_abs_first(vt)) == 1);
+	vt_free(vt);
+}
+
 static void test_altscreen(void)
 {
 	struct vt *vt = mk(10, 3, 10);
@@ -3958,7 +3992,7 @@ static const char *pri_row(struct vt *vt, int r)
  * many went into the history, and the cursor's row then. */
 static void test_height(void)
 {
-	struct vt *vt;
+	struct vt *vt, *b2;
 	static const struct { int cy, rows; const char *first; int hist, y; } h[] = {
 		{ 1, 3, "r2", 1, 0 },    /* the end does not fit: the cursor's row is the first */
 		{ 4, 3, "r3", 2, 2 },    /* the cursor in the last row of text: as it was */
@@ -4054,6 +4088,24 @@ static void test_height(void)
 			vt_free(b);
 		}
 	}
+	/* The end of the text is the row a line ends in, an empty one too (L3,
+	 * C1): a row above whose line goes on into an emptied row keeps it in a
+	 * shorter window, as another width does, and taller again it is the
+	 * screen it was. Taken as the row with text, the empty row went below
+	 * the screen and the line ended there. */
+	vt = mk(10, 5, 100);
+	b2 = mk(10, 5, 100);
+	w(vt, "1\r\n2\r\n3\r\nabcdefghijk\r\033[K\033[3H");
+	w(b2, "1\r\n2\r\n3\r\nabcdefghijk\r\033[K\033[3H");
+	CHECK(vt->pri[3]->wrap == 10);
+	CHECK(vt_resize(vt, 10, 3));
+	CHECK_STR(row(vt, 0), "3");
+	CHECK_STR(row(vt, 1), "abcdefghij");
+	CHECK(vt->pri[1]->wrap == 10 && vt->c.y == 0);
+	CHECK(vt_resize(vt, 10, 5));
+	CHECK(!same_state(vt, b2, 0));
+	vt_free(vt);
+	vt_free(b2);
 }
 
 /* A saved cursor that was never set is none (RESIZE.md S6, C5,
@@ -4688,8 +4740,8 @@ static void test_alloc_failures(void)
 		countdown = n;
 		bool ok = vt_resize(vt, 30, 2);
 		countdown = -1;
-		if (ok) { /* no failure, or only a history line was lost */
-			CHECK(vt->cols == 30 && vt->rows == 2 && vt->c.y == 1);
+		if (ok) { /* only with nothing failed (A6) */
+			CHECK(!injected && vt->cols == 30 && vt->rows == 2 && vt->c.y == 1);
 			CHECK_STR(row(vt, 1), "abc");
 		} else {
 			fails++;
@@ -4706,6 +4758,38 @@ static void test_alloc_failures(void)
 			break;
 	}
 	CHECK(fails > 0);
+	/* A shorter window alone, rows into the history, one a line that goes
+	 * on: a failure leaves the state as it was, success is the state of a
+	 * resize that had the memory (A6). The history's cells too: they were
+	 * allocated after the point from which nothing could fail. */
+	static const char *const shorter[] = { "1\r\n2\r\n3\r\nabc",
+					       "0123456789abcdefghijKL\r\nx\r\nyz" };
+	for (int k = 0; k < 2; k++) {
+		fails = 0;
+		for (long n = 0;; n++) {
+			struct vt *vt = mk(10, 4, 10), *was = mk(10, 4, 10), *want = mk(10, 4, 10);
+			w(vt, shorter[k]);
+			w(was, shorter[k]);
+			w(want, shorter[k]);
+			CHECK(vt_resize(want, 10, 2));
+			injected = false;
+			countdown = n;
+			bool ok = vt_resize(vt, 10, 2);
+			countdown = -1;
+			const char *why = ok ? same_state(vt, want, 0) : same_state(vt, was, 0);
+			CHECK(!why && ok != injected);
+			if (why)
+				fprintf(stderr, "  shorter %d, allocation %ld failed: %s\n", k, n, why);
+			fails += !ok;
+			bool done = !injected;
+			vt_free(vt);
+			vt_free(was);
+			vt_free(want);
+			if (done)
+				break;
+		}
+		CHECK(fails > 0);
+	}
 	/* the same behind the alternate screen: the main screen's row and its
 	 * saved cursor are as they were */
 	fails = 0;
@@ -4885,6 +4969,7 @@ int main(void)
 	test_xterm_resets();
 	test_fuzz();
 	test_utf8_runs();
+	test_hist_unjoined();
 	printf("%d/%d checks passed\n", checks - failures, checks);
 	return failures != 0;
 }
