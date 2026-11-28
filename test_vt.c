@@ -1038,6 +1038,115 @@ static void test_utf8_runs(void)
 	vt_free(vt);
 }
 
+/* What the display shows of row r: its cells, padded with its tail */
+static void shown_row(const struct vt *vt, int r, struct cell *out)
+{
+	int len;
+	const struct cell *l = vt_view_line(vt, r, &len);
+	uint32_t tail = vt_abs_tail(vt, (int64_t)vt->scrolled - vt->view + r);
+	for (int x = 0; x < vt->cols; x++)
+		out[x] = l && x < len ? l[x] : (struct cell){ ' ', COL_DEFAULT_FG, tail, 0 };
+}
+
+/* A frame as mwt.c draws one: the block that moved up moved in the picture,
+ * then the rows marked drawn anew */
+static void shift_frame(struct vt *vt, struct cell *pic)
+{
+	int c = vt->cols;
+	if (vt->shift_n)
+		memmove(pic + (size_t)vt->shift_top * c, pic + (size_t)(vt->shift_top + vt->shift_n) * c,
+			(size_t)(vt->shift_bot - vt->shift_top + 1 - vt->shift_n) * c * sizeof *pic);
+	for (int r = 0; r < vt->rows; r++)
+		if (vt->dirty[r]) {
+			shown_row(vt, r, pic + (size_t)r * c);
+			vt->dirty[r] = false;
+		}
+	vt->shift_n = 0;
+}
+
+/* Rows that only move up are no rows to draw: the display moves their pixels
+ * (vt.shift_n) and draws what is marked. A picture kept that way is the screen,
+ * after any output, view and resize. */
+static void test_shift(void)
+{
+	/* a line feed at the bottom: one block moved, one row to draw */
+	struct vt *vt = mk(10, 4, 10);
+	w(vt, "a\r\nb\r\nc\r\nd");
+	memset(vt->dirty, 0, 4);
+	vt->shift_n = 0;
+	w(vt, "\033[2;1Hx\033[4;1H\r\ne");
+	CHECK(vt->shift_n == 1 && vt->shift_top == 0 && vt->shift_bot == 3);
+	CHECK(vt->dirty[0] && !vt->dirty[1] && !vt->dirty[2] && vt->dirty[3]); /* x went up */
+	w(vt, "\r\nf");
+	CHECK(vt->shift_n == 2 && vt->dirty[2] && vt->dirty[3] && !vt->dirty[1]);
+	/* as many rows as the region has: the region drawn anew */
+	w(vt, "\r\n\r\n");
+	CHECK(vt->shift_n == 0 && vt->dirty[0] && vt->dirty[1] && vt->dirty[2] && vt->dirty[3]);
+	/* another region: the first drawn anew, the second moved */
+	memset(vt->dirty, 0, 4);
+	w(vt, "\r\n\033[2;3r\033[3;1H\r\n");
+	CHECK(vt->shift_n == 1 && vt->shift_top == 1 && vt->shift_bot == 2);
+	CHECK(vt->dirty[0] && vt->dirty[3]);
+	/* the view scrolled back: nothing moves, what is shown of the history
+	 * stays where it is, and the rows of the screen below it are drawn anew */
+	w(vt, "\033[r");
+	vt_mark_all(vt);
+	CHECK(vt->shift_n == 0);
+	vt_scroll_view(vt, 1);
+	memset(vt->dirty, 0, 4);
+	w(vt, "\033[4;1H\r\n");
+	CHECK(vt->shift_n == 0 && !vt->dirty[0] && vt->dirty[3]);
+	vt_free(vt);
+
+	static const char *const frags[] = {
+		"\n", "\r\n", "line\r\n", "\xe6\xbc\xa2\r\n", "\033[2;4r", "\033[3;8r", "\033[r", "\033M",
+		"\033[S", "\033[3S", "\033[T", "\033[L", "\033[M", "\033D", "\033E", "\033[?1049h",
+		"\033[?1049l", "\033[3J", "\033[2J", "\033[44m\n", "\033[0m", "\033[99B", "\033[H",
+	};
+	long shifted = 0, viewed = 0;
+	for (long seed = 1; seed <= 400; seed++) {
+		fuzz_state = (unsigned long long)seed * 0x9E3779B97F4A7C15ULL + 3;
+		vt = mk(1 + (int)(fuzz_rand() % 30), 1 + (int)(fuzz_rand() % 8), 20);
+		struct cell *pic = malloc((size_t)vt->rows * vt->cols * sizeof *pic);
+		for (int r = 0; r < vt->rows; r++)
+			shown_row(vt, r, pic + (size_t)r * vt->cols);
+		memset(vt->dirty, 0, (size_t)vt->rows);
+		for (int step = 0; step < 300; step++) {
+			unsigned k = fuzz_rand() % 40;
+			if (k == 0) {
+				vt_scroll_view(vt, (int)(fuzz_rand() % 7) - 3);
+				viewed += vt->view > 0;
+			} else if (k == 1) {
+				int oc = vt->cols, orows = vt->rows;
+				vt_resize(vt, 1 + (int)(fuzz_rand() % 30), 1 + (int)(fuzz_rand() % 8));
+				if (vt->cols != oc || vt->rows != orows) { /* the same size does nothing */
+					free(pic);
+					pic = calloc((size_t)vt->rows * vt->cols, sizeof *pic);
+				}
+			} else if (k < 6) {
+				shifted += vt->shift_n > 0;
+				shift_frame(vt, pic);
+				struct cell want[30];
+				for (int r = 0; r < vt->rows; r++) {
+					shown_row(vt, r, want);
+					checks++;
+					if (!fuzz_cells(want, pic + (size_t)r * vt->cols, vt->cols)) {
+						fuzz_report(seed, "shift", "the picture is not the screen");
+						r = vt->rows, step = 300;
+					}
+				}
+			} else {
+				const char *f = k % 3 ? frags[fuzz_rand() % (sizeof frags / sizeof *frags)]
+						      : fuzz_frags[fuzz_rand() % (sizeof fuzz_frags / sizeof *fuzz_frags)];
+				vt_write(vt, f, strlen(f));
+			}
+		}
+		free(pic);
+		vt_free(vt);
+	}
+	CHECK(shifted > 2000 && viewed > 200);
+}
+
 static void test_altscreen(void)
 {
 	struct vt *vt = mk(10, 3, 10);
@@ -4885,6 +4994,7 @@ int main(void)
 	test_xterm_resets();
 	test_fuzz();
 	test_utf8_runs();
+	test_shift();
 	printf("%d/%d checks passed\n", checks - failures, checks);
 	return failures != 0;
 }

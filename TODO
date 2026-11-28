@@ -18,10 +18,10 @@ TODO
 
 Performance, aus der Review vom 2026-11-17 (docs/history/Review-2026-11-17.md):
 
-* Scrollen um eine Zeile zeichnet alle Zeilen neu, bei 200x55 und 1080p etwa
-  2 ms statt 0,3. Besser: der VT-Kern merkt sich die Verschiebung, draw()
-  verschiebt die Pixel im Puffer und zeichnet nur die neuen Zeilen; der
-  andere Puffer holt mit derselben Verschiebung auf. MWT_CHECK_REDRAW prüft.
+* Scrollen verschiebt die Pixel jetzt mit memmove, in beiden Puffern: bei
+  200x55, 1080p und 60 Hz 1,76 ms CPU pro Bild statt 4,24, davon 86 % das
+  memmove. Ohne Kopie ginge es wie in foot: der Puffer in einem größeren
+  memfd, und ein wl_buffer mit verschobenem offset statt der Kopie.
 * blit ist 73 bis 76 % der Zeichenzeit, Pixel für Pixel gemischt. Ein Cache
   fertig gemischter Glyphen je Vorder- und Hintergrund, oder SIMD. Ohne
   Verzweigung war es 20 % langsamer.

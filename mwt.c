@@ -108,6 +108,9 @@ static struct {
 	struct buffer bufs[2], *last;
 	uint8_t *differ;   /* per pixel row: may differ between the two buffers */
 	int differ_h;
+	/* the other buffer's pixel rows lag_y0 to lag_y1 (not included) are to move
+	 * up by lag_px before differ holds for them: what a scroll moved in the last */
+	int lag_y0, lag_y1, lag_px;
 	int width, height; /* logical */
 	int scale;
 	int cfg_w, cfg_h;
@@ -1026,16 +1029,30 @@ static void frame_done(void *d, struct wl_callback *cb, uint32_t time)
 }
 static const struct wl_callback_listener frame_listener = { frame_done };
 
+/* Pixel rows y0 + px to y1 (not included) of the buffer move up to y0 */
+static void shift_pixels(struct buffer *b, int y0, int y1, int px)
+{
+	memmove(b->data + (size_t)y0 * b->w, b->data + (size_t)(y0 + px) * b->w,
+		(size_t)(y1 - y0 - px) * b->w * sizeof *b->data);
+}
+
 /* A compositor may hold on to the buffer it shows, so frames alternate between two,
  * and each must start as the last one ended. Most frames change little, and the
  * whole picture is megabytes: only the rows that differ get copied. Of a cell row
- * this frame draws anew, only what lies beside the grid. Without the memory to keep
- * track, all of it. */
+ * this frame draws anew, only what lies beside the grid; not while rows are still to
+ * move, the marks are of the rows as they are after that. Rows a scroll moved in the
+ * one shown move here first, as they did there (t.lag_px). Without the memory to
+ * keep track, all of it. */
 static void buffer_catch_up(struct buffer *to, const struct buffer *from)
 {
 	if (t.differ_h != to->h) {
 		memcpy(to->data, from->data, to->size);
+		t.lag_px = 0;
 		return;
+	}
+	if (t.lag_px) {
+		shift_pixels(to, t.lag_y0, t.lag_y1, t.lag_px);
+		t.lag_px = 0;
 	}
 	const struct vt *vt = t.vt;
 	int gx0 = MIN(t.pad, to->w), gx1 = MIN(t.pad + vt->cols * t.cw, to->w);
@@ -1045,7 +1062,7 @@ static void buffer_catch_up(struct buffer *to, const struct buffer *from)
 		uint32_t *d = to->data + (size_t)y * to->w;
 		const uint32_t *s = from->data + (size_t)y * to->w;
 		int r = y >= t.pad ? (y - t.pad) / t.ch : -1;
-		if (r >= 0 && r < vt->rows && vt->dirty[r]) {
+		if (!vt->shift_n && r >= 0 && r < vt->rows && vt->dirty[r]) {
 			memcpy(d, s, gx0 * sizeof *d);
 			memcpy(d + gx1, s + gx1, (to->w - gx1) * sizeof *d);
 		} else {
@@ -1223,6 +1240,28 @@ static void toast_show(const char *text)
 	toast_draw();
 }
 
+/* The rows the VT core moved up as a block since the last frame (vt.shift_n):
+ * their pixels move, and only the rows it marked are drawn. In a buffer that has
+ * just caught up, which no row differs from the other in: the other moves the
+ * same rows when it catches up in turn (t.lag_px). The same buffer again, a
+ * compositor that let go of it at once, draws the block anew instead. */
+static void draw_shift(struct buffer *b)
+{
+	struct vt *vt = t.vt;
+	int y0 = t.pad + vt->shift_top * t.ch, y1 = t.pad + (vt->shift_bot + 1) * t.ch;
+	int px = vt->shift_n * t.ch;
+	vt->shift_n = 0;
+	if (b == t.last) {
+		memset(vt->dirty + vt->shift_top, true, (size_t)(vt->shift_bot - vt->shift_top + 1));
+		return;
+	}
+	shift_pixels(b, y0, y1, px);
+	wl_surface_damage_buffer(t.surface, 0, y0, b->w, y1 - y0);
+	t.lag_y0 = y0;
+	t.lag_y1 = y1;
+	t.lag_px = px;
+}
+
 static void draw(void)
 {
 	struct vt *vt = t.vt;
@@ -1232,9 +1271,13 @@ static void draw(void)
 	link_hover();
 	/* first, so that buffer_catch_up knows the rows of the cursor are drawn anew */
 	bool shown = cursor_shown();
-	if (shown != t.last_shown || vt->c.x != t.last_cx || vt->c.y != t.last_cy) {
-		if (t.last_shown && t.last_cy < vt->rows)
-			vt->dirty[t.last_cy] = true;
+	if (shown != t.last_shown || vt->c.x != t.last_cx || vt->c.y != t.last_cy || vt->shift_n) {
+		/* the cursor drawn last moved with its row, if that moved */
+		int y = t.last_cy;
+		bool moved = vt->shift_n && y >= vt->shift_top && y <= vt->shift_bot;
+		y -= moved ? vt->shift_n : 0;
+		if (t.last_shown && y < vt->rows && (!moved || y >= vt->shift_top))
+			vt->dirty[y] = true;
 		if (shown)
 			vt->dirty[vt->c.y] = true;
 	}
@@ -1282,8 +1325,11 @@ static void draw(void)
 		fill_rect(b, 0, 0, W, H, t.col.bg);
 		vt_mark_all(vt);
 		buffers_differ_all(H);
+		t.lag_px = 0;
 		t.need_full = false;
 	}
+	if (vt->shift_n)
+		draw_shift(b);
 
 	int64_t ba = 0, ea = 0;
 	int bc = 0, ec = 0;

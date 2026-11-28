@@ -113,6 +113,10 @@ struct vt {
 	struct row **line;        /* current screen (points to pri or alt) */
 	struct row **pri, **alt;
 	bool *dirty;              /* by rows shown: with the view back, screen row + view */
+	/* Rows shift_top to shift_bot of the screen moved up by shift_n since the
+	 * display last drew, as a block: it moves their pixels and draws what dirty
+	 * says, in the rows as they are now. 0 with nothing to move. */
+	int shift_n, shift_top, shift_bot;
 	bool *tabs;
 
 	struct vt_cursor c, saved_pri, saved_alt;

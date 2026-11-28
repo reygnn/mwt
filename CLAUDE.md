@@ -66,8 +66,10 @@ esctest is GPL. The containers have no network, so fetch on the host first with
 | `tests/fuzz_vt.c` | libFuzzer harness; built with `-DFUZZ_STANDALONE` it is `fuzz_regress`. How to keep a finding: its head |
 | `tests/` | black-box and adversarial tests, from the mt project; `tests/lib.sh` for the shell ones (directory, sway, its config, the screen read back), `tests/mwtlib.py` for the Python ones, `tests/swaytree.py` for both |
 
-Only changed rows are drawn. With double buffering, rows that differ from the buffer
-shown last are copied first; output follows frame callbacks. A build with
+Only changed rows are drawn. Rows that only moved up as a block (`vt.shift_n`) are
+moved in the buffer, not drawn. With double buffering, rows that differ from the
+buffer shown last are copied first, after the same move; output follows frame
+callbacks. A build with
 `-DMWT_CHECK_REDRAW` compares each frame with a full redraw; `make evil` runs `make
 pixel` with it.
 

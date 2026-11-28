@@ -213,6 +213,39 @@ static void mark_row(struct vt *vt, int y)
 void vt_mark_all(struct vt *vt)
 {
 	memset(vt->dirty, true, (size_t)vt->rows);
+	vt->shift_n = 0; /* all of it is drawn anew */
+}
+
+/* The rows a moved block left to be drawn where it was: the display moves no
+ * pixels then. */
+static void drop_shift(struct vt *vt)
+{
+	if (vt->shift_n)
+		memset(vt->dirty + vt->shift_top, true, (size_t)(vt->shift_bot - vt->shift_top + 1));
+	vt->shift_n = 0;
+}
+
+/* Rows top to bot moved up by n, as one block: the marks move with them and
+ * only the n new rows at the bottom are drawn, the display moves the pixels of
+ * the others (vt.shift_n). One block until the display draws; another region,
+ * or as many rows as the region has, and the region is drawn anew. Only with
+ * the view at the screen (scroll_up()): scrolled back, those rows do not move
+ * where they are shown. Marking every row of the region for each line feed
+ * made yes draw the whole screen for every frame. */
+static void shift_rows(struct vt *vt, int top, int bot, int n)
+{
+	if (vt->shift_n && (vt->shift_top != top || vt->shift_bot != bot))
+		drop_shift(vt);
+	if (vt->shift_n + n > bot - top) {
+		drop_shift(vt);
+		dirty_range(vt, top, bot);
+		return;
+	}
+	memmove(vt->dirty + top, vt->dirty + top + n, (size_t)(bot - top + 1 - n));
+	memset(vt->dirty + bot - n + 1, true, (size_t)n);
+	vt->shift_top = top;
+	vt->shift_bot = bot;
+	vt->shift_n += n;
 }
 
 /* break up wide glyphs that are partially overwritten in [x0, x1] */
@@ -489,9 +522,13 @@ static void scroll_up(struct vt *vt, int orig, int n, bool goes_on)
 	memcpy(&vt->line[vt->bot - n + 1], tmp, n * sizeof *tmp);
 	for (int r = vt->bot - n + 1; r <= vt->bot; r++)
 		fill_row(vt->line[r], 0, vt->cols, blank(vt), vt->cols);
-	/* scrolled back, push_hist moved the view: the rows below the region
-	 * did not change, but they are shown n rows lower now */
-	dirty_range(vt, orig, hist && vt->view > 0 ? vt->rows - 1 : vt->bot);
+	/* Scrolled back, push_hist moved the view: the rows below the region
+	 * did not change, but they are shown n rows lower now. No block is
+	 * moving then: the view went back by vt_scroll_view(), which marks all. */
+	if (vt->view > 0)
+		dirty_range(vt, orig, hist ? vt->rows - 1 : vt->bot);
+	else
+		shift_rows(vt, orig, vt->bot, n);
 }
 
 /* Rows orig to vt.bot move down by n; the last n go, and n new ones come in

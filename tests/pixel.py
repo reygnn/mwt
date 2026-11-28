@@ -388,6 +388,25 @@ def noise(seed):
     return [piece() for _ in range(400)]
 
 
+def scroll_noise(seed):
+    """Output that scrolls: lines at the bottom of the screen and of a region, the
+    cursor shown or not, colors, so that most frames move rows up."""
+    r = random.Random(seed)
+
+    def piece():
+        k = r.randrange(12)
+        if k < 5:
+            return b"\033[3%dmzeile %d %s\033[0m\r\n" % (r.randrange(8), r.randrange(1000),
+                                                         b"x" * r.randrange(70))
+        return {
+            5: b"\r\n", 6: b"\033[%dS" % r.randrange(1, 4), 7: b"\033[5;18r\033[18;1H",
+            8: b"\033[r\033[24;1H", 9: r.choice([b"\033[?25l", b"\033[?25h"]),
+            10: b"\033[%d;%dH" % (r.randrange(1, 25), r.randrange(1, 81)), 11: b"\033D\033E",
+        }[k]
+
+    return [piece() for _ in range(300)]
+
+
 def diff_cells(a, b):
     g = Grid(a, 80, 24)
     cells = set()
@@ -403,8 +422,8 @@ def diff_cells(a, b):
 def test_partial_redraw():
     """Piece by piece, so that each frame draws only some rows on top of the last,
     against all at once in a new window. They must not differ by a pixel."""
-    for seed in (1, 2, 3, 4):
-        pieces = noise(seed)
+    for seed in (1, 2, 3, 4, 5, 6, 7):
+        pieces = noise(seed) if seed <= 4 else scroll_noise(seed)
         with Window() as win:
             win.feed(b"\033c")
             for i, p in enumerate(pieces):
